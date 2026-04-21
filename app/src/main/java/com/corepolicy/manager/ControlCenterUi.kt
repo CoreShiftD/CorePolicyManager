@@ -47,15 +47,15 @@ import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 object CorePolicyDimens {
     val screenHorizontal = 20.dp
     val screenTop = 8.dp
-    val screenBottom = 112.dp
-    val sectionGap = 20.dp
-    val cardGap = 12.dp
-    val cardPaddingH = 16.dp
-    val cardPaddingV = 14.dp
-    val cardRadius = 20.dp
-    val cardRadiusTight = 16.dp
+    val screenBottom = 104.dp
+    val sectionGap = 18.dp
+    val cardGap = 10.dp
+    val cardPaddingH = 14.dp
+    val cardPaddingV = 12.dp
+    val cardRadius = 18.dp
+    val cardRadiusTight = 14.dp
     val chipRadius = 999.dp
-    val iconBadge = 32.dp
+    val iconBadge = 30.dp
 }
 
 // Kept for backward compatibility with existing screens (AppManagerScreen uses these).
@@ -87,7 +87,7 @@ fun PageHeader(
     ) {
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             eyebrow?.let {
                 Text(
@@ -103,7 +103,7 @@ fun PageHeader(
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
                 color = palette.onSurfaceVariant
             )
         }
@@ -188,9 +188,9 @@ fun StatusChip(
         modifier = modifier
             .clip(RoundedCornerShape(CorePolicyDimens.chipRadius))
             .background(bg)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         if (leadingDot) {
             Box(
@@ -202,7 +202,7 @@ fun StatusChip(
         Text(
             text = text,
             color = fg,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold)
         )
     }
 }
@@ -292,7 +292,7 @@ fun SectionCard(
     }
     Column(
         modifier = base.padding(contentPadding),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         content = content
     )
 }
@@ -361,8 +361,8 @@ fun PolicyToggleRow(label: String, checked: Boolean, onChanged: (Boolean) -> Uni
 @Composable
 fun MetadataLine(label: String, value: String) {
     val palette = LocalCorePolicyPalette.current
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = palette.onSurfaceVariant)
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = palette.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodySmall, color = palette.onSurfaceVariant)
     }
 }

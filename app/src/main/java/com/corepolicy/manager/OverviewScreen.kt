@@ -171,30 +171,30 @@ private fun DaemonHeroCard(
 
     SectionCard(elevated = true) {
         Text(
-            text = "Operational command deck",
+            text = "Operational status",
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
             color = palette.primary
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 IconBadge(
                     iconRes = R.drawable.ic_cpu,
                     contentDescription = "Daemon",
                     tone = ChipTone.ACTIVE,
-                    size = 40.dp
+                    size = 34.dp
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     Text(
                         "CorePolicy Daemon",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall,
                         color = palette.onSurface
                     )
                     Text(
@@ -211,13 +211,21 @@ private fun DaemonHeroCard(
             )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            DaemonMetaItem(label = "Profile", value = status.activeProfile.title, modifier = Modifier.weight(1f))
-            DaemonMetaItem(label = "Uptime", value = formatDuration(status.uptimeMs), modifier = Modifier.weight(1f))
-            DaemonMetaItem(label = "Last sync", value = formatRelativeTime(status.lastSyncTimestampMs), modifier = Modifier.weight(1f))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DaemonMetaItem(label = "Profile", value = status.activeProfile.title, modifier = Modifier.weight(1f))
+                DaemonMetaItem(label = "Uptime", value = formatDuration(status.uptimeMs), modifier = Modifier.weight(1f))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DaemonMetaItem(label = "Last sync", value = formatRelativeTime(status.lastSyncTimestampMs), modifier = Modifier.weight(1f))
+                DaemonMetaItem(label = "Managed apps", value = managedAppsCount.toString(), modifier = Modifier.weight(1f))
+            }
         }
 
         HorizontalDivider(color = palette.divider, thickness = 1.dp)
@@ -233,7 +241,7 @@ private fun DaemonHeroCard(
 
         HorizontalDivider(color = palette.divider, thickness = 1.dp)
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ActionTile(
                 iconRes = R.drawable.ic_performance,
                 label = "Restart",
@@ -310,15 +318,15 @@ private fun OverviewOperationalBanner(status: DaemonOverviewStatus) {
 @Composable
 private fun DaemonMetaItem(label: String, value: String, modifier: Modifier = Modifier) {
     val palette = LocalCorePolicyPalette.current
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.onSurfaceVariant
-        )
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelSmall, color = palette.onSurfaceVariant)
         Text(
             text = value,
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
             color = palette.onSurface
         )
     }
@@ -331,8 +339,8 @@ private fun OverviewSummaryRow(
     currentProfile: String,
     warnings: Int
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AnimatedStatPill(
                 label = "Modules",
                 value = modulesActive.toString(),
@@ -346,7 +354,7 @@ private fun OverviewSummaryRow(
                 tone = ChipTone.INFO
             )
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AnimatedStatPill(
                 label = "Profile",
                 value = currentProfile,
@@ -476,18 +484,18 @@ fun OverviewInlineBadge(
         modifier = modifier
             .clip(RoundedCornerShape(CorePolicyDimens.cardRadiusTight))
             .background(accentBackgroundFor(tone))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(7.dp)
+                .size(6.dp)
                 .clip(CircleShape)
                 .background(dotColor)
                 .graphicsLayer { alpha = dotAlpha }
         )
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
@@ -495,7 +503,7 @@ fun OverviewInlineBadge(
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.labelLarge,
                 color = dotColor
             )
         }

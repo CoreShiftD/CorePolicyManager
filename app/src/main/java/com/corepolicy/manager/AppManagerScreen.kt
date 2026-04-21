@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -377,10 +378,10 @@ private fun AppRow(
     onEnabledChanged: (Boolean) -> Unit,
     onClick: () -> Unit
 ) {
-    ControlCard(onClick = onClick) {
+    ControlCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             AppIdentityBlock(app = app, modifier = Modifier.weight(1f))
@@ -399,11 +400,11 @@ private fun AppIdentityBlock(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(44.dp)
+                .size(38.dp)
                 .clip(RoundedCornerShape(CorePolicyDimens.cardRadiusTight))
                 .background(palette.surfaceContainerHigh),
             contentAlignment = Alignment.Center
@@ -412,7 +413,7 @@ private fun AppIdentityBlock(
                 Image(
                     bitmap = app.icon,
                     contentDescription = app.appName,
-                    modifier = Modifier.size(30.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             } else {
                 androidx.compose.material3.Text(
@@ -428,7 +429,7 @@ private fun AppIdentityBlock(
         ) {
             androidx.compose.material3.Text(
                 app.appName,
-                style = androidx.compose.material3.MaterialTheme.typography.titleSmall,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
                 color = palette.onSurface,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -452,11 +453,11 @@ private fun AppRowControls(
     val palette = LocalCorePolicyPalette.current
     Column(
         horizontalAlignment = Alignment.End,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             if (policy.enabled) {
                 StatusChip("Managed", ChipTone.ACTIVE, leadingDot = true)
@@ -490,11 +491,13 @@ private fun AppPolicyStateRow(policy: AppPolicy) {
         androidx.compose.material3.Text(
             text = policy.summaryLabel(),
             style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-            color = palette.onSurfaceVariant
+            color = palette.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
         )
+        Spacer(Modifier.width(10.dp))
         androidx.compose.material3.Text(
             text = "Profile · ${policy.profile.label}",
-            style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
+            style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
             color = palette.onSurfaceVariant
         )
     }

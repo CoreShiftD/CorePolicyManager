@@ -90,13 +90,13 @@ fun ActionTile(
             .background(palette.surfaceContainerHigh)
             .border(1.dp, palette.divider, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        IconBadge(iconRes = iconRes, contentDescription = label, tone = tone, size = 28.dp)
+        IconBadge(iconRes = iconRes, contentDescription = label, tone = tone, size = 24.dp)
         Text(
             text = label,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
             color = palette.onSurface
         )
     }
@@ -120,8 +120,8 @@ fun AnimatedStatPill(
             .clip(shape)
             .background(palette.surfaceContainerHigh)
             .border(1.dp, palette.divider, shape)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = palette.onSurfaceVariant)
         AnimatedContent(
@@ -254,8 +254,8 @@ fun EmptyStateCard(
             .clip(shape)
             .background(palette.surfaceContainer)
             .border(1.dp, palette.divider, shape)
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         iconRes?.let {

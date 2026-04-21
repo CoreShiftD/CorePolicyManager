@@ -65,7 +65,7 @@ fun SearchBar(
             .clip(shape)
             .background(palette.surfaceContainerHigh)
             .border(1.dp, palette.divider, shape)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+            .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -74,12 +74,12 @@ fun SearchBar(
             tint = palette.onSurfaceVariant,
             modifier = Modifier.size(18.dp)
         )
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(8.dp))
         BasicTextField(
             value = query,
             onValueChange = onQueryChange,
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.onSurface),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.onSurface),
             cursorBrush = SolidColor(palette.primary),
             modifier = Modifier.weight(1f),
             decorationBox = { inner ->
@@ -87,7 +87,7 @@ fun SearchBar(
                     if (query.isEmpty()) {
                         Text(
                             text = placeholder,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = palette.onSurfaceVariant
                         )
                     }

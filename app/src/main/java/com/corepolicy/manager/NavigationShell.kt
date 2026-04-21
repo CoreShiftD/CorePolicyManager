@@ -49,18 +49,18 @@ fun NavigationShell(
 ) {
     val palette = LocalCorePolicyPalette.current
     val isRail = layout == NavigationShellLayout.NAV_RAIL
-    val shellShape = RoundedCornerShape(if (isRail) 30.dp else 28.dp)
+    val shellShape = RoundedCornerShape(if (isRail) 28.dp else 24.dp)
     if (isRail) {
         Column(
             modifier = modifier
                 .padding(start = 12.dp, top = 16.dp, bottom = 16.dp)
-                .width(108.dp)
+                .width(102.dp)
                 .shadow(18.dp, shellShape, clip = false)
                 .clip(shellShape)
                 .background(palette.surfaceContainerHigh)
                 .border(1.dp, palette.divider, shellShape)
-                .padding(horizontal = 10.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 8.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             NavigationShellHeader(compact = false)
@@ -84,7 +84,7 @@ fun NavigationShell(
     } else {
         Row(
             modifier = modifier
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
                 .fillMaxWidth()
                 .shadow(
                     elevation = 18.dp,
@@ -94,12 +94,12 @@ fun NavigationShell(
                 .clip(shellShape)
                 .background(palette.surfaceContainerHigh)
                 .border(1.dp, palette.divider, shellShape)
-                .padding(horizontal = 10.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             NavigationShellHeader(
                 compact = true,
-                modifier = Modifier.padding(start = 2.dp, end = 4.dp)
+                modifier = Modifier.padding(start = 2.dp, end = 2.dp)
             )
             AppSection.values().forEach { section ->
                 PremiumNavItem(
@@ -123,8 +123,8 @@ private fun NavigationShellHeader(
     if (compact) {
         Box(
             modifier = modifier
-                .padding(vertical = 8.dp)
-                .size(6.dp)
+                .padding(vertical = 6.dp)
+                .size(5.dp)
                 .clip(RoundedCornerShape(50))
                 .background(palette.primary)
         )
@@ -167,7 +167,7 @@ private fun PremiumNavItem(
     val palette = LocalCorePolicyPalette.current
     val tone = if (selected) ChipTone.ACTIVE else ChipTone.NEUTRAL
     val isRail = layout == NavigationShellLayout.NAV_RAIL
-    val shape = RoundedCornerShape(if (isRail) 20.dp else 22.dp)
+    val shape = RoundedCornerShape(if (isRail) 18.dp else 18.dp)
     val containerColor by animateColorAsState(
         targetValue = if (selected) palette.primaryContainer else palette.surfaceContainerHigh.copy(alpha = 0.55f),
         animationSpec = spring(),
@@ -179,15 +179,15 @@ private fun PremiumNavItem(
         label = "navItemBorder"
     )
     val indicatorWidth by animateDpAsState(
-        targetValue = if (isRail) 3.dp else if (selected) 18.dp else 10.dp,
+        targetValue = if (isRail) 3.dp else if (selected) 16.dp else 8.dp,
         animationSpec = spring(),
         label = "navItemIndicatorWidth"
     )
     val indicatorHeight by animateDpAsState(
         targetValue = if (isRail) {
-            if (selected) 18.dp else 10.dp
+            if (selected) 16.dp else 8.dp
         } else {
-            3.dp
+            2.dp
         },
         animationSpec = spring(),
         label = "navItemIndicatorHeight"
@@ -198,20 +198,20 @@ private fun PremiumNavItem(
             .background(containerColor)
             .border(width = 1.dp, color = borderColor, shape = shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = if (isRail) 12.dp else 10.dp)
+            .padding(horizontal = 5.dp, vertical = if (isRail) 10.dp else 7.dp)
             .semantics { contentDescription = section.title },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         IconBadge(
             iconRes = section.iconRes,
             contentDescription = null,
             tone = tone,
-            size = 28.dp
+            size = 24.dp
         )
         Text(
             text = section.title,
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
             color = if (selected) palette.onPrimaryContainer else palette.onSurfaceVariant,
             maxLines = 1
         )

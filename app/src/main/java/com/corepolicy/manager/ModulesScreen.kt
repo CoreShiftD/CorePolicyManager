@@ -119,27 +119,27 @@ private fun ExpandableModuleCard(
             .background(palette.surfaceContainer)
             .border(1.dp, palette.divider, shape)
             .clickable(onClick = onOpen)
-            .padding(horizontal = CorePolicyDimens.cardPaddingH, vertical = CorePolicyDimens.cardPaddingV),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             IconBadge(
                 iconRes = R.drawable.ic_network,
                 contentDescription = module.title,
                 tone = if (module.enabled) ChipTone.ACTIVE else ChipTone.NEUTRAL,
-                size = 36.dp
+                size = 32.dp
             )
-            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(module.title, style = MaterialTheme.typography.titleMedium, color = palette.onSurface)
+                    Text(module.title, style = MaterialTheme.typography.titleSmall, color = palette.onSurface)
                     Switch(
                         checked = module.enabled,
                         onCheckedChange = onToggle,
@@ -155,7 +155,7 @@ private fun ExpandableModuleCard(
                 Text(module.description, style = MaterialTheme.typography.bodySmall, color = palette.onSurfaceVariant)
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             StatusChip(formatModuleHealthLabel(module.health), healthTone, leadingDot = true)
             if (module.enabled) StatusChip("Active", ChipTone.ACTIVE) else StatusChip("Disabled", ChipTone.NEUTRAL)
         }
@@ -170,16 +170,16 @@ private fun ExpandableModuleCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(palette.surfaceContainerHigh)
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 MetadataLine("Last action", module.lastAction)
                 MetadataLine("Dependency", module.dependencyNote ?: "None")
                 MetadataLine("Conflict", module.conflictNote ?: "No conflicts")
                 MetadataLine("Settings", if (module.hasSettings) "Available" else "Not available")
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatusChip("Open logs", ChipTone.INFO, modifier = Modifier.clickable(onClick = onOpenLogs))
                 }
