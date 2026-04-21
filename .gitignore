@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+app/build/
+ui/build/
+
+# Gradle
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Local configuration
+local.properties
+
+# IDE
+.idea/
+*.iml

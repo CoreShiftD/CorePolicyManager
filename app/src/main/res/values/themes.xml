@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      The Compose theme owns all colors via MaterialTheme + CorePolicyPalette.
+      This platform theme only controls the pre-Compose launch frame: transparent
+      system bars so the first rendered Compose surface fills edge-to-edge without
+      a flash of a different background.
+    -->
+    <style name="Theme.CorePolicyManager" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

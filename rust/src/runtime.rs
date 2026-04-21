@@ -1,0 +1,598 @@
+use crate::arena::Arena;
+use crate::core::{ControlSignal, Effect, Event, IoHandle, LogEvent, LogLevel};
+use crate::low_level::io::DrainState;
+use crate::low_level::reactor::{Event as ReactorEvent, Reactor};
+use crate::low_level::spawn::{Process, SpawnBackend, SpawnOptions, SysError, spawn_start};
+use crate::low_level::sys::{ExecContext, ProcessGroup};
+use std::collections::HashMap;
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn readahead(fd: libc::c_int, offset: libc::off64_t, count: libc::size_t) -> libc::ssize_t;
+}
+
+#[inline(always)]
+unsafe fn do_readahead(fd: libc::c_int) {
+    if fd < 0 {
+        return;
+    }
+
+    #[cfg(target_os = "android")]
+    unsafe {
+        libc::syscall(libc::SYS_readahead, fd, 0, 0);
+    }
+
+    #[cfg(all(target_os = "linux", not(target_os = "android")))]
+    unsafe {
+        readahead(fd, 0, 0);
+    }
+}
+
+pub struct FileSink {
+    file: std::fs::File,
+}
+
+impl FileSink {
+    pub fn new(path: &str) -> Self {
+        use std::fs::OpenOptions;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
+        Self { file }
+    }
+
+    pub fn write(&mut self, level: LogLevel, msg: String) {
+        use std::io::Write;
+        let _ = writeln!(self.file, "[{:?}] {}", level, msg);
+    }
+}
+
+pub struct LogRouter {
+    sinks: HashMap<u32, FileSink>,
+    default: FileSink,
+}
+
+impl LogRouter {
+    pub fn new(base_dir: &str) -> Self {
+        let default_path = format!("{}/core.log", base_dir);
+        let _ = std::fs::create_dir_all(base_dir);
+        Self {
+            sinks: HashMap::new(),
+            default: FileSink::new(&default_path),
+        }
+    }
+
+    fn get_or_create(&mut self, owner: u32) -> &mut FileSink {
+        self.sinks.entry(owner).or_insert_with(|| {
+            let dir_path = format!("/data/local/tmp/coreshift/addon_{}", owner);
+            let _ = std::fs::create_dir_all(&dir_path);
+            let file_path = format!("{}/log.txt", dir_path);
+            FileSink::new(&file_path)
+        })
+    }
+
+    pub fn write(&mut self, owner: u32, level: LogLevel, msg: String) {
+        if owner == crate::core::CORE_OWNER {
+            self.default.write(level, msg);
+        } else {
+            self.get_or_create(owner).write(level, msg);
+        }
+    }
+}
+
+pub struct RuntimeProcess {
+    pub process: Process,
+    pub is_group: bool,
+}
+
+pub struct RuntimeDrain {
+    pub drain: DrainState<fn(&[u8]) -> bool>,
+}
+
+pub struct EffectExecutor {
+    pub reactor: Reactor,
+    pub fd_map: Vec<Option<(IoHandle, crate::core::IoStream)>>,
+    pub processes: Arena<RuntimeProcess>,
+    pub drains: Arena<RuntimeDrain>,
+    pub log_router: LogRouter,
+}
+
+impl EffectExecutor {
+    pub fn new(reactor: Reactor, base_dir: &str) -> Self {
+        Self {
+            reactor,
+            fd_map: Vec::new(),
+            processes: Arena::new(),
+            drains: Arena::new(),
+            log_router: LogRouter::new(base_dir),
+        }
+    }
+
+    pub fn process_reactor_events(
+        &mut self,
+        events: &mut Vec<ReactorEvent>,
+        timeout_ms: i32,
+    ) -> Result<Vec<Event>, SysError> {
+        let nevents = self.reactor.wait(events, 64, timeout_ms)?;
+        let mut sys_events = Vec::new();
+
+        for ev in events.iter().take(nevents) {
+            let idx = ev.token.0 as usize;
+            if idx < self.fd_map.len() {
+                if let Some((io, stream)) = self.fd_map[idx] {
+                    sys_events.push(Event::IoReady {
+                        io,
+                        stream,
+                        readable: ev.readable,
+                        writable: ev.writable,
+                        error: ev.error,
+                    });
+                }
+            }
+        }
+        Ok(sys_events)
+    }
+
+    pub fn apply(&mut self, effect: Effect) -> Vec<Event> {
+        match effect {
+            Effect::Log {
+                owner,
+                level,
+                event,
+            } => {
+                let msg = match event {
+                    LogEvent::Submit { id } => format!("Submit id={}", id),
+                    LogEvent::Spawn { id, pid } => format!("Spawn id={}, pid={}", id, pid),
+                    LogEvent::Cancel { id } => format!("Cancel id={}", id),
+                    LogEvent::ForceKill { id } => format!("ForceKill id={}", id),
+                    LogEvent::Exit { id, status } => format!("Exit id={}, status={:?}", id, status),
+                    LogEvent::Timeout { id } => format!("Timeout id={}", id),
+                    LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
+                    LogEvent::TickStart => "tick_start".to_string(),
+                    LogEvent::TickEnd => "tick_end".to_string(),
+                    LogEvent::AddonReceived => "addon_received".to_string(),
+                    LogEvent::AddonTranslated => "addon_translated".to_string(),
+                    LogEvent::AddonDropped => "addon_dropped".to_string(),
+                    LogEvent::ActionDispatched => "action_dispatched".to_string(),
+                    LogEvent::Observability { queue_len, actions_processed, dropped } => format!("queue_len={} processed={} dropped={}", queue_len, actions_processed, dropped),
+                };
+                self.log_router.write(owner, level, msg);
+                vec![]
+            }
+            Effect::WatchStream { io, stream } => {
+                let fd_ref = if let Some(rdrain) = self.drains.get(io.index, io.generation) {
+                    match stream {
+                        crate::core::IoStream::Stdout => {
+                            rdrain.drain.stdout_slot.as_ref().map(|s| &s.fd)
+                        }
+                        crate::core::IoStream::Stderr => {
+                            rdrain.drain.stderr_slot.as_ref().map(|s| &s.fd)
+                        }
+                        crate::core::IoStream::Stdin => {
+                            rdrain.drain.stdin_slot.as_ref().map(|s| &s.fd)
+                        }
+                    }
+                } else {
+                    return vec![Event::WatchStreamFailed {
+                        io,
+                        err: "drain not found".to_string(),
+                    }];
+                };
+
+                if let Some(fd) = fd_ref {
+                    match self.reactor.add(fd, true, true) {
+                        Ok(token) => {
+                            let idx = token.0 as usize;
+                            if idx >= self.fd_map.len() {
+                                self.fd_map.resize(idx + 1, None);
+                            }
+                            self.fd_map[idx] = Some((io, stream));
+                        }
+                        Err(e) => {
+                            return vec![Event::WatchStreamFailed {
+                                io,
+                                err: format!("reactor add failed: {}", e),
+                            }];
+                        }
+                    }
+                } else {
+                    return vec![Event::WatchStreamFailed {
+                        io,
+                        err: "stream fd not available".to_string(),
+                    }];
+                }
+                vec![]
+            }
+            Effect::UnwatchStream { io, stream } => {
+                if let Some(rdrain) = self.drains.get(io.index, io.generation) {
+                    let raw_fd = match stream {
+                        crate::core::IoStream::Stdout => {
+                            rdrain.drain.stdout_slot.as_ref().map(|s| s.fd.raw())
+                        }
+                        crate::core::IoStream::Stderr => {
+                            rdrain.drain.stderr_slot.as_ref().map(|s| s.fd.raw())
+                        }
+                        crate::core::IoStream::Stdin => {
+                            rdrain.drain.stdin_slot.as_ref().map(|s| s.fd.raw())
+                        }
+                    };
+
+                    if let Some(fd) = raw_fd {
+                        self.reactor.del_raw(fd);
+                        for slot in self.fd_map.iter_mut() {
+                            if let Some((mapped_io, mapped_stream)) = slot {
+                                if *mapped_io == io && *mapped_stream == stream {
+                                    *slot = None;
+                                }
+                            }
+                        }
+                    } else {
+                        return vec![Event::WatchStreamFailed {
+                            io,
+                            err: "unwatch: stream fd not available".to_string(),
+                        }];
+                    }
+                } else {
+                    return vec![Event::WatchStreamFailed {
+                        io,
+                        err: "unwatch: drain not found".to_string(),
+                    }];
+                }
+                vec![]
+            }
+            Effect::StartProcess { id, exec, policy } => {
+                let ctx = ExecContext::new(exec.argv, None, None);
+                let stdin_buf = exec.stdin.map(|v| v.into_boxed_slice());
+
+                let is_group = false; // We can extract this properly later if needed. But for ExecSpec it's default ProcessGroup isolated=false.
+                let pgroup = ProcessGroup::default();
+
+                let opts = SpawnOptions {
+                    ctx,
+                    stdin: stdin_buf,
+                    capture_stdout: exec.capture_stdout,
+                    capture_stderr: exec.capture_stderr,
+                    wait: false,
+                    pgroup,
+                    max_output: exec.max_output,
+                    timeout_ms: None,
+                    kill_grace_ms: policy.kill_grace_ms,
+                    cancel: match policy.cancel {
+                        crate::core::CancelPolicy::None => {
+                            crate::low_level::sys::CancelPolicy::None
+                        }
+                        crate::core::CancelPolicy::Graceful => {
+                            crate::low_level::sys::CancelPolicy::Graceful
+                        }
+                        crate::core::CancelPolicy::Kill => {
+                            crate::low_level::sys::CancelPolicy::Kill
+                        }
+                    },
+                    backend: SpawnBackend::Auto,
+                    early_exit: None,
+                };
+
+                match spawn_start(id, opts) {
+                    Ok(running) => {
+                        let (p_idx, p_gen) = self.processes.insert(RuntimeProcess {
+                            process: running.process,
+                            is_group,
+                        });
+                        let proc_h = crate::core::Handle {
+                            index: p_idx,
+                            generation: p_gen,
+                            _marker: std::marker::PhantomData,
+                        };
+
+                        let (d_idx, d_gen) = self.drains.insert(RuntimeDrain {
+                            drain: running.drain,
+                        });
+                        let io_h = crate::core::Handle {
+                            index: d_idx,
+                            generation: d_gen,
+                            _marker: std::marker::PhantomData,
+                        };
+
+                        vec![Event::ProcessStarted {
+                            id,
+                            process: proc_h,
+                            io: io_h,
+                        }]
+                    }
+                    Err(e) => {
+                        vec![Event::ProcessSpawnFailed {
+                            id,
+                            err: format!("spawn_failed: {}", e),
+                        }]
+                    }
+                }
+            }
+            Effect::KillProcess { process, signal } => {
+                if let Some(rproc) = self.processes.get_mut(process.index, process.generation) {
+                    let res = match signal {
+                        ControlSignal::GracefulStop => {
+                            if rproc.is_group {
+                                rproc.process.kill_pgroup(libc::SIGTERM)
+                            } else {
+                                rproc.process.kill(libc::SIGTERM)
+                            }
+                        }
+                        ControlSignal::ForceKill => {
+                            if rproc.is_group {
+                                rproc.process.kill_pgroup(libc::SIGKILL)
+                            } else {
+                                rproc.process.kill(libc::SIGKILL)
+                            }
+                        }
+                    };
+                    if let Err(e) = res {
+                        return vec![Event::KillProcessFailed {
+                            process,
+                            err: format!("kill failed: {}", e),
+                        }];
+                    }
+                } else {
+                    return vec![Event::KillProcessFailed {
+                        process,
+                        err: "process not found".to_string(),
+                    }];
+                }
+                vec![]
+            }
+            Effect::PollProcess { process } => {
+                if let Some(rproc) = self.processes.get_mut(process.index, process.generation) {
+                    let status_res = rproc.process.wait_step();
+                    match status_res {
+                        Ok(Some(status)) => {
+                            let s = match status {
+                                crate::low_level::spawn::ExitStatus::Exited(c) => c,
+                                crate::low_level::spawn::ExitStatus::Signaled(sig) => -sig,
+                            };
+                            vec![Event::ProcessExited {
+                                process,
+                                status: Some(s),
+                            }]
+                        }
+                        Ok(None) => vec![],
+                        Err(e) => {
+                            vec![Event::KillProcessFailed {
+                                process,
+                                err: format!("poll wait_step failed: {}", e),
+                            }]
+                        }
+                    }
+                } else {
+                    vec![Event::KillProcessFailed {
+                        process,
+                        err: "process not found for polling".to_string(),
+                    }]
+                }
+            }
+            Effect::PerformIo { io } => {
+                if let Some(rdrain) = self.drains.get_mut(io.index, io.generation) {
+                    let mut closed = false;
+                    let mut err_reason = None;
+                    if rdrain.drain.stdout_slot.is_some() {
+                        match rdrain.drain.read_fd(true) {
+                            Ok(Some(_)) => {}
+                            Ok(None) => closed = true,
+                            Err(e) => {
+                                closed = true;
+                                err_reason = Some(format!("stdout read: {}", e));
+                            }
+                        }
+                    }
+                    if rdrain.drain.stderr_slot.is_some() {
+                        match rdrain.drain.read_fd(false) {
+                            Ok(Some(_)) => {}
+                            Ok(None) => closed = true,
+                            Err(e) => {
+                                closed = true;
+                                err_reason = Some(format!("stderr read: {}", e));
+                            }
+                        }
+                    }
+                    if rdrain.drain.stdin_slot.is_some() {
+                        match rdrain.drain.write_stdin() {
+                            Ok(Some(_)) => {}
+                            Ok(None) => closed = true,
+                            Err(e) => {
+                                closed = true;
+                                err_reason = Some(format!("stdin write: {}", e));
+                            }
+                        }
+                    }
+
+                    if let Some(reason) = err_reason {
+                        return vec![Event::IoFailed { io, reason }];
+                    } else if closed {
+                        return vec![Event::IoClosed { io }];
+                    }
+                } else {
+                    return vec![Event::IoFailed {
+                        io,
+                        reason: "drain not found".to_string(),
+                    }];
+                }
+                vec![]
+            }
+            Effect::Warmup { source, paths } => {
+                let start = std::time::Instant::now();
+                let mut bytes = 0;
+
+                self.log_router.write(
+                    crate::core::WARMUP_OWNER,
+                    crate::core::LogLevel::Info,
+                    format!("Warmup source={} count={}", source, paths.len()),
+                );
+                let mut failure_reason = None;
+                for path in paths {
+                    if path.is_empty() {
+                        continue;
+                    }
+                    match std::ffi::CString::new(path.clone()) {
+                        Ok(c_path) => unsafe {
+                            let fd = libc::open(c_path.as_ptr(), libc::O_RDONLY);
+                            if fd >= 0 {
+                                let mut st: libc::stat = std::mem::zeroed();
+                                if libc::fstat(fd, &mut st) == 0 {
+                                    bytes += st.st_size as u64;
+                                }
+                                do_readahead(fd);
+                                libc::close(fd);
+                            } else {
+                                failure_reason = Some(format!("open failed for {}", path));
+                                break;
+                            }
+                        },
+                        Err(e) => {
+                            failure_reason = Some(format!("invalid CString path: {}", e));
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(err) = failure_reason {
+                    vec![crate::core::Event::WarmupFailed {
+                        package_name: source,
+                        err,
+                    }]
+                } else {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    vec![crate::core::Event::WarmupCompleted {
+                        package: source,
+                        bytes,
+                        duration_ms,
+                    }]
+                }
+            }
+            Effect::ResolvePackageName { pid } => {
+                let cmdline_path = format!("/proc/{}/cmdline", pid);
+                match std::fs::read(&cmdline_path) {
+                    Ok(cmdline) => {
+                        if let Some(null_pos) = cmdline.iter().position(|&c| c == 0) {
+                            if let Ok(package_name) =
+                                String::from_utf8(cmdline[..null_pos].to_vec())
+                            {
+                                vec![crate::core::Event::PackageNameResolved { pid, package_name }]
+                            } else {
+                                vec![crate::core::Event::PackageResolutionFailed {
+                                    pid,
+                                    err: "invalid utf8".to_string(),
+                                }]
+                            }
+                        } else {
+                            vec![crate::core::Event::PackageResolutionFailed {
+                                pid,
+                                err: "no null terminator".to_string(),
+                            }]
+                        }
+                    }
+                    Err(e) => {
+                        vec![crate::core::Event::PackageResolutionFailed {
+                            pid,
+                            err: format!("read failed: {}", e),
+                        }]
+                    }
+                }
+            }
+            Effect::DiscoverPackageDir { package_name } => match std::fs::read_dir("/data/app") {
+                Ok(data_app) => {
+                    for outer_entry in data_app.flatten() {
+                        let outer_path = outer_entry.path();
+                        if outer_path.is_dir()
+                            && let Ok(inner_dir) = std::fs::read_dir(&outer_path)
+                        {
+                            for inner_entry in inner_dir.flatten() {
+                                let inner_name = inner_entry.file_name();
+                                if inner_name.to_string_lossy().starts_with(&package_name) {
+                                    return vec![crate::core::Event::PackageDirResolved {
+                                        package_name,
+                                        base_dir: inner_entry.path().to_string_lossy().into_owned(),
+                                    }];
+                                }
+                            }
+                        }
+                    }
+                    vec![crate::core::Event::PackageDirResolutionFailed {
+                        package_name,
+                        err: "package dir not found".to_string(),
+                    }]
+                }
+                Err(e) => {
+                    vec![crate::core::Event::PackageDirResolutionFailed {
+                        package_name,
+                        err: format!("read_dir /data/app failed: {}", e),
+                    }]
+                }
+            },
+            Effect::DiscoverPackagePaths {
+                package_name,
+                base_dir,
+            } => {
+                let mut paths = Vec::new();
+                let base_path = std::path::PathBuf::from(&base_dir);
+
+                let lib_dir = base_path.join("lib/arm64");
+                match std::fs::read_dir(&lib_dir) {
+                    Ok(entries) => {
+                        for entry in entries.flatten() {
+                            if let Some(ext) = entry.path().extension()
+                                && ext == "so"
+                            {
+                                paths.push(entry.path().to_string_lossy().into_owned());
+                            }
+                        }
+                    }
+                    Err(_) => {} // Ignore if dir doesn't exist
+                }
+
+                let oat_dir = base_path.join("oat/arm64");
+                if let Ok(entries) = std::fs::read_dir(&oat_dir) {
+                    for entry in entries.flatten() {
+                        if let Some(ext) = entry.path().extension()
+                            && (ext == "odex" || ext == "vdex" || ext == "art")
+                        {
+                            paths.push(entry.path().to_string_lossy().into_owned());
+                        }
+                    }
+                }
+
+                paths.push(base_path.join("base.apk").to_string_lossy().into_owned());
+
+                match std::fs::read_dir(&base_path) {
+                    Ok(entries) => {
+                        for entry in entries.flatten() {
+                            let name = entry.file_name();
+                            let name_str = name.to_string_lossy();
+                            if name_str.starts_with("split_") && name_str.ends_with(".apk") {
+                                paths.push(entry.path().to_string_lossy().into_owned());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return vec![crate::core::Event::PackagePathsDiscoveryFailed {
+                            package_name,
+                            err: format!("read_dir base_path failed: {}", e),
+                        }];
+                    }
+                }
+
+                if !paths.is_empty() {
+                    paths.sort_unstable();
+                    paths.truncate(64);
+                    return vec![crate::core::Event::PackagePathsDiscovered {
+                        package_name,
+                        paths,
+                    }];
+                }
+                vec![crate::core::Event::PackagePathsDiscoveryFailed {
+                    package_name,
+                    err: "no paths discovered".to_string(),
+                }]
+            }
+        }
+    }
+}
