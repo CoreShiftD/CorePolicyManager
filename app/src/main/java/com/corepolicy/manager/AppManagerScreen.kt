@@ -298,7 +298,7 @@ private fun AppManagerHeader(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OverviewInlineBadge(
-                    label = "Managed",
+                    label = "Controlled",
                     value = managedCount.toString(),
                     tone = ChipTone.ACTIVE,
                     modifier = Modifier.weight(1f)

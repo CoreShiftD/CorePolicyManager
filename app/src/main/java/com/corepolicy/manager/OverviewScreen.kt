@@ -129,7 +129,7 @@ private fun OverviewHeroHeader(
                 daemonStatus.disconnected -> "Daemon communication is offline. The last known policy state is still visible."
                 daemonStatus.restartInProgress -> "Daemon restart is in flight. Control surfaces remain available while policy sync recovers."
                 daemonStatus.warningCount > 0 -> "Policy control remains available with active warnings that need attention."
-                else -> "A live operational view of policy health, modules, and managed application coverage."
+                else -> "A live operational view of policy health, modules, and policy target coverage."
             },
             trailing = {
                 StatusChip(
@@ -162,11 +162,13 @@ private fun DaemonHeroCard(
         DaemonState.STOPPED -> "Stopped"
         DaemonState.DEGRADED -> "Degraded"
     }
-    val summaryLine = when {
-        status.disconnected -> "Reconnect the daemon service to resume policy synchronization and action feedback."
-        status.restartInProgress -> "Restart in progress. Existing controls remain visible while the daemon comes back."
-        status.state == DaemonState.DEGRADED -> "The daemon is live, but one or more modules need review."
-        else -> "The daemon is healthy and actively enforcing the selected device profile."
+    val statusSubtitle = when {
+        status.disconnected -> "Offline • Awaiting reconnect"
+        status.restartInProgress -> "Restarting • Sync paused"
+        status.state == DaemonState.DEGRADED -> "Degraded • Review required"
+        status.warningCount > 0 -> "Healthy • Attention flagged"
+        status.lastSyncTimestampMs > 0L -> "Running • Synced"
+        else -> "Healthy • Enforcing profile"
     }
 
     SectionCard(elevated = true) {
@@ -178,11 +180,11 @@ private fun DaemonHeroCard(
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
             Row(
                 modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 IconBadge(
@@ -191,15 +193,15 @@ private fun DaemonHeroCard(
                     tone = ChipTone.ACTIVE,
                     size = 34.dp
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         "CorePolicy Daemon",
                         style = MaterialTheme.typography.titleSmall,
                         color = palette.onSurface
                     )
                     Text(
-                        summaryLine,
-                        style = MaterialTheme.typography.bodySmall,
+                        statusSubtitle,
+                        style = MaterialTheme.typography.labelSmall,
                         color = palette.onSurfaceVariant
                     )
                 }
@@ -211,7 +213,7 @@ private fun DaemonHeroCard(
             )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -224,7 +226,7 @@ private fun DaemonHeroCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 DaemonMetaItem(label = "Last sync", value = formatRelativeTime(status.lastSyncTimestampMs), modifier = Modifier.weight(1f))
-                DaemonMetaItem(label = "Managed apps", value = managedAppsCount.toString(), modifier = Modifier.weight(1f))
+                DaemonMetaItem(label = "Policy targets", value = managedAppsCount.toString(), modifier = Modifier.weight(1f))
             }
         }
 
@@ -348,7 +350,7 @@ private fun OverviewSummaryRow(
                 tone = ChipTone.ACTIVE
             )
             AnimatedStatPill(
-                label = "Managed apps",
+                label = "Targets",
                 value = managedApps.toString(),
                 modifier = Modifier.weight(1f),
                 tone = ChipTone.INFO
@@ -388,7 +390,7 @@ private fun OverviewSignalRow(
             modifier = Modifier.weight(1f)
         )
         OverviewInlineBadge(
-            label = "Managed apps",
+            label = "Targets",
             value = managedAppsCount.toString(),
             tone = ChipTone.INFO,
             modifier = Modifier.weight(1f)
@@ -439,7 +441,7 @@ private fun ActiveProfileCard(
                         color = palette.onSurface
                     )
                     Text(
-                        "$managedAppsCount managed apps · $warningCount warnings in current posture",
+                        "$managedAppsCount policy targets · $warningCount warnings in current posture",
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.onSurfaceVariant
                     )
