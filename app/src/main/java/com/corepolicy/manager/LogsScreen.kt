@@ -1,21 +1,23 @@
 package com.corepolicy.manager
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -32,16 +34,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.corepolicy.manager.ui.R
 import com.corepolicy.manager.ui.theme.CorePolicySemantics
+import com.corepolicy.manager.ui.theme.CorePolicyDesign
 import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 
 private val LogFilters = listOf("All", "Daemon", "Policy", "Module", "Errors")
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LogsScreen(
     logs: List<LogEntry>,
     modifier: Modifier = Modifier
 ) {
-    val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
     var filter by remember { mutableStateOf("All") }
     val filtered = logs.filter {
         when (filter) {
@@ -55,14 +59,29 @@ fun LogsScreen(
     val grouped = filtered.groupBy { formatDateHeading(it.timestampMs) }
 
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = spacing.sm)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(spacing.lg)
     ) {
+        PageHeader(
+            eyebrow = "Diagnostics",
+            title = "Event timeline",
+            subtitle = "Daemon, policy, and module activity compressed into a readable operational log."
+        )
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
+        ) {
+            OverviewInlineBadge("Events", filtered.size.toString(), ChipTone.INFO)
+            OverviewInlineBadge("Errors", filtered.count { it.severity == LogSeverity.ERROR }.toString(), ChipTone.ERROR)
+        }
+
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
             LogFilters.forEach { label ->
                 SelectableFilterChip(
@@ -80,13 +99,13 @@ fun LogsScreen(
                 iconRes = R.drawable.ic_schedule
             )
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
+            Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                 grouped.forEach { (date, dayLogs) ->
                     LogDayGroup(date = date, entries = dayLogs)
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(spacing.sm))
     }
 }
 
@@ -97,22 +116,14 @@ fun LogsScreen(
 @Composable
 private fun LogDayGroup(date: String, entries: List<LogEntry>) {
     val palette = LocalCorePolicyPalette.current
-    val shape = RoundedCornerShape(CorePolicyDimens.cardRadius)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(palette.surfaceContainer)
-            .border(1.dp, palette.divider, shape)
-    ) {
-        // Sticky-style date header
+    val spacing = CorePolicyDesign.spacing
+    SectionCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(palette.surfaceContainerHigh)
-                .padding(horizontal = CorePolicyDimens.cardPaddingH, vertical = 10.dp),
+                .padding(bottom = spacing.nano),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs)
         ) {
             Box(
                 modifier = Modifier
@@ -133,15 +144,10 @@ private fun LogDayGroup(date: String, entries: List<LogEntry>) {
         }
         HorizontalDivider(color = palette.divider, thickness = 1.dp)
 
-        // Log rows
         entries.forEachIndexed { index, entry ->
             LogRow(entry)
             if (index != entries.lastIndex) {
-                HorizontalDivider(
-                    color = palette.divider,
-                    thickness = 1.dp,
-                    modifier = Modifier.padding(horizontal = CorePolicyDimens.cardPaddingH)
-                )
+                HorizontalDivider(color = palette.divider, thickness = 1.dp)
             }
         }
     }
@@ -154,6 +160,7 @@ private fun LogDayGroup(date: String, entries: List<LogEntry>) {
 @Composable
 private fun LogRow(entry: LogEntry) {
     val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
     val s = CorePolicySemantics.colors
     val severityTone = when (entry.severity) {
         LogSeverity.INFO -> ChipTone.INFO
@@ -169,25 +176,23 @@ private fun LogRow(entry: LogEntry) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = CorePolicyDimens.cardPaddingH, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(vertical = spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         verticalAlignment = Alignment.Top
     ) {
-        // Severity accent bar
         Box(
             modifier = Modifier
-                .width(3.dp)
                 .height(40.dp)
-                .clip(RoundedCornerShape(CorePolicyDimens.chipRadius))
+                .size(width = 3.dp, height = 40.dp)
+                .clip(CircleShape)
                 .background(accentColor.copy(alpha = 0.7f))
         )
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+            verticalArrangement = Arrangement.spacedBy(spacing.xs)
         ) {
-            // Meta row
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 StatusChip(
@@ -207,7 +212,6 @@ private fun LogRow(entry: LogEntry) {
                     color = palette.onSurfaceVariant
                 )
             }
-            // Message
             Text(
                 entry.message,
                 style = MaterialTheme.typography.bodyMedium,

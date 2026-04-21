@@ -1,7 +1,6 @@
 package com.corepolicy.manager
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -22,12 +21,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.corepolicy.manager.ui.R
+import com.corepolicy.manager.ui.theme.CorePolicyDesign
 import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 
 enum class AppSection(val title: String, val iconRes: Int) {
@@ -48,22 +48,22 @@ fun NavigationShell(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
+    val radii = CorePolicyDesign.radii
     val isRail = layout == NavigationShellLayout.NAV_RAIL
-    val shellShape = RoundedCornerShape(if (isRail) 28.dp else 24.dp)
     if (isRail) {
         Column(
             modifier = modifier
-                .padding(start = 12.dp, top = 16.dp, bottom = 16.dp)
-                .width(102.dp)
-                .shadow(18.dp, shellShape, clip = false)
-                .clip(shellShape)
-                .background(palette.surfaceContainerHigh)
-                .border(1.dp, palette.divider, shellShape)
-                .padding(horizontal = 8.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .width(96.dp)
+                .shadow(CorePolicyDesign.elevation.medium, RoundedCornerShape(radii.xl), clip = false)
+                .clip(RoundedCornerShape(radii.xl))
+                .background(palette.surfaceRaised.copy(alpha = 0.94f))
+                .border(1.dp, palette.divider, RoundedCornerShape(radii.xl))
+                .padding(horizontal = spacing.xs, vertical = spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(spacing.xs),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            NavigationShellHeader(compact = false)
+            NavigationShellHeader(compact = false, modifier = Modifier.padding(bottom = spacing.sm))
             AppSection.values().forEach { section ->
                 PremiumNavItem(
                     section = section,
@@ -73,33 +73,25 @@ fun NavigationShell(
                     modifier = Modifier.fillMaxWidth()
                 )
             }
-            Box(
-                modifier = Modifier
-                    .padding(top = 6.dp)
-                    .size(width = 28.dp, height = 3.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(palette.primary.copy(alpha = 0.35f))
-            )
         }
     } else {
         Row(
             modifier = modifier
-                .padding(horizontal = 16.dp, vertical = 10.dp)
                 .fillMaxWidth()
                 .shadow(
-                    elevation = 18.dp,
-                    shape = shellShape,
+                    elevation = CorePolicyDesign.elevation.medium,
+                    shape = RoundedCornerShape(radii.lg),
                     clip = false
                 )
-                .clip(shellShape)
-                .background(palette.surfaceContainerHigh)
-                .border(1.dp, palette.divider, shellShape)
-                .padding(horizontal = 8.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .clip(RoundedCornerShape(radii.lg))
+                .background(palette.surfaceRaised.copy(alpha = 0.96f))
+                .border(1.dp, palette.divider, RoundedCornerShape(radii.lg))
+                .padding(horizontal = spacing.xs, vertical = spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(spacing.nano)
         ) {
             NavigationShellHeader(
                 compact = true,
-                modifier = Modifier.padding(start = 2.dp, end = 2.dp)
+                modifier = Modifier.padding(horizontal = spacing.nano, vertical = spacing.sm)
             )
             AppSection.values().forEach { section ->
                 PremiumNavItem(
@@ -120,36 +112,36 @@ private fun NavigationShellHeader(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalCorePolicyPalette.current
+    val radii = CorePolicyDesign.radii
     if (compact) {
         Box(
             modifier = modifier
-                .padding(vertical = 6.dp)
-                .size(5.dp)
-                .clip(RoundedCornerShape(50))
+                .size(width = 5.dp, height = 28.dp)
+                .clip(RoundedCornerShape(radii.full))
                 .background(palette.primary)
         )
     } else {
         Column(
-            modifier = modifier.padding(bottom = 6.dp),
+            modifier = modifier,
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(CorePolicyDesign.spacing.xs)
         ) {
             Box(
                 modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(CorePolicyDesign.icons.xl)
+                    .clip(RoundedCornerShape(radii.md))
                     .background(palette.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "C",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    style = MaterialTheme.typography.titleSmall,
                     color = palette.onPrimaryContainer
                 )
             }
             Text(
-                text = "CORE",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                text = "CTRL",
+                style = MaterialTheme.typography.labelSmall,
                 color = palette.primary
             )
         }
@@ -165,79 +157,49 @@ private fun PremiumNavItem(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalCorePolicyPalette.current
-    val tone = if (selected) ChipTone.ACTIVE else ChipTone.NEUTRAL
+    val spacing = CorePolicyDesign.spacing
+    val radii = CorePolicyDesign.radii
     val isRail = layout == NavigationShellLayout.NAV_RAIL
-    val shape = RoundedCornerShape(if (isRail) 18.dp else 18.dp)
     val containerColor by animateColorAsState(
-        targetValue = if (selected) palette.primaryContainer else palette.surfaceContainerHigh.copy(alpha = 0.55f),
+        targetValue = if (selected) palette.primaryContainer else Color.Transparent,
         animationSpec = spring(),
         label = "navItemContainer"
     )
     val borderColor by animateColorAsState(
-        targetValue = if (selected) palette.primary.copy(alpha = 0.18f) else palette.divider.copy(alpha = 0.45f),
+        targetValue = if (selected) palette.primary.copy(alpha = 0.16f) else Color.Transparent,
         animationSpec = spring(),
         label = "navItemBorder"
     )
-    val indicatorWidth by animateDpAsState(
-        targetValue = if (isRail) 3.dp else if (selected) 16.dp else 8.dp,
-        animationSpec = spring(),
-        label = "navItemIndicatorWidth"
-    )
-    val indicatorHeight by animateDpAsState(
-        targetValue = if (isRail) {
-            if (selected) 16.dp else 8.dp
-        } else {
-            2.dp
-        },
-        animationSpec = spring(),
-        label = "navItemIndicatorHeight"
-    )
     Column(
         modifier = modifier
-            .clip(shape)
+            .clip(RoundedCornerShape(radii.md))
             .background(containerColor)
-            .border(width = 1.dp, color = borderColor, shape = shape)
+            .border(width = 1.dp, color = borderColor, shape = RoundedCornerShape(radii.md))
             .clickable(onClick = onClick)
-            .padding(horizontal = 5.dp, vertical = if (isRail) 10.dp else 7.dp)
+            .padding(horizontal = spacing.xs, vertical = if (isRail) spacing.sm else spacing.xs)
             .semantics { contentDescription = section.title },
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(spacing.nano),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         IconBadge(
             iconRes = section.iconRes,
             contentDescription = null,
-            tone = tone,
-            size = 24.dp
+            tone = if (selected) ChipTone.ACTIVE else ChipTone.NEUTRAL,
+            size = if (isRail) CorePolicyDesign.icons.lg else CorePolicyDesign.icons.md
         )
         Text(
             text = section.title,
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+            style = MaterialTheme.typography.labelSmall,
             color = if (selected) palette.onPrimaryContainer else palette.onSurfaceVariant,
             maxLines = 1
         )
-        if (isRail) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = indicatorWidth, height = indicatorHeight)
-                        .clip(RoundedCornerShape(50))
-                        .background(
-                            if (selected) palette.primary else palette.onSurfaceVariant.copy(alpha = 0.12f)
-                        )
+        Box(
+            modifier = Modifier
+                .size(width = if (selected) 18.dp else 8.dp, height = 2.dp)
+                .clip(RoundedCornerShape(radii.full))
+                .background(
+                    if (selected) palette.primary else palette.onSurfaceVariant.copy(alpha = 0.12f)
                 )
-            }
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(width = indicatorWidth, height = indicatorHeight)
-                    .clip(RoundedCornerShape(50))
-                    .background(
-                        if (selected) palette.primary else palette.onSurfaceVariant.copy(alpha = 0.12f)
-                    )
-            )
-        }
+        )
     }
 }

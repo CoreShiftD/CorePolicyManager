@@ -14,19 +14,22 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -55,6 +58,7 @@ import com.corepolicy.manager.ui.components.InsightTone
 import com.corepolicy.manager.ui.components.MetricState
 import com.corepolicy.manager.ui.components.MetricType
 import com.corepolicy.manager.ui.components.SystemProfile
+import com.corepolicy.manager.ui.theme.CorePolicyDesign
 import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -124,37 +128,49 @@ fun PolicyApp(profileDataStore: ProfileDataStore) {
     val architecture = normalizeArchitecture(Build.SUPPORTED_ABIS.firstOrNull())
     val androidVersion = Build.VERSION.RELEASE ?: "Unknown"
     val kernelVersion = normalizeKernelVersion(System.getProperty("os.version"))
-    val useNavRail = configuration.screenWidthDp >= 840
+    val useNavRail = configuration.screenWidthDp >= CorePolicyDesign.layout.railBreakpoint
+    val spacing = CorePolicyDesign.spacing
 
     Scaffold(
         containerColor = palette.background,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (!useNavRail) {
-                NavigationShell(
-                    selectedSection = selectedSection,
-                    onSectionSelected = { selectedSection = it },
-                    layout = NavigationShellLayout.BOTTOM_BAR
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(palette.background.copy(alpha = 0.01f))
+                        .navigationBarsPadding()
+                        .padding(horizontal = spacing.md, vertical = spacing.xs)
+                ) {
+                    NavigationShell(
+                        selectedSection = selectedSection,
+                        onSectionSelected = { selectedSection = it },
+                        layout = NavigationShellLayout.BOTTOM_BAR
+                    )
+                }
             }
         }
     ) { innerPadding ->
-        val screenPadding = PaddingValues(
-            start = CorePolicyDimens.screenHorizontal,
-            end = CorePolicyDimens.screenHorizontal,
-            top = CorePolicyDimens.screenTop,
-            bottom = 16.dp
-        )
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AppBackdrop(Modifier.fillMaxSize())
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
             if (useNavRail) {
-                NavigationShell(
-                    selectedSection = selectedSection,
-                    onSectionSelected = { selectedSection = it },
-                    layout = NavigationShellLayout.NAV_RAIL
-                )
+                Box(
+                    modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(start = spacing.md, top = spacing.sm, bottom = spacing.md)
+                ) {
+                    NavigationShell(
+                        selectedSection = selectedSection,
+                        onSectionSelected = { selectedSection = it },
+                        layout = NavigationShellLayout.NAV_RAIL
+                    )
+                }
             }
             AnimatedContent(
                 targetState = selectedSection,
@@ -165,7 +181,8 @@ fun PolicyApp(profileDataStore: ProfileDataStore) {
                 },
                 modifier = Modifier
                     .fillMaxHeight()
-                    .weight(1f),
+                    .weight(1f)
+                    .padding(horizontal = spacing.md),
                 label = "sectionCrossfade"
             ) { section ->
                 when (section) {
@@ -183,27 +200,18 @@ fun PolicyApp(profileDataStore: ProfileDataStore) {
                         onManageModules = { selectedSection = AppSection.MODULES },
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(
-                                start = CorePolicyDimens.screenHorizontal,
-                                end = CorePolicyDimens.screenHorizontal,
-                                top = 0.dp,
-                                bottom = 16.dp
-                            )
+                            .padding(horizontal = spacing.xs)
                     )
 
                     AppSection.MODULES -> ModulesScreen(
                         modules = modules,
                         onToggle = { id, enabled -> coroutineScope.launch { daemonService.setModuleEnabled(id, enabled) } },
                         onOpenLogs = { selectedSection = AppSection.LOGS },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(screenPadding)
+                        modifier = Modifier.fillMaxSize()
                     )
 
                     AppSection.APP_MANAGER -> AppManagerScreen(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(screenPadding),
+                        modifier = Modifier.fillMaxSize(),
                         daemonPolicyService = daemonService
                     )
 
@@ -215,19 +223,16 @@ fun PolicyApp(profileDataStore: ProfileDataStore) {
                                 daemonService.applyProfile(profile)
                             }
                         },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(screenPadding)
+                        modifier = Modifier.fillMaxSize()
                     )
 
                     AppSection.LOGS -> LogsScreen(
                         logs = logs,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(screenPadding)
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }
+        }
         }
     }
 
@@ -257,19 +262,21 @@ private fun ProfilePickerSheet(
     onSelect: (SystemProfile) -> Unit
 ) {
     val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
+    val radii = CorePolicyDesign.radii
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = spacing.lg, vertical = spacing.md),
+        verticalArrangement = Arrangement.spacedBy(spacing.sm)
     ) {
-        Text("Choose a profile", style = MaterialTheme.typography.titleLarge, color = palette.onSurface)
+        Text("Choose a profile", style = androidx.compose.material3.MaterialTheme.typography.titleLarge, color = palette.onSurface)
         Text(
             "Tune daemon behavior by workload target.",
-            style = MaterialTheme.typography.bodyMedium,
+            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
             color = palette.onSurfaceVariant
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(spacing.nano))
         SystemProfile.values().forEach { profile ->
             val selected = profile == selectedProfile
             val summary = when (profile) {
@@ -280,41 +287,41 @@ private fun ProfilePickerSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(CorePolicyDimens.cardRadiusTight))
-                    .background(if (selected) palette.primaryContainer else palette.surfaceContainerHigh)
+                    .clip(RoundedCornerShape(radii.md))
+                    .background(if (selected) palette.primaryContainer else palette.surfaceRaised)
                     .clickable { onSelect(profile) }
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                    .padding(horizontal = spacing.md, vertical = spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
                         .background(
                             if (selected) palette.onPrimaryContainer.copy(alpha = 0.18f)
-                            else palette.surfaceContainerHighest
+                            else palette.surfaceOverlay
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Image(
-                        painter = painterResource(id = profile.iconRes),
-                        contentDescription = profile.title,
+                Image(
+                    painter = painterResource(id = profile.iconRes),
+                    contentDescription = profile.title,
                         colorFilter = ColorFilter.tint(
                             if (selected) palette.onPrimaryContainer else palette.onSurfaceVariant
                         ),
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(CorePolicyDesign.icons.sm)
                     )
                 }
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(spacing.nano)) {
                     Text(
                         profile.title,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
                         color = if (selected) palette.onPrimaryContainer else palette.onSurface
                     )
                     Text(
                         summary,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                         color = if (selected) palette.onPrimaryContainer.copy(alpha = 0.85f) else palette.onSurfaceVariant
                     )
                 }

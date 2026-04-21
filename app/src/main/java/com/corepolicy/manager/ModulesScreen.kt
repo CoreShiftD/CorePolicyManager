@@ -1,7 +1,6 @@
 package com.corepolicy.manager
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -13,12 +12,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,13 +41,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.corepolicy.manager.ui.R
+import com.corepolicy.manager.ui.theme.CorePolicyDesign
 import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ModulesScreen(
     modules: List<ModuleStatus>,
@@ -52,11 +56,34 @@ fun ModulesScreen(
     modifier: Modifier = Modifier
 ) {
     var expandedId by remember { mutableStateOf<String?>(null) }
+    val spacing = CorePolicyDesign.spacing
 
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = spacing.sm)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(spacing.lg)
     ) {
+        PageHeader(
+            eyebrow = "Modules",
+            title = "Enforcement modules",
+            subtitle = "Daemon capabilities grouped by health, actionability, and dependency risk."
+        )
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
+        ) {
+            OverviewInlineBadge("Installed", modules.size.toString(), ChipTone.INFO)
+            OverviewInlineBadge("Enabled", modules.count { it.enabled }.toString(), ChipTone.ACTIVE)
+            OverviewInlineBadge(
+                "Needs review",
+                modules.count { it.health == ModuleHealth.DEGRADED || it.health == ModuleHealth.CONFLICT }.toString(),
+                ChipTone.WARNING
+            )
+        }
+
         if (modules.isEmpty()) {
             EmptyStateCard(
                 title = "No modules installed",
@@ -64,7 +91,7 @@ fun ModulesScreen(
                 iconRes = R.drawable.ic_network
             )
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
+            Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                 modules.forEach { module ->
                     ExpandableModuleCard(
                         module = module,
@@ -77,7 +104,7 @@ fun ModulesScreen(
             }
         }
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(spacing.sm))
     }
 }
 
@@ -90,59 +117,43 @@ private fun ExpandableModuleCard(
     onOpenLogs: () -> Unit
 ) {
     val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
     val healthTone = when (module.health) {
         ModuleHealth.HEALTHY -> ChipTone.SUCCESS
         ModuleHealth.DISABLED -> ChipTone.NEUTRAL
         ModuleHealth.CONFLICT -> ChipTone.ERROR
         ModuleHealth.DEGRADED -> ChipTone.WARNING
     }
-    val shape = RoundedCornerShape(CorePolicyDimens.cardRadius)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(palette.surfaceContainer)
-            .border(1.dp, palette.divider, shape)
-            .clickable(onClick = onOpen)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
+    SectionCard(onClick = onOpen) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
             IconBadge(
                 iconRes = R.drawable.ic_network,
                 contentDescription = module.title,
                 tone = if (module.enabled) ChipTone.ACTIVE else ChipTone.NEUTRAL,
-                size = 32.dp
+                size = CorePolicyDesign.icons.xl
             )
-            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.nano)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(module.title, style = MaterialTheme.typography.titleSmall, color = palette.onSurface)
-                    Switch(
-                        checked = module.enabled,
-                        onCheckedChange = onToggle,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = palette.onPrimaryContainer,
-                            checkedTrackColor = palette.primary,
-                            uncheckedThumbColor = palette.onSurfaceVariant,
-                            uncheckedTrackColor = palette.surfaceContainerHigh,
-                            uncheckedBorderColor = palette.divider
-                        )
-                    )
+                    Text(module.title, style = MaterialTheme.typography.titleLarge, color = palette.onSurface)
+                    StatusChip(if (module.enabled) "Enabled" else "Disabled", if (module.enabled) ChipTone.ACTIVE else ChipTone.NEUTRAL)
                 }
                 Text(module.description, style = MaterialTheme.typography.bodySmall, color = palette.onSurfaceVariant)
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.xs)) {
             StatusChip(formatModuleHealthLabel(module.health), healthTone, leadingDot = true)
-            if (module.enabled) StatusChip("Active", ChipTone.ACTIVE) else StatusChip("Disabled", ChipTone.NEUTRAL)
+            SecondaryButton(
+                text = if (module.enabled) "Disable" else "Enable",
+                onClick = { onToggle(!module.enabled) }
+            )
         }
         module.dependencyNote?.let {
             MetadataLine("Dependency", it)
@@ -155,18 +166,18 @@ private fun ExpandableModuleCard(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.surfaceContainerHigh)
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
+                    .clip(RoundedCornerShape(CorePolicyDesign.radii.md))
+                    .background(palette.surfaceRaised)
+                    .padding(spacing.sm),
+                verticalArrangement = Arrangement.spacedBy(spacing.nano)
             ) {
                 MetadataLine("Last action", module.lastAction)
                 MetadataLine("Dependency", module.dependencyNote ?: "None")
                 MetadataLine("Conflict", module.conflictNote ?: "No conflicts")
                 MetadataLine("Settings", if (module.hasSettings) "Available" else "Not available")
-                Spacer(Modifier.height(2.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatusChip("Open logs", ChipTone.INFO, modifier = Modifier.clickable(onClick = onOpenLogs))
+                Spacer(Modifier.height(spacing.nano))
+                Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                    SecondaryButton(text = "Open logs", onClick = onOpenLogs)
                 }
             }
         }

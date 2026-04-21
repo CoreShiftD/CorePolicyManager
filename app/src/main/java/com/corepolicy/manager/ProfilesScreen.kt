@@ -1,30 +1,28 @@
 package com.corepolicy.manager
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,8 +31,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.corepolicy.manager.ui.components.SystemProfile
+import com.corepolicy.manager.ui.theme.CorePolicyDesign
 import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ProfilesScreen(
     selectedProfile: SystemProfile,
@@ -42,36 +42,44 @@ fun ProfilesScreen(
     modifier: Modifier = Modifier
 ) {
     val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = spacing.sm)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(spacing.lg)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
-            SystemProfile.values().forEach { profile ->
-                ProfileRow(
-                    profile = profile,
-                    selected = profile == selectedProfile,
-                    onClick = { onSelect(profile) }
-                )
-            }
+        PageHeader(
+            eyebrow = "Profiles",
+            title = "Runtime posture",
+            subtitle = "Swap daemon bias instantly based on workload, thermals, and battery goals."
+        )
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
+        ) {
+            OverviewInlineBadge("Active", selectedProfile.title, ChipTone.ACTIVE)
+            OverviewInlineBadge("Mode", selectedProfile.description, ChipTone.INFO)
         }
 
-        SectionCard {
+        SectionCard(elevated = true) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
                 verticalAlignment = Alignment.Top
             ) {
                 IconBadge(
                     iconRes = selectedProfile.iconRes,
                     contentDescription = null,
                     tone = ChipTone.INFO,
-                    size = 32.dp
+                    size = CorePolicyDesign.icons.xl
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.nano)) {
                     Text(
-                        "Active: ${selectedProfile.title}",
-                        style = MaterialTheme.typography.titleSmall,
+                        "Current profile: ${selectedProfile.title}",
+                        style = MaterialTheme.typography.headlineSmall,
                         color = palette.onSurface
                     )
                     Text(
@@ -83,7 +91,16 @@ fun ProfilesScreen(
             }
         }
 
-        Spacer(Modifier.height(4.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            SystemProfile.values().forEach { profile ->
+                ProfileRow(
+                    profile = profile,
+                    selected = profile == selectedProfile,
+                    onClick = { onSelect(profile) }
+                )
+            }
+        }
+        Spacer(Modifier.height(spacing.sm))
     }
 }
 
@@ -100,7 +117,7 @@ private fun ProfileRow(
     onClick: () -> Unit
 ) {
     val palette = LocalCorePolicyPalette.current
-    val shape = RoundedCornerShape(CorePolicyDimens.cardRadius)
+    val spacing = CorePolicyDesign.spacing
 
     val summary = when (profile) {
         SystemProfile.PERFORMANCE -> "Max speed · CPU biased high · aggressive preload"
@@ -108,43 +125,14 @@ private fun ProfileRow(
         SystemProfile.EFFICIENCY -> "Battery-first · low background load"
     }
 
-    // Animate background and border color transitions
-    val bgColor by animateColorAsState(
-        targetValue = if (selected) palette.primaryContainer else palette.surfaceContainer,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "profileRowBg"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (selected) palette.primary.copy(alpha = 0.5f) else palette.divider,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "profileRowBorder"
-    )
-    val textColor by animateColorAsState(
-        targetValue = if (selected) palette.onPrimaryContainer else palette.onSurface,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "profileRowText"
-    )
-    val subtextColor by animateColorAsState(
-        targetValue = if (selected) palette.onPrimaryContainer.copy(alpha = 0.8f) else palette.onSurfaceVariant,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "profileRowSubtext"
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(bgColor)
-            .border(1.dp, borderColor, shape)
-            .clickable(onClick = onClick)
+    SectionCard(
+        elevated = selected,
+        onClick = onClick
     ) {
         Row(
-            modifier = Modifier.padding(
-                horizontal = CorePolicyDimens.cardPaddingH,
-                vertical = CorePolicyDimens.cardPaddingV
-            ),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
             Box(
                 modifier = Modifier
@@ -152,20 +140,20 @@ private fun ProfileRow(
                     .clip(CircleShape)
                     .background(
                         if (selected) palette.onPrimaryContainer.copy(alpha = 0.15f)
-                        else palette.surfaceContainerHigh
+                        else palette.surfaceRaised
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Image(
                     painter = painterResource(id = profile.iconRes),
                     contentDescription = profile.title,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(CorePolicyDesign.icons.lg),
                     colorFilter = ColorFilter.tint(
                         if (selected) palette.onPrimaryContainer else palette.onSurfaceVariant
                     )
                 )
             }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.nano)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -174,7 +162,7 @@ private fun ProfileRow(
                     Text(
                         profile.title,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = textColor
+                        color = if (selected) palette.onPrimaryContainer else palette.onSurface
                     )
                     if (selected) {
                         StatusChip(
@@ -187,17 +175,9 @@ private fun ProfileRow(
                 Text(
                     summary,
                     style = MaterialTheme.typography.bodySmall,
-                    color = subtextColor
+                    color = if (selected) palette.onPrimaryContainer.copy(alpha = 0.8f) else palette.onSurfaceVariant
                 )
             }
-        }
-
-        // Bottom accent strip for selected profile
-        if (selected) {
-            HorizontalDivider(
-                color = palette.primary.copy(alpha = 0.35f),
-                thickness = 2.dp
-            )
         }
     }
 }

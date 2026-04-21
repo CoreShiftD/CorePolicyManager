@@ -3,19 +3,22 @@ package com.corepolicy.manager
 import android.content.pm.PackageManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -24,7 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -41,9 +44,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import com.corepolicy.manager.ui.theme.CorePolicyDesign
 import com.corepolicy.manager.ui.theme.LocalCorePolicyPalette
 import kotlinx.coroutines.launch
 
@@ -54,6 +58,7 @@ enum class AppProfile(val label: String) {
     BATTERY_SAVER("Battery Saver"),
     CUSTOM("Custom")
 }
+
 private enum class AppSortMode { NAME, MANAGED_FIRST }
 
 enum class PolicySyncState { IDLE, PENDING, APPLIED, ERROR }
@@ -83,17 +88,11 @@ data class AppEntry(
     val icon: ImageBitmap?
 )
 
-private data class AppManagerContentState(
-    val appEntries: List<AppEntry>,
-    val filteredApps: List<AppEntry>,
-    val managedCount: Int,
-    val query: String,
-    val showManagedOnly: Boolean,
-    val sortMode: AppSortMode
-)
-
-private fun AppPolicy.summaryLabel(): String =
-    if (inheritGlobalDefaults) "Inheriting global defaults" else "Custom policy overrides active"
+private fun AppPolicy.summaryLabel(): String = when {
+    !enabled -> "Policy disabled"
+    inheritGlobalDefaults -> "Managed with global defaults"
+    else -> "Managed with per-app overrides"
+}
 
 private fun defaultAppPolicy(app: AppEntry): AppPolicy = AppPolicy(
     packageName = app.packageName,
@@ -111,8 +110,8 @@ private fun defaultAppPolicy(app: AppEntry): AppPolicy = AppPolicy(
     lastAppliedAt = null
 )
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
 fun AppManagerScreen(
     modifier: Modifier = Modifier,
     daemonPolicyService: DaemonPolicyService
@@ -139,28 +138,29 @@ fun AppManagerScreen(
                 AppEntry(
                     packageName = pkg,
                     appName = pm.getApplicationLabel(info).toString(),
-                    icon = iconCache[pkg] ?: runCatching { pm.getApplicationIcon(info).toBitmap(48, 48).asImageBitmap() }.getOrNull().also {
-                        iconCache[pkg] = it
-                    }
+                    icon = iconCache[pkg] ?: runCatching {
+                        pm.getApplicationIcon(info).toBitmap(48, 48).asImageBitmap()
+                    }.getOrNull().also { iconCache[pkg] = it }
                 )
             }
         appEntries.clear()
         appEntries.addAll(installed)
         installed.forEach { app ->
-            val persisted = persistedPolicies[app.packageName]
-            policies.putIfAbsent(
-                app.packageName,
-                persisted ?: defaultAppPolicy(app)
-            )
+            policies.putIfAbsent(app.packageName, persistedPolicies[app.packageName] ?: defaultAppPolicy(app))
         }
     }
+
     LaunchedEffect(persistedPolicies) {
         persistedPolicies.forEach { (pkg, policy) -> policies[pkg] = policy }
     }
 
-    val filteredApps = appEntries.filter {
-        query.isBlank() || it.appName.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true)
-    }.filter { !showManagedOnly || (policies[it.packageName]?.enabled == true) }
+    val filteredApps = appEntries
+        .filter {
+            query.isBlank() ||
+                it.appName.contains(query, ignoreCase = true) ||
+                it.packageName.contains(query, ignoreCase = true)
+        }
+        .filter { !showManagedOnly || policies[it.packageName]?.enabled == true }
         .let { list ->
             when (sortMode) {
                 AppSortMode.NAME -> list.sortedBy { it.appName.lowercase() }
@@ -170,6 +170,7 @@ fun AppManagerScreen(
                 )
             }
         }
+
     val managedCount = policies.values.count { it.enabled }
     val applyPolicyUpdate: (String, AppPolicy) -> Unit = { pkg, policy ->
         policies[pkg] = policy
@@ -178,84 +179,37 @@ fun AppManagerScreen(
             policies[pkg] = pending
             repository.savePolicy(pending)
             daemonPolicyService.applyAppPolicy(pending)
-            val applied = pending.copy(
-                syncState = PolicySyncState.APPLIED,
-                lastAppliedAt = System.currentTimeMillis()
-            )
+            val applied = pending.copy(syncState = PolicySyncState.APPLIED, lastAppliedAt = System.currentTimeMillis())
             policies[pkg] = applied
             repository.savePolicy(applied)
         }
     }
-    val contentState = AppManagerContentState(
-        appEntries = appEntries,
-        filteredApps = filteredApps,
-        managedCount = managedCount,
-        query = query,
-        showManagedOnly = showManagedOnly,
-        sortMode = sortMode
-    )
 
-    AppManagerContent(
-        modifier = modifier,
-        state = contentState,
-        policyFor = { pkg -> policies[pkg] },
-        onQueryChange = { query = it },
-        onManagedOnlyChanged = { showManagedOnly = it },
-        onSortModeChanged = { sortMode = it },
-        onEnabledChanged = { pkg, enabled ->
-            policies[pkg]?.let { policy ->
-                applyPolicyUpdate(pkg, policy.copy(enabled = enabled))
-            }
-        },
-        onAppSelected = { selectedPackage = it }
-    )
-
-    selectedPackage?.let { pkg ->
-        val policy = policies[pkg]
-        if (policy != null) {
-            AppPolicyBottomSheet(
-                policy = policy,
-                onPolicyChanged = { applyPolicyUpdate(pkg, it) },
-                onClose = { selectedPackage = null }
-            )
-        }
-    }
-}
-
-@Composable
-private fun AppManagerContent(
-    state: AppManagerContentState,
-    policyFor: (String) -> AppPolicy?,
-    onQueryChange: (String) -> Unit,
-    onManagedOnlyChanged: (Boolean) -> Unit,
-    onSortModeChanged: (AppSortMode) -> Unit,
-    onEnabledChanged: (String, Boolean) -> Unit,
-    onAppSelected: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
     LazyColumn(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.statusBars)
+            .padding(top = CorePolicyDesign.spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(CorePolicyDesign.spacing.lg)
     ) {
         item {
             AppManagerHeader(
-                managedCount = state.managedCount,
-                installedCount = state.appEntries.size,
-                filteredCount = state.filteredApps.size
+                managedCount = managedCount,
+                installedCount = appEntries.size,
+                filteredCount = filteredApps.size
             )
         }
         item {
             AppManagerToolbar(
-                filteredCount = state.filteredApps.size,
-                query = state.query,
-                showManagedOnly = state.showManagedOnly,
-                sortMode = state.sortMode,
-                onQueryChange = onQueryChange,
-                onManagedOnlyChanged = onManagedOnlyChanged,
-                onSortModeChanged = onSortModeChanged
+                filteredCount = filteredApps.size,
+                query = query,
+                showManagedOnly = showManagedOnly,
+                sortMode = sortMode,
+                onQueryChange = { query = it },
+                onManagedOnlyChanged = { showManagedOnly = it },
+                onSortModeChanged = { sortMode = it }
             )
         }
-        if (state.filteredApps.isEmpty()) {
+        if (filteredApps.isEmpty()) {
             item {
                 EmptyStateCard(
                     title = "No apps match the current view",
@@ -264,19 +218,32 @@ private fun AppManagerContent(
                 )
             }
         } else {
-            items(state.filteredApps, key = { it.packageName }) { app ->
-                val policy = policyFor(app.packageName) ?: return@items
+            items(filteredApps, key = { it.packageName }) { app ->
+                val policy = policies[app.packageName] ?: return@items
                 AppRow(
                     app = app,
                     policy = policy,
-                    onEnabledChanged = { enabled ->
-                        onEnabledChanged(app.packageName, enabled)
-                    },
-                    onClick = { onAppSelected(app.packageName) }
+                    onEnabledChanged = { enabled -> applyPolicyUpdate(app.packageName, policy.copy(enabled = enabled)) },
+                    onClick = { selectedPackage = app.packageName }
                 )
             }
         }
-        item { Spacer(modifier = Modifier.height(6.dp)) }
+        item { Spacer(modifier = Modifier.height(CorePolicyDesign.spacing.sm)) }
+    }
+
+    selectedPackage?.let { pkg ->
+        policies[pkg]?.let { policy ->
+            ModalBottomSheet(
+                onDismissRequest = { selectedPackage = null },
+                containerColor = LocalCorePolicyPalette.current.surfaceContainer
+            ) {
+                AppPolicySheet(
+                    policy = policy,
+                    onPolicyChanged = { applyPolicyUpdate(pkg, it) },
+                    onClose = { selectedPackage = null }
+                )
+            }
+        }
     }
 }
 
@@ -286,29 +253,20 @@ private fun AppManagerHeader(
     installedCount: Int,
     filteredCount: Int
 ) {
-    SectionCard {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+    val spacing = CorePolicyDesign.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+        PageHeader(
+            eyebrow = "App policies",
+            title = "Per-app control",
+            subtitle = "Targeted overrides for preload, process rules, battery policy, and profile bias."
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
-            OverviewInlineBadge(
-                label = "Controlled",
-                value = managedCount.toString(),
-                tone = ChipTone.ACTIVE,
-                modifier = Modifier.weight(1f)
-            )
-            OverviewInlineBadge(
-                label = "Installed",
-                value = installedCount.toString(),
-                tone = ChipTone.INFO,
-                modifier = Modifier.weight(1f)
-            )
-            OverviewInlineBadge(
-                label = "Visible",
-                value = filteredCount.toString(),
-                tone = ChipTone.NEUTRAL,
-                modifier = Modifier.weight(1f)
-            )
+            OverviewInlineBadge("Managed", managedCount.toString(), ChipTone.ACTIVE)
+            OverviewInlineBadge("Installed", installedCount.toString(), ChipTone.INFO)
+            OverviewInlineBadge("Visible", filteredCount.toString(), ChipTone.NEUTRAL)
         }
     }
 }
@@ -324,42 +282,32 @@ private fun AppManagerToolbar(
     onSortModeChanged: (AppSortMode) -> Unit
 ) {
     SectionCard {
-        SearchBar(
-            query = query,
-            onQueryChange = onQueryChange,
-            placeholder = "Search apps by name or package"
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
+        SearchBar(query = query, onQueryChange = onQueryChange, placeholder = "Search apps by name or package")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             StatusChip(
-                text = if (showManagedOnly) "$filteredCount visible · controlled" else "$filteredCount visible",
+                text = if (showManagedOnly) "$filteredCount controlled visible" else "$filteredCount visible",
                 tone = if (showManagedOnly) ChipTone.ACTIVE else ChipTone.NEUTRAL
             )
         }
-        AppManagerFilterRow(
-            showManagedOnly = showManagedOnly,
-            sortMode = sortMode,
-            onManagedOnlyChanged = onManagedOnlyChanged,
-            onSortModeChanged = onSortModeChanged
-        )
-    }
-}
-
-@Composable
-@OptIn(ExperimentalMaterial3Api::class)
-private fun AppPolicyBottomSheet(
-    policy: AppPolicy,
-    onPolicyChanged: (AppPolicy) -> Unit,
-    onClose: () -> Unit
-) {
-    ModalBottomSheet(onDismissRequest = onClose) {
-        AppPolicySheet(
-            policy = policy,
-            onPolicyChanged = onPolicyChanged,
-            onClose = onClose
-        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(CorePolicyDesign.spacing.sm)
+        ) {
+            SelectableFilterChip(
+                label = "Managed only",
+                selected = showManagedOnly,
+                onClick = { onManagedOnlyChanged(!showManagedOnly) }
+            )
+            SelectableFilterChip(
+                label = if (sortMode == AppSortMode.NAME) "Sort: name" else "Sort: managed",
+                selected = sortMode == AppSortMode.MANAGED_FIRST,
+                onClick = {
+                    onSortModeChanged(
+                        if (sortMode == AppSortMode.NAME) AppSortMode.MANAGED_FIRST else AppSortMode.NAME
+                    )
+                }
+            )
+        }
     }
 }
 
@@ -370,128 +318,70 @@ private fun AppRow(
     onEnabledChanged: (Boolean) -> Unit,
     onClick: () -> Unit
 ) {
-    ControlCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
+    SectionCard(onClick = onClick) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AppIdentityBlock(app = app, modifier = Modifier.weight(1f))
-            AppRowControls(policy = policy, onEnabledChanged = onEnabledChanged)
-        }
-        AppPolicyStateRow(policy = policy)
-    }
-}
-
-@Composable
-private fun AppIdentityBlock(
-    app: AppEntry,
-    modifier: Modifier = Modifier
-) {
-    val palette = LocalCorePolicyPalette.current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(38.dp)
-                .clip(RoundedCornerShape(CorePolicyDimens.cardRadiusTight))
-                .background(palette.surfaceContainerHigh),
-            contentAlignment = Alignment.Center
-        ) {
-            if (app.icon != null) {
-                Image(
-                    bitmap = app.icon,
-                    contentDescription = app.appName,
-                    modifier = Modifier.size(24.dp)
-                )
-            } else {
-                androidx.compose.material3.Text(
-                    app.appName.firstOrNull()?.uppercase() ?: "A",
-                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
-                    color = palette.onSurface
+            AppIcon(app = app)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.nano)) {
+                Text(app.appName, style = androidx.compose.material3.MaterialTheme.typography.titleMedium, color = palette.onSurface)
+                Text(
+                    app.packageName,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = palette.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-        }
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            androidx.compose.material3.Text(
-                app.appName,
-                style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
-                color = palette.onSurface,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-            androidx.compose.material3.Text(
-                app.packageName,
-                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                color = palette.onSurfaceVariant,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            StatusChip(
+                text = when (policy.syncState) {
+                    PolicySyncState.PENDING -> "Syncing"
+                    PolicySyncState.APPLIED -> "Applied"
+                    PolicySyncState.ERROR -> "Error"
+                    PolicySyncState.IDLE -> if (policy.enabled) "Managed" else "Idle"
+                },
+                tone = when (policy.syncState) {
+                    PolicySyncState.PENDING -> ChipTone.WARNING
+                    PolicySyncState.APPLIED -> ChipTone.SUCCESS
+                    PolicySyncState.ERROR -> ChipTone.ERROR
+                    PolicySyncState.IDLE -> if (policy.enabled) ChipTone.ACTIVE else ChipTone.NEUTRAL
+                }
             )
         }
-    }
-}
-
-@Composable
-private fun AppRowControls(
-    policy: AppPolicy,
-    onEnabledChanged: (Boolean) -> Unit
-) {
-    val palette = LocalCorePolicyPalette.current
-    Column(
-        horizontalAlignment = Alignment.End,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (policy.enabled) {
-                StatusChip("Managed", ChipTone.ACTIVE, leadingDot = true)
-            }
-            if (policy.syncState == PolicySyncState.PENDING) {
-                StatusChip("Syncing", ChipTone.WARNING)
-            }
+            Text(policy.summaryLabel(), style = androidx.compose.material3.MaterialTheme.typography.bodySmall, color = palette.onSurfaceVariant)
+            SecondaryButton(text = if (policy.enabled) "Disable" else "Enable", onClick = { onEnabledChanged(!policy.enabled) })
         }
-        Switch(
-            checked = policy.enabled,
-            onCheckedChange = onEnabledChanged,
-            colors = androidx.compose.material3.SwitchDefaults.colors(
-                checkedThumbColor = palette.onPrimaryContainer,
-                checkedTrackColor = palette.primary,
-                uncheckedThumbColor = palette.onSurfaceVariant,
-                uncheckedTrackColor = palette.surfaceContainerHigh,
-                uncheckedBorderColor = palette.divider
-            )
-        )
     }
 }
 
 @Composable
-private fun AppPolicyStateRow(policy: AppPolicy) {
+private fun AppIcon(app: AppEntry) {
     val palette = LocalCorePolicyPalette.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .clip(RoundedCornerShape(CorePolicyDesign.radii.md))
+            .background(palette.surfaceRaised),
+        contentAlignment = Alignment.Center
     ) {
-        androidx.compose.material3.Text(
-            text = policy.summaryLabel(),
-            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-            color = palette.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(10.dp))
-        androidx.compose.material3.Text(
-            text = "Profile · ${policy.profile.label}",
-            style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
-            color = palette.onSurfaceVariant
-        )
+        if (app.icon != null) {
+            Image(bitmap = app.icon, contentDescription = app.appName, modifier = Modifier.size(24.dp))
+        } else {
+            Text(
+                text = app.appName.firstOrNull()?.uppercase() ?: "A",
+                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                color = palette.onSurface
+            )
+        }
     }
 }
 
@@ -502,87 +392,83 @@ private fun AppPolicySheet(
     onClose: () -> Unit
 ) {
     val palette = LocalCorePolicyPalette.current
+    val spacing = CorePolicyDesign.spacing
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, bottom = 24.dp, top = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(start = spacing.lg, end = spacing.lg, top = spacing.xs, bottom = spacing.xxl),
+        verticalArrangement = Arrangement.spacedBy(spacing.lg)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            androidx.compose.material3.Text(
-                policy.appName,
-                style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
-                color = palette.onSurface
-            )
-            androidx.compose.material3.Text(
-                policy.packageName,
-                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                color = palette.onSurfaceVariant
-            )
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.nano)) {
+            Text(policy.appName, style = androidx.compose.material3.MaterialTheme.typography.headlineSmall, color = palette.onSurface)
+            Text(policy.packageName, style = androidx.compose.material3.MaterialTheme.typography.bodySmall, color = palette.onSurfaceVariant)
         }
 
         SectionCard {
             ModernSwitchRow(
                 title = "Manage this app",
-                subtitle = "Apply CorePolicy rules to ${policy.appName}",
+                subtitle = "Enable CorePolicy rules for ${policy.appName}",
                 checked = policy.enabled,
                 onCheckedChange = { onPolicyChanged(policy.copy(enabled = it)) }
             )
             ModernSwitchRow(
                 title = "Inherit global defaults",
-                subtitle = "Falls back to profile-wide settings",
+                subtitle = "Use the active global profile unless a control is overridden below",
                 checked = policy.inheritGlobalDefaults,
                 onCheckedChange = { onPolicyChanged(policy.copy(inheritGlobalDefaults = it)) }
             )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            androidx.compose.material3.Text(
-                "Profile",
-                style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
-                color = palette.onSurfaceVariant
-            )
-            ProfileChipRow(
-                selectedProfile = policy.profile,
-                onProfileSelected = { onPolicyChanged(policy.copy(profile = it)) }
-            )
-        }
+        SectionHeader("Profile bias", "Choose the base runtime posture for this app")
+        SelectorRow(
+            options = AppProfile.values().toList(),
+            selected = policy.profile,
+            labelFor = { it.label },
+            onSelect = { onPolicyChanged(policy.copy(profile = it)) }
+        )
 
         SectionCard {
             ModernSwitchRow(
                 title = "Preload",
-                subtitle = "App warmup and launch cache",
+                subtitle = "Warm launch assets before the app is opened",
                 checked = policy.preloadEnabled,
                 onCheckedChange = { onPolicyChanged(policy.copy(preloadEnabled = it)) }
             )
+            SelectorRow(
+                options = PreloadMode.values().toList(),
+                selected = policy.preloadMode,
+                labelFor = { it.name.lowercase().replaceFirstChar(Char::uppercase) },
+                onSelect = { onPolicyChanged(policy.copy(preloadMode = it)) }
+            )
             ModernSwitchRow(
                 title = "Process control",
-                subtitle = "Foreground / background rules",
+                subtitle = "Foreground and background handling rules",
                 checked = policy.processControlEnabled,
                 onCheckedChange = { onPolicyChanged(policy.copy(processControlEnabled = it)) }
             )
+            SelectorRow(
+                options = ProcessRuleMode.values().toList(),
+                selected = policy.processRuleMode,
+                labelFor = { it.name.lowercase().replaceFirstChar(Char::uppercase) },
+                onSelect = { onPolicyChanged(policy.copy(processRuleMode = it)) }
+            )
             ModernSwitchRow(
                 title = "Battery policy",
-                subtitle = "Per-app power restrictions",
+                subtitle = "Power restriction mode for this package",
                 checked = policy.batteryPolicyEnabled,
                 onCheckedChange = { onPolicyChanged(policy.copy(batteryPolicyEnabled = it)) }
             )
+            SelectorRow(
+                options = BatteryPolicyMode.values().toList(),
+                selected = policy.batteryPolicyMode,
+                labelFor = { it.name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase) },
+                onSelect = { onPolicyChanged(policy.copy(batteryPolicyMode = it)) }
+            )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            androidx.compose.material3.Text(
-                text = if (!policy.enabled && policy.inheritGlobalDefaults && policy.profile == AppProfile.DEFAULT &&
-                    !policy.preloadEnabled && !policy.processControlEnabled && !policy.batteryPolicyEnabled
-                ) "Uses global defaults" else policy.summaryLabel(),
-                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
-                color = palette.onSurfaceVariant
-            )
+        SectionCard {
             StatusChip(
-                text = "Sync · ${policy.syncState.name.lowercase().replaceFirstChar { it.uppercase() }}",
+                text = "Sync ${policy.syncState.name.lowercase().replaceFirstChar(Char::uppercase)}",
                 tone = when (policy.syncState) {
                     PolicySyncState.APPLIED -> ChipTone.SUCCESS
                     PolicySyncState.PENDING -> ChipTone.WARNING
@@ -590,117 +476,59 @@ private fun AppPolicySheet(
                     PolicySyncState.IDLE -> ChipTone.NEUTRAL
                 }
             )
-        }
-
-        AppPolicyActionArea(
-            onDone = onClose,
-            onReset = {
-                onPolicyChanged(
-                    policy.copy(
-                        enabled = false,
-                        inheritGlobalDefaults = true,
-                        profile = AppProfile.DEFAULT,
-                        preloadEnabled = false,
-                        processControlEnabled = false,
-                        batteryPolicyEnabled = false,
-                        preloadMode = PreloadMode.OFF,
-                        processRuleMode = ProcessRuleMode.DEFAULT,
-                        batteryPolicyMode = BatteryPolicyMode.DEFAULT,
-                        syncState = PolicySyncState.PENDING
-                    )
+            policy.lastAppliedAt?.let {
+                Text(
+                    text = "Last applied ${formatRelativeTime(it)}",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    color = palette.onSurfaceVariant
                 )
             }
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-    }
-}
+            Text(policy.summaryLabel(), style = androidx.compose.material3.MaterialTheme.typography.bodySmall, color = palette.onSurfaceVariant)
+        }
 
-@Composable
-private fun ProfileChipRow(
-    selectedProfile: AppProfile,
-    onProfileSelected: (AppProfile) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        AppProfile.values().forEach { profile ->
-            val selected = profile == selectedProfile
-            StatusChip(
-                text = profile.label,
-                tone = if (selected) ChipTone.ACTIVE else ChipTone.NEUTRAL,
-                modifier = Modifier.clickable { onProfileSelected(profile) }
+        HorizontalDivider(color = palette.divider, thickness = 1.dp)
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            PrimaryButton(text = "Done", onClick = onClose, modifier = Modifier.weight(1f))
+            SecondaryButton(
+                text = "Reset",
+                onClick = {
+                    onPolicyChanged(
+                        policy.copy(
+                            enabled = false,
+                            inheritGlobalDefaults = true,
+                            profile = AppProfile.DEFAULT,
+                            preloadEnabled = false,
+                            processControlEnabled = false,
+                            batteryPolicyEnabled = false,
+                            preloadMode = PreloadMode.OFF,
+                            processRuleMode = ProcessRuleMode.DEFAULT,
+                            batteryPolicyMode = BatteryPolicyMode.DEFAULT,
+                            syncState = PolicySyncState.PENDING
+                        )
+                    )
+                },
+                modifier = Modifier.weight(1f)
             )
         }
     }
 }
 
 @Composable
-private fun AppManagerFilterRow(
-    showManagedOnly: Boolean,
-    sortMode: AppSortMode,
-    onManagedOnlyChanged: (Boolean) -> Unit,
-    onSortModeChanged: (AppSortMode) -> Unit
+private fun <T> SelectorRow(
+    options: List<T>,
+    selected: T,
+    labelFor: (T) -> String,
+    onSelect: (T) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(CorePolicyDesign.spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(CorePolicyDesign.spacing.sm)
     ) {
-        SelectableFilterChip(
-            label = "Managed only",
-            selected = showManagedOnly,
-            onClick = { onManagedOnlyChanged(!showManagedOnly) }
-        )
-        SelectableFilterChip(
-            label = if (sortMode == AppSortMode.NAME) "Sort: Name" else "Sort: Managed",
-            selected = sortMode == AppSortMode.MANAGED_FIRST,
-            onClick = {
-                onSortModeChanged(if (sortMode == AppSortMode.NAME) AppSortMode.MANAGED_FIRST else AppSortMode.NAME)
-            }
-        )
-    }
-}
-
-@Composable
-private fun AppPolicyActionArea(
-    onDone: () -> Unit,
-    onReset: () -> Unit
-) {
-    val palette = LocalCorePolicyPalette.current
-    HorizontalDivider(color = palette.divider, thickness = 1.dp)
-    Spacer(modifier = Modifier.height(4.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Primary action
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(CorePolicyDimens.chipRadius))
-                .background(palette.primary)
-                .clickable(onClick = onDone)
-                .padding(horizontal = 24.dp, vertical = 13.dp)
-        ) {
-            androidx.compose.material3.Text(
-                "Done",
-                style = androidx.compose.material3.MaterialTheme.typography.labelLarge
-                    .copy(fontWeight = FontWeight.SemiBold),
-                color = palette.onPrimary
-            )
-        }
-        // Secondary action
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(CorePolicyDimens.chipRadius))
-                .background(palette.surfaceContainerHigh)
-                .border(1.dp, palette.divider, RoundedCornerShape(CorePolicyDimens.chipRadius))
-                .clickable(onClick = onReset)
-                .padding(horizontal = 24.dp, vertical = 13.dp)
-        ) {
-            androidx.compose.material3.Text(
-                "Reset to defaults",
-                style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
-                color = palette.onSurfaceVariant
+        options.forEach { option ->
+            SelectableFilterChip(
+                label = labelFor(option),
+                selected = option == selected,
+                onClick = { onSelect(option) }
             )
         }
     }
