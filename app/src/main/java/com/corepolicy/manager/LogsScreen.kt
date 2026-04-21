@@ -58,13 +58,6 @@ fun LogsScreen(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
     ) {
-        PageHeader(
-            eyebrow = "Observability",
-            title = "Logs",
-            subtitle = "${filtered.size} entries visible. Filter by domain to isolate daemon, policy, module, or error activity."
-        )
-
-        // Filter chip row
         Row(
             modifier = Modifier
                 .fillMaxWidth()

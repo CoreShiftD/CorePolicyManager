@@ -143,11 +143,6 @@ private fun DaemonHeroCard(
     }
 
     SectionCard(elevated = true) {
-        Text(
-            text = "Operational status",
-            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = palette.primary
-        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),

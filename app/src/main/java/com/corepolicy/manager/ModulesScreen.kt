@@ -52,26 +52,11 @@ fun ModulesScreen(
     modifier: Modifier = Modifier
 ) {
     var expandedId by remember { mutableStateOf<String?>(null) }
-    val activeCount = modules.count { it.enabled }
-    val palette = LocalCorePolicyPalette.current
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                "Modules",
-                style = MaterialTheme.typography.headlineLarge,
-                color = palette.onSurface
-            )
-            Text(
-                "$activeCount of ${modules.size} active · tap to expand",
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.onSurfaceVariant
-            )
-        }
-
         if (modules.isEmpty()) {
             EmptyStateCard(
                 title = "No modules installed",

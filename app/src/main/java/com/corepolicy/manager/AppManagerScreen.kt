@@ -286,36 +286,29 @@ private fun AppManagerHeader(
     installedCount: Int,
     filteredCount: Int
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
-        PageHeader(
-            eyebrow = "Application Policy",
-            title = "App Manager",
-            subtitle = "Manage targeted policy overrides without changing the global daemon profile."
-        )
-        SectionCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OverviewInlineBadge(
-                    label = "Controlled",
-                    value = managedCount.toString(),
-                    tone = ChipTone.ACTIVE,
-                    modifier = Modifier.weight(1f)
-                )
-                OverviewInlineBadge(
-                    label = "Installed",
-                    value = installedCount.toString(),
-                    tone = ChipTone.INFO,
-                    modifier = Modifier.weight(1f)
-                )
-                OverviewInlineBadge(
-                    label = "Visible",
-                    value = filteredCount.toString(),
-                    tone = ChipTone.NEUTRAL,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+    SectionCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OverviewInlineBadge(
+                label = "Controlled",
+                value = managedCount.toString(),
+                tone = ChipTone.ACTIVE,
+                modifier = Modifier.weight(1f)
+            )
+            OverviewInlineBadge(
+                label = "Installed",
+                value = installedCount.toString(),
+                tone = ChipTone.INFO,
+                modifier = Modifier.weight(1f)
+            )
+            OverviewInlineBadge(
+                label = "Visible",
+                value = filteredCount.toString(),
+                tone = ChipTone.NEUTRAL,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
@@ -331,21 +324,20 @@ private fun AppManagerToolbar(
     onSortModeChanged: (AppSortMode) -> Unit
 ) {
     SectionCard {
-        SectionHeader(
-            title = "App controls",
-            subtitle = "$filteredCount visible apps",
-            trailing = {
-                StatusChip(
-                    text = if (showManagedOnly) "Managed view" else "All apps",
-                    tone = if (showManagedOnly) ChipTone.ACTIVE else ChipTone.NEUTRAL
-                )
-            }
-        )
         SearchBar(
             query = query,
             onQueryChange = onQueryChange,
             placeholder = "Search apps by name or package"
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            StatusChip(
+                text = if (showManagedOnly) "$filteredCount visible · controlled" else "$filteredCount visible",
+                tone = if (showManagedOnly) ChipTone.ACTIVE else ChipTone.NEUTRAL
+            )
+        }
         AppManagerFilterRow(
             showManagedOnly = showManagedOnly,
             sortMode = sortMode,

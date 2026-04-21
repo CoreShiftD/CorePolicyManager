@@ -46,21 +46,6 @@ fun ProfilesScreen(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
     ) {
-        // Page header
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                "Profiles",
-                style = MaterialTheme.typography.headlineLarge,
-                color = palette.onSurface
-            )
-            Text(
-                "Tune daemon behavior by workload target.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = palette.onSurfaceVariant
-            )
-        }
-
-        // Profile cards
         Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
             SystemProfile.values().forEach { profile ->
                 ProfileRow(
@@ -71,7 +56,6 @@ fun ProfilesScreen(
             }
         }
 
-        // Contextual hint
         SectionCard {
             Row(
                 modifier = Modifier.fillMaxWidth(),
