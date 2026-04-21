@@ -59,14 +59,15 @@ fun OverviewScreen(
         modifier = modifier.verticalScroll(scroll),
         verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
     ) {
-        OverviewHeroHeader(
+        OverviewSignalRow(
             daemonStatus = daemonStatus,
-            managedAppsCount = managedAppsCount
+            managedAppsCount = managedAppsCount,
+            modulesCount = daemonStatus.enabledModules,
+            warningCount = daemonStatus.warningCount
         )
 
         DaemonHeroCard(
             status = daemonStatus,
-            managedAppsCount = managedAppsCount,
             onRestartDaemon = onRestartDaemon,
             onOpenLogs = onOpenLogs,
             onManageModules = onManageModules
@@ -76,19 +77,6 @@ fun OverviewScreen(
             metrics = metrics,
             daemonStatus = daemonStatus
         )
-
-        Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
-            SectionHeader(
-                title = "Policy posture",
-                subtitle = "Current profile ownership and operational health"
-            )
-            ActiveProfileCard(
-                selectedProfile = selectedProfile,
-                warningCount = daemonStatus.warningCount,
-                managedAppsCount = managedAppsCount,
-                onClick = onProfileClick
-            )
-        }
 
         Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
             SectionHeader(
@@ -117,33 +105,33 @@ fun OverviewScreen(
 }
 
 @Composable
-private fun OverviewHeroHeader(
+private fun OverviewSignalRow(
     daemonStatus: DaemonOverviewStatus,
-    managedAppsCount: Int
+    managedAppsCount: Int,
+    modulesCount: Int,
+    warningCount: Int
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        PageHeader(
-            eyebrow = "CorePolicy Manager",
-            title = "Control Center",
-            subtitle = when {
-                daemonStatus.disconnected -> "Daemon communication is offline. The last known policy state is still visible."
-                daemonStatus.restartInProgress -> "Daemon restart is in flight. Control surfaces remain available while policy sync recovers."
-                daemonStatus.warningCount > 0 -> "Policy control remains available with active warnings that need attention."
-                else -> "A live operational view of policy health, modules, and policy target coverage."
-            },
-            trailing = {
-                StatusChip(
-                    text = overviewStatusText(daemonStatus),
-                    tone = overviewStatusTone(daemonStatus),
-                    leadingDot = !daemonStatus.disconnected
-                )
-            }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OverviewInlineBadge(
+            label = "Modules",
+            value = modulesCount.toString(),
+            tone = ChipTone.ACTIVE,
+            modifier = Modifier.weight(1f)
         )
-
-        OverviewSignalRow(
-            managedAppsCount = managedAppsCount,
-            modulesCount = daemonStatus.enabledModules,
-            warningCount = daemonStatus.warningCount
+        OverviewInlineBadge(
+            label = "Targets",
+            value = managedAppsCount.toString(),
+            tone = ChipTone.INFO,
+            modifier = Modifier.weight(1f)
+        )
+        OverviewInlineBadge(
+            label = "Warnings",
+            value = warningCount.toString(),
+            tone = if (warningCount > 0) ChipTone.WARNING else if (daemonStatus.disconnected) ChipTone.ERROR else ChipTone.NEUTRAL,
+            modifier = Modifier.weight(1f)
         )
     }
 }
@@ -151,7 +139,6 @@ private fun OverviewHeroHeader(
 @Composable
 private fun DaemonHeroCard(
     status: DaemonOverviewStatus,
-    managedAppsCount: Int,
     onRestartDaemon: () -> Unit,
     onOpenLogs: () -> Unit,
     onManageModules: () -> Unit
@@ -166,7 +153,6 @@ private fun DaemonHeroCard(
         status.disconnected -> "Offline • Awaiting reconnect"
         status.restartInProgress -> "Restarting • Sync paused"
         status.state == DaemonState.DEGRADED -> "Degraded • Review required"
-        status.warningCount > 0 -> "Healthy • Attention flagged"
         status.lastSyncTimestampMs > 0L -> "Running • Synced"
         else -> "Healthy • Enforcing profile"
     }
@@ -213,31 +199,13 @@ private fun DaemonHeroCard(
             )
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DaemonMetaItem(label = "Profile", value = status.activeProfile.title, modifier = Modifier.weight(1f))
-                DaemonMetaItem(label = "Uptime", value = formatDuration(status.uptimeMs), modifier = Modifier.weight(1f))
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                DaemonMetaItem(label = "Last sync", value = formatRelativeTime(status.lastSyncTimestampMs), modifier = Modifier.weight(1f))
-                DaemonMetaItem(label = "Policy targets", value = managedAppsCount.toString(), modifier = Modifier.weight(1f))
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            DaemonMetaItem(label = "Uptime", value = formatDuration(status.uptimeMs), modifier = Modifier.weight(1f))
+            DaemonMetaItem(label = "Last sync", value = formatRelativeTime(status.lastSyncTimestampMs), modifier = Modifier.weight(1f))
         }
-
-        HorizontalDivider(color = palette.divider, thickness = 1.dp)
-
-        OverviewSummaryRow(
-            modulesActive = status.enabledModules,
-            managedApps = managedAppsCount,
-            currentProfile = status.activeProfile.title,
-            warnings = status.warningCount
-        )
 
         OverviewOperationalBanner(status = status)
 
@@ -294,18 +262,18 @@ private fun OverviewOperationalBanner(status: DaemonOverviewStatus) {
     val tone: ChipTone
     when {
         status.disconnected -> {
-            title = "Daemon unreachable"
-            message = "Controls remain visible, but policy application feedback is temporarily unavailable."
+            title = "Last action"
+            message = status.lastAction.ifBlank { "Daemon unreachable. Action feedback is temporarily unavailable." }
             tone = ChipTone.ERROR
         }
         status.restartInProgress -> {
-            title = "Restart underway"
-            message = "The daemon is cycling now. Recent actions may briefly report as pending."
+            title = "Last action"
+            message = status.lastAction.ifBlank { "Restart underway. Recent commands may report as pending." }
             tone = ChipTone.WARNING
         }
         status.warningCount > 0 || status.errorCount > 0 -> {
-            title = "Attention needed"
-            message = status.lastAction.ifBlank { "Review warnings and recent daemon activity for the current profile." }
+            title = "Last action"
+            message = status.lastAction.ifBlank { "Review the latest daemon activity and warning state." }
             tone = if (status.errorCount > 0) ChipTone.ERROR else ChipTone.WARNING
         }
         else -> {
@@ -320,10 +288,9 @@ private fun OverviewOperationalBanner(status: DaemonOverviewStatus) {
 @Composable
 private fun DaemonMetaItem(label: String, value: String, modifier: Modifier = Modifier) {
     val palette = LocalCorePolicyPalette.current
-    Row(
+    Column(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(text = label, style = MaterialTheme.typography.labelSmall, color = palette.onSurfaceVariant)
         Text(
@@ -331,135 +298,6 @@ private fun DaemonMetaItem(label: String, value: String, modifier: Modifier = Mo
             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
             color = palette.onSurface
         )
-    }
-}
-
-@Composable
-private fun OverviewSummaryRow(
-    modulesActive: Int,
-    managedApps: Int,
-    currentProfile: String,
-    warnings: Int
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AnimatedStatPill(
-                label = "Modules",
-                value = modulesActive.toString(),
-                modifier = Modifier.weight(1f),
-                tone = ChipTone.ACTIVE
-            )
-            AnimatedStatPill(
-                label = "Targets",
-                value = managedApps.toString(),
-                modifier = Modifier.weight(1f),
-                tone = ChipTone.INFO
-            )
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AnimatedStatPill(
-                label = "Profile",
-                value = currentProfile,
-                modifier = Modifier.weight(1f),
-                tone = ChipTone.ACTIVE
-            )
-            AnimatedStatPill(
-                label = "Warnings",
-                value = warnings.toString(),
-                tone = if (warnings > 0) ChipTone.WARNING else ChipTone.NEUTRAL,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-private fun OverviewSignalRow(
-    managedAppsCount: Int,
-    modulesCount: Int,
-    warningCount: Int
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        OverviewInlineBadge(
-            label = "Modules",
-            value = modulesCount.toString(),
-            tone = ChipTone.ACTIVE,
-            modifier = Modifier.weight(1f)
-        )
-        OverviewInlineBadge(
-            label = "Targets",
-            value = managedAppsCount.toString(),
-            tone = ChipTone.INFO,
-            modifier = Modifier.weight(1f)
-        )
-        OverviewInlineBadge(
-            label = "Warnings",
-            value = warningCount.toString(),
-            tone = if (warningCount > 0) ChipTone.WARNING else ChipTone.NEUTRAL,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun ActiveProfileCard(
-    selectedProfile: SystemProfile,
-    warningCount: Int,
-    managedAppsCount: Int,
-    onClick: () -> Unit
-) {
-    val palette = LocalCorePolicyPalette.current
-    SectionCard(onClick = onClick) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                IconBadge(
-                    iconRes = selectedProfile.iconRes,
-                    contentDescription = selectedProfile.title,
-                    tone = ChipTone.ACTIVE,
-                    size = 40.dp
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        "Active profile",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = palette.onSurfaceVariant
-                    )
-                    Text(
-                        selectedProfile.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = palette.onSurface
-                    )
-                    Text(
-                        "$managedAppsCount policy targets · $warningCount warnings in current posture",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.onSurfaceVariant
-                    )
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(CorePolicyDimens.chipRadius))
-                    .background(palette.primaryContainer)
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    "Change",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                    color = palette.onPrimaryContainer
-                )
-            }
-        }
     }
 }
 
