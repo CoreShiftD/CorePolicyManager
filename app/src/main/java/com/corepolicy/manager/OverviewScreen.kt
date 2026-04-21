@@ -57,7 +57,7 @@ fun OverviewScreen(
     val scroll = rememberScrollState()
     Column(
         modifier = modifier.verticalScroll(scroll),
-        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
+        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)
     ) {
         OverviewSignalRow(
             daemonStatus = daemonStatus,
@@ -81,7 +81,6 @@ fun OverviewScreen(
         Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
             SectionHeader(
                 title = "Insights",
-                subtitle = "Daemon behavior and policy health",
                 trailing = {
                     StatusChip(
                         text = "${insights.size} signals",
@@ -92,13 +91,7 @@ fun OverviewScreen(
             InsightsSection(insights = insights)
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
-            SectionHeader(
-                title = "Device info",
-                subtitle = "Technical diagnostics and platform context"
-            )
-            StaticSystemInfoSection(systemInfo = systemInfo, runtimeInfo = runtimeInfo)
-        }
+        StaticSystemInfoSection(systemInfo = systemInfo, runtimeInfo = runtimeInfo)
 
         Spacer(Modifier.height(4.dp))
     }
@@ -239,18 +232,17 @@ private fun OverviewMetricsSection(
     metrics: List<DynamicMetric>,
     daemonStatus: DaemonOverviewStatus
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
-        SectionHeader(
-            title = "System snapshot",
-            subtitle = "Live runtime telemetry across device and daemon surfaces",
-            trailing = {
-                StatusChip(
-                    text = if (daemonStatus.disconnected) "Paused" else "Live",
-                    tone = if (daemonStatus.disconnected) ChipTone.ERROR else ChipTone.ACTIVE,
-                    leadingDot = !daemonStatus.disconnected
-                )
-            }
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            StatusChip(
+                text = if (daemonStatus.disconnected) "Paused" else "Live",
+                tone = if (daemonStatus.disconnected) ChipTone.ERROR else ChipTone.ACTIVE,
+                leadingDot = !daemonStatus.disconnected
+            )
+        }
         InfoCardGrid(metrics = metrics)
     }
 }
@@ -357,12 +349,4 @@ private fun overviewStatusTone(status: DaemonOverviewStatus): ChipTone = when {
     status.state == DaemonState.RUNNING && status.warningCount == 0 && status.errorCount == 0 -> ChipTone.SUCCESS
     status.state == DaemonState.DEGRADED || status.warningCount > 0 -> ChipTone.WARNING
     else -> ChipTone.NEUTRAL
-}
-
-private fun overviewStatusText(status: DaemonOverviewStatus): String = when {
-    status.disconnected -> "Offline"
-    status.restartInProgress -> "Restarting"
-    status.state == DaemonState.RUNNING && status.warningCount == 0 && status.errorCount == 0 -> "Nominal"
-    status.state == DaemonState.DEGRADED || status.warningCount > 0 -> "Needs review"
-    else -> "Stopped"
 }
