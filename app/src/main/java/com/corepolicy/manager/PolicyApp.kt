@@ -183,7 +183,12 @@ fun PolicyApp(profileDataStore: ProfileDataStore) {
                         onManageModules = { selectedSection = AppSection.MODULES },
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(screenPadding)
+                            .padding(
+                                start = CorePolicyDimens.screenHorizontal,
+                                end = CorePolicyDimens.screenHorizontal,
+                                top = 0.dp,
+                                bottom = 16.dp
+                            )
                     )
 
                     AppSection.MODULES -> ModulesScreen(

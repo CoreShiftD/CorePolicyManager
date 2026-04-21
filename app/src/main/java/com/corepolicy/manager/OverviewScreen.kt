@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -56,8 +57,11 @@ fun OverviewScreen(
 ) {
     val scroll = rememberScrollState()
     Column(
-        modifier = modifier.verticalScroll(scroll),
-        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)
+        modifier = modifier
+            .statusBarsPadding()
+            .padding(top = 4.dp)
+            .verticalScroll(scroll),
+        verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.sectionGap)
     ) {
         OverviewSignalRow(
             daemonStatus = daemonStatus,
@@ -74,22 +78,10 @@ fun OverviewScreen(
         )
 
         OverviewMetricsSection(
-            metrics = metrics,
-            daemonStatus = daemonStatus
+            metrics = metrics
         )
 
-        Column(verticalArrangement = Arrangement.spacedBy(CorePolicyDimens.cardGap)) {
-            SectionHeader(
-                title = "Insights",
-                trailing = {
-                    StatusChip(
-                        text = "${insights.size} signals",
-                        tone = ChipTone.INFO
-                    )
-                }
-            )
-            InsightsSection(insights = insights)
-        }
+        InsightsSection(insights = insights)
 
         StaticSystemInfoSection(systemInfo = systemInfo, runtimeInfo = runtimeInfo)
 
@@ -228,23 +220,8 @@ private fun DaemonHeroCard(
 }
 
 @Composable
-private fun OverviewMetricsSection(
-    metrics: List<DynamicMetric>,
-    daemonStatus: DaemonOverviewStatus
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            StatusChip(
-                text = if (daemonStatus.disconnected) "Paused" else "Live",
-                tone = if (daemonStatus.disconnected) ChipTone.ERROR else ChipTone.ACTIVE,
-                leadingDot = !daemonStatus.disconnected
-            )
-        }
-        InfoCardGrid(metrics = metrics)
-    }
+private fun OverviewMetricsSection(metrics: List<DynamicMetric>) {
+    InfoCardGrid(metrics = metrics)
 }
 
 @Composable
