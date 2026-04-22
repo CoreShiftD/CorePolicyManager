@@ -28,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -218,17 +219,17 @@ private fun HeroSlab() {
         shape = RoundedCornerShape(42.dp),
         brush = Brush.linearGradient(
             colors = listOf(
-                MaterialTheme.colorScheme.surfaceBright.copy(alpha = 0.98f),
-                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.90f),
-                MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.74f),
+                MaterialTheme.colorScheme.surfaceBright.copy(alpha = 0.99f),
+                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.78f),
             ),
             start = Offset.Zero,
             end = Offset(1280f, 960f),
         ),
         innerGlow = AppThemeTokens.accentGlow.copy(alpha = 0.16f),
         highlightAlpha = 0.08f,
-        baseShadowAlpha = 0.16f,
-    )
+        baseShadowAlpha = 0.10f,
+        )
 }
 
 @Composable
@@ -254,7 +255,7 @@ private fun FloatingGlassPanel(
         borderAlpha = 0.34f,
         innerGlow = Color.White.copy(alpha = 0.08f),
         highlightAlpha = 0.11f,
-        baseShadowAlpha = 0.06f,
+        baseShadowAlpha = 0.03f,
         edgeHighlightAlpha = 0.16f,
         floating = true,
     )
@@ -284,7 +285,7 @@ private fun MatteStage(
         borderAlpha = 0.24f,
         innerGlow = AppThemeTokens.secondaryGlow.copy(alpha = 0.10f),
         highlightAlpha = 0.06f,
-        baseShadowAlpha = 0.18f,
+        baseShadowAlpha = 0.10f,
         edgeHighlightAlpha = 0.08f,
     )
 }
@@ -305,8 +306,16 @@ private fun FoundationSurface(
     val outline = MaterialTheme.colorScheme.outline.copy(alpha = borderAlpha)
     val frostLine = if (isDark) AppThemeTokens.frostLine else Color(0x40FFFFFF)
     val graphiteLine = if (isDark) AppThemeTokens.graphiteLine else Color(0x120B1118)
+    val shadowAlpha = if (isDark) baseShadowAlpha else baseShadowAlpha * 0.28f
+    val bottomShadeAlpha = if (isDark) 0.10f else 0.025f
+    val surfaceShadow = if (floating) {
+        if (isDark) 18.dp else 8.dp
+    } else {
+        if (isDark) 12.dp else 5.dp
+    }
     Surface(
         modifier = modifier
+            .clip(shape)
             .drawBehind {
                 drawRoundRect(
                     brush = Brush.radialGradient(
@@ -315,20 +324,22 @@ private fun FoundationSurface(
                         radius = size.maxDimension * 0.9f,
                     ),
                 )
-                drawRoundRect(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = if (floating) baseShadowAlpha * 0.75f else baseShadowAlpha),
-                            Color.Transparent,
+                if (shadowAlpha > 0f) {
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = if (floating) shadowAlpha * 0.72f else shadowAlpha),
+                                Color.Transparent,
+                            ),
+                            startY = size.height * 0.68f,
                         ),
-                        startY = size.height * 0.62f,
-                    ),
-                )
+                    )
+                }
             },
         shape = shape,
         color = Color.Transparent,
         tonalElevation = 0.dp,
-        shadowElevation = if (floating) 18.dp else 12.dp,
+        shadowElevation = surfaceShadow,
         border = BorderStroke(
             width = 1.dp,
             color = outline,
@@ -337,6 +348,7 @@ private fun FoundationSurface(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .clip(shape)
                 .background(brush)
                 .drawBehind {
                     drawRect(
@@ -344,7 +356,7 @@ private fun FoundationSurface(
                             colors = listOf(
                                 Color.White.copy(alpha = highlightAlpha),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = if (isDark) 0.10f else 0.04f),
+                                Color.Black.copy(alpha = bottomShadeAlpha),
                             ),
                         ),
                     )
@@ -370,16 +382,18 @@ private fun FoundationSurface(
                             endY = size.height * 0.18f,
                         ),
                     )
-                    drawRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                graphiteLine.copy(alpha = 0.9f),
+                    if (isDark) {
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    graphiteLine.copy(alpha = 0.9f),
+                                ),
+                                startY = size.height * 0.82f,
+                                endY = size.height,
                             ),
-                            startY = size.height * 0.78f,
-                            endY = size.height,
-                        ),
-                    )
+                        )
+                    }
                 },
             contentAlignment = Alignment.Center,
         ) {}
