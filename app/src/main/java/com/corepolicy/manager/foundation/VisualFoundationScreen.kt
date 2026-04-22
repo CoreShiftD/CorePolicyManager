@@ -14,12 +14,16 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,7 +38,11 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.corepolicy.manager.core.designsystem.theme.AppThemeTokens
 import com.corepolicy.manager.core.designsystem.theme.LocalSpacing
@@ -89,10 +97,11 @@ fun VisualFoundationScreen() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .padding(horizontal = spacing.medium, vertical = spacing.large),
             verticalArrangement = Arrangement.spacedBy(spacing.medium),
         ) {
-            MinimalWordmark()
+            IdentityHeader()
             Spacer(modifier = Modifier.height(spacing.small))
             HeroSlab()
             FloatingGlassPanel(offsetY = panelFloat.value.dp)
@@ -192,21 +201,191 @@ private fun BoxScope.AmbientRim(
 }
 
 @Composable
-private fun MinimalWordmark() {
+private fun IdentityHeader() {
     val spacing = LocalSpacing.current
-    Column(
-        verticalArrangement = Arrangement.spacedBy(spacing.xSmall),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(116.dp),
+    ) {
+        HeaderAnchorSurface(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 20.dp, y = 8.dp),
+        )
+        Box(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.align(Alignment.CenterStart),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BrandGlyph()
+                Spacer(modifier = Modifier.width(spacing.small))
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = "CorePolicy",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.60f),
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Manager",
+                        style = MaterialTheme.typography.displaySmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            PrivateBuildChip(
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeaderAnchorSurface(
+    modifier: Modifier = Modifier,
+) {
+    val isDark = isSystemInDarkTheme()
+    val radius = 34.dp
+    val shape = RoundedCornerShape(
+        topStart = radius,
+        topEnd = 42.dp,
+        bottomStart = 42.dp,
+        bottomEnd = 28.dp,
+    )
+    Surface(
+        modifier = modifier
+            .size(width = 190.dp, height = 98.dp)
+            .clip(shape),
+        shape = shape,
+        color = Color.Transparent,
+        tonalElevation = 0.dp,
+        shadowElevation = if (isDark) 8.dp else 3.dp,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = if (isDark) 0.18f else 0.12f),
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(shape)
+                .background(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.surfaceBright.copy(alpha = if (isDark) 0.38f else 0.84f),
+                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.20f else 0.58f),
+                            Color.Transparent,
+                        ),
+                        start = Offset.Zero,
+                        end = Offset(700f, 460f),
+                    ),
+                )
+                .drawBehind {
+                    val roundness = CornerRadius(radius.toPx(), radius.toPx())
+                    drawRoundRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                AppThemeTokens.accentGlow.copy(alpha = if (isDark) 0.12f else 0.06f),
+                                Color.Transparent,
+                            ),
+                            center = Offset(size.width * 0.28f, size.height * 0.24f),
+                            radius = size.maxDimension * 0.72f,
+                        ),
+                        cornerRadius = roundness,
+                    )
+                    drawRoundRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = if (isDark) 0.05f else 0.10f),
+                                Color.Transparent,
+                            ),
+                            startY = 0f,
+                            endY = size.height * 0.26f,
+                        ),
+                        cornerRadius = roundness,
+                    )
+                },
+        )
+    }
+}
+
+@Composable
+private fun BrandGlyph() {
+    val isDark = isSystemInDarkTheme()
+    val shape = RoundedCornerShape(24.dp)
+    val line = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.88f else 0.70f)
+    val dot = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.96f else 0.78f)
+    Surface(
+        modifier = Modifier.size(46.dp),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.58f else 0.74f),
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = if (isDark) 0.22f else 0.14f),
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = if (isDark) 6.dp else 2.dp,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(shape)
+                .drawBehind {
+                    val p1 = Offset(size.width * 0.34f, size.height * 0.30f)
+                    val p2 = Offset(size.width * 0.68f, size.height * 0.34f)
+                    val p3 = Offset(size.width * 0.30f, size.height * 0.68f)
+                    val p4 = Offset(size.width * 0.66f, size.height * 0.70f)
+                    val path = Path().apply {
+                        moveTo(p1.x, p1.y)
+                        lineTo(p2.x, p2.y)
+                        lineTo(p4.x, p4.y)
+                        lineTo(p3.x, p3.y)
+                        close()
+                    }
+                    drawPath(
+                        path = path,
+                        color = line,
+                        style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                    drawCircle(color = dot, radius = 2.4.dp.toPx(), center = p1)
+                    drawCircle(color = dot, radius = 2.4.dp.toPx(), center = p2)
+                    drawCircle(color = dot, radius = 2.4.dp.toPx(), center = p3)
+                    drawCircle(color = dot, radius = 2.4.dp.toPx(), center = p4)
+                },
+        )
+    }
+}
+
+@Composable
+private fun PrivateBuildChip(
+    modifier: Modifier = Modifier,
+) {
+    val isDark = isSystemInDarkTheme()
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.48f else 0.64f),
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = if (isDark) 0.20f else 0.12f),
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
     ) {
         Text(
-            text = "CORE POLICY",
+            text = "PRIVATE BUILD",
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.54f),
-            fontWeight = FontWeight.Medium,
-        )
-        Text(
-            text = "Visual foundation",
-            style = MaterialTheme.typography.displaySmall,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.86f else 0.72f),
+            fontWeight = FontWeight.SemiBold,
         )
     }
 }
