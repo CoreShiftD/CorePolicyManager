@@ -30,6 +30,10 @@ object AppThemeTokens {
     val secondaryGlow = Color(0xFF5AD7C8)
     val edgeLight = Color(0x33F3F7FF)
     val edgeShadow = Color(0xCC020305)
+    val paper = Color(0xFFF5F7FB)
+    val mist = Color(0xFFE9EEF5)
+    val frostLine = Color(0x66FFFFFF)
+    val graphiteLine = Color(0x140D1117)
 }
 
 private val FallbackLightColors = lightColorScheme(
@@ -113,19 +117,19 @@ private fun ColorScheme.refinedDark(
 
 private fun ColorScheme.refinedLight(): ColorScheme {
     return copy(
-        background = Color(0xFFF7F8FB),
-        surface = Color(0xFFFFFFFF),
-        surfaceDim = Color(0xFFE1E6EC),
+        background = AppThemeTokens.paper,
+        surface = Color(0xFFFEFFFF),
+        surfaceDim = Color(0xFFDDE5EE),
         surfaceBright = Color(0xFFFFFFFF),
         surfaceContainerLowest = Color(0xFFFFFFFF),
-        surfaceContainerLow = Color(0xFFF3F5F8),
-        surfaceContainer = Color(0xFFEFF3F8),
-        surfaceContainerHigh = Color(0xFFE9EEF4),
-        surfaceContainerHighest = Color(0xFFE4EAF2),
-        surfaceVariant = Color(0xFFE4EAF2),
+        surfaceContainerLow = Color(0xFFF7F9FC),
+        surfaceContainer = Color(0xFFF0F4F9),
+        surfaceContainerHigh = Color(0xFFE9EFF6),
+        surfaceContainerHighest = AppThemeTokens.mist,
+        surfaceVariant = AppThemeTokens.mist,
         onBackground = Color(0xFF111418),
         onSurface = Color(0xFF14181D),
         onSurfaceVariant = Color(0xFF4A5561),
-        outline = Color(0xFF87919E),
+        outline = Color(0xFF8C98A6),
     )
 }

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -39,6 +40,7 @@ import com.corepolicy.manager.core.designsystem.theme.LocalSpacing
 @Composable
 fun VisualFoundationScreen() {
     val spacing = LocalSpacing.current
+    val isDark = isSystemInDarkTheme()
     val transition = rememberInfiniteTransition(label = "foundation")
     val drift = transition.animateFloat(
         initialValue = 0.92f,
@@ -49,16 +51,37 @@ fun VisualFoundationScreen() {
         ),
         label = "drift",
     )
+    val panelFloat = transition.animateFloat(
+        initialValue = -4f,
+        targetValue = 6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 7000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "panelFloat",
+    )
+    val matteShift = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 10f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 10000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "matteShift",
+    )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        AtmosphericBackdrop(glowScale = drift.value)
+        AtmosphericBackdrop(
+            glowScale = drift.value,
+            isDark = isDark,
+        )
         AmbientRim(
             modifier = Modifier.align(Alignment.TopCenter),
-            alpha = 0.18f,
+            alpha = if (isDark) 0.18f else 0.10f,
             height = 220.dp,
         )
         Column(
@@ -70,14 +93,14 @@ fun VisualFoundationScreen() {
             MinimalWordmark()
             Spacer(modifier = Modifier.height(spacing.small))
             HeroSlab()
-            FloatingGlassPanel()
-            MatteStage()
+            FloatingGlassPanel(offsetY = panelFloat.value.dp)
+            MatteStage(offsetX = matteShift.value.dp)
         }
         AmbientRim(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .offset(y = 96.dp),
-            alpha = 0.10f,
+            alpha = if (isDark) 0.10f else 0.06f,
             height = 260.dp,
         )
     }
@@ -86,6 +109,7 @@ fun VisualFoundationScreen() {
 @Composable
 private fun AtmosphericBackdrop(
     glowScale: Float,
+    isDark: Boolean,
 ) {
     val tokens = AppThemeTokens
     val background = MaterialTheme.colorScheme.background
@@ -94,15 +118,15 @@ private fun AtmosphericBackdrop(
             brush = Brush.verticalGradient(
                 colors = listOf(
                     background,
-                    tokens.backgroundMid,
-                    tokens.backgroundEdge,
+                    if (isDark) tokens.backgroundMid else Color(0xFFEFF4FA),
+                    if (isDark) tokens.backgroundEdge else Color(0xFFE3EAF3),
                 ),
             ),
         )
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    tokens.accentGlow.copy(alpha = 0.34f),
+                    tokens.accentGlow.copy(alpha = if (isDark) 0.34f else 0.14f),
                     Color.Transparent,
                 ),
                 center = Offset(size.width * 0.82f, size.height * 0.16f),
@@ -112,7 +136,7 @@ private fun AtmosphericBackdrop(
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    tokens.secondaryGlow.copy(alpha = 0.24f),
+                    tokens.secondaryGlow.copy(alpha = if (isDark) 0.24f else 0.10f),
                     Color.Transparent,
                 ),
                 center = Offset(size.width * 0.16f, size.height * 0.78f),
@@ -122,7 +146,7 @@ private fun AtmosphericBackdrop(
         drawRect(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    tokens.edgeLight.copy(alpha = 0.08f),
+                    tokens.edgeLight.copy(alpha = if (isDark) 0.08f else 0.10f),
                     Color.Transparent,
                 ),
                 center = Offset(size.width * 0.50f, size.height * 0.10f),
@@ -133,8 +157,8 @@ private fun AtmosphericBackdrop(
             brush = Brush.verticalGradient(
                 colors = listOf(
                     Color.Transparent,
-                    tokens.edgeShadow.copy(alpha = 0.22f),
-                    tokens.vignette.copy(alpha = 0.82f),
+                    if (isDark) tokens.edgeShadow.copy(alpha = 0.22f) else Color(0x140B1017),
+                    if (isDark) tokens.vignette.copy(alpha = 0.82f) else Color(0x0A0D1117),
                 ),
                 startY = size.height * 0.32f,
             ),
@@ -174,7 +198,7 @@ private fun MinimalWordmark() {
         Text(
             text = "CORE POLICY",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.58f),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.54f),
             fontWeight = FontWeight.Medium,
         )
         Text(
@@ -208,11 +232,14 @@ private fun HeroSlab() {
 }
 
 @Composable
-private fun FloatingGlassPanel() {
+private fun FloatingGlassPanel(
+    offsetY: androidx.compose.ui.unit.Dp,
+) {
     FoundationSurface(
         modifier = Modifier
             .fillMaxWidth(0.72f)
             .height(132.dp)
+            .offset(y = offsetY)
             .blur(0.35.dp),
         shape = RoundedCornerShape(32.dp),
         brush = Brush.linearGradient(
@@ -224,18 +251,23 @@ private fun FloatingGlassPanel() {
             start = Offset.Zero,
             end = Offset(840f, 560f),
         ),
-        borderAlpha = 0.40f,
+        borderAlpha = 0.34f,
         innerGlow = Color.White.copy(alpha = 0.08f),
         highlightAlpha = 0.11f,
-        baseShadowAlpha = 0.08f,
+        baseShadowAlpha = 0.06f,
+        edgeHighlightAlpha = 0.16f,
+        floating = true,
     )
 }
 
 @Composable
-private fun MatteStage() {
+private fun MatteStage(
+    offsetX: androidx.compose.ui.unit.Dp,
+) {
     FoundationSurface(
         modifier = Modifier
             .fillMaxWidth()
+            .offset(x = offsetX)
             .height(188.dp),
         shape = RoundedCornerShape(
             topStart = 34.dp,
@@ -253,6 +285,7 @@ private fun MatteStage() {
         innerGlow = AppThemeTokens.secondaryGlow.copy(alpha = 0.10f),
         highlightAlpha = 0.06f,
         baseShadowAlpha = 0.18f,
+        edgeHighlightAlpha = 0.08f,
     )
 }
 
@@ -265,8 +298,13 @@ private fun FoundationSurface(
     borderAlpha: Float = 0.22f,
     highlightAlpha: Float = 0.05f,
     baseShadowAlpha: Float = 0.12f,
+    edgeHighlightAlpha: Float = 0.10f,
+    floating: Boolean = false,
 ) {
+    val isDark = isSystemInDarkTheme()
     val outline = MaterialTheme.colorScheme.outline.copy(alpha = borderAlpha)
+    val frostLine = if (isDark) AppThemeTokens.frostLine else Color(0x40FFFFFF)
+    val graphiteLine = if (isDark) AppThemeTokens.graphiteLine else Color(0x120B1118)
     Surface(
         modifier = modifier
             .drawBehind {
@@ -280,7 +318,7 @@ private fun FoundationSurface(
                 drawRoundRect(
                     brush = Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = baseShadowAlpha),
+                            Color.Black.copy(alpha = if (floating) baseShadowAlpha * 0.75f else baseShadowAlpha),
                             Color.Transparent,
                         ),
                         startY = size.height * 0.62f,
@@ -290,7 +328,7 @@ private fun FoundationSurface(
         shape = shape,
         color = Color.Transparent,
         tonalElevation = 0.dp,
-        shadowElevation = 10.dp,
+        shadowElevation = if (floating) 18.dp else 12.dp,
         border = BorderStroke(
             width = 1.dp,
             color = outline,
@@ -306,14 +344,14 @@ private fun FoundationSurface(
                             colors = listOf(
                                 Color.White.copy(alpha = highlightAlpha),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.10f),
+                                Color.Black.copy(alpha = if (isDark) 0.10f else 0.04f),
                             ),
                         ),
                     )
                     drawRect(
                         brush = Brush.horizontalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = highlightAlpha * 0.85f),
+                                frostLine.copy(alpha = edgeHighlightAlpha),
                                 Color.Transparent,
                                 Color.Transparent,
                             ),
@@ -321,6 +359,26 @@ private fun FoundationSurface(
                             endX = size.width * 0.56f,
                         ),
                         topLeft = Offset(0f, 0f),
+                    )
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                frostLine.copy(alpha = edgeHighlightAlpha * 0.65f),
+                                Color.Transparent,
+                            ),
+                            startY = 0f,
+                            endY = size.height * 0.18f,
+                        ),
+                    )
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                graphiteLine.copy(alpha = 0.9f),
+                            ),
+                            startY = size.height * 0.78f,
+                            endY = size.height,
+                        ),
                     )
                 },
             contentAlignment = Alignment.Center,
