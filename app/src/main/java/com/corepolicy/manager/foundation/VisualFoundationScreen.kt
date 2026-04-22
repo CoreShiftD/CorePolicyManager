@@ -11,6 +11,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Outline
@@ -41,6 +43,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.addOutline
@@ -103,7 +106,7 @@ fun VisualFoundationScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = spacing.medium, vertical = spacing.large),
+                .padding(horizontal = spacing.medium, vertical = spacing.small),
             verticalArrangement = Arrangement.spacedBy(spacing.medium),
         ) {
             IdentityHeader()
@@ -208,24 +211,33 @@ private fun BoxScope.AmbientRim(
 @Composable
 private fun IdentityHeader() {
     val spacing = LocalSpacing.current
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
-            .height(116.dp),
+            .height(156.dp),
     ) {
         HeaderAnchorSurface(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = 20.dp, y = 8.dp),
+                .align(Alignment.TopCenter),
+            width = maxWidth + (spacing.large * 2),
         )
         Box(modifier = Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.align(Alignment.CenterStart),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth()
+                    .padding(
+                        start = spacing.small,
+                        end = spacing.xSmall,
+                        top = spacing.medium,
+                    ),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BrandGlyph()
                 Spacer(modifier = Modifier.width(spacing.small))
                 Column(
+                    modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
@@ -245,10 +257,8 @@ private fun IdentityHeader() {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                PrivateBuildChip()
             }
-            PrivateBuildChip(
-                modifier = Modifier.align(Alignment.CenterEnd),
-            )
         }
     }
 }
@@ -256,73 +266,67 @@ private fun IdentityHeader() {
 @Composable
 private fun HeaderAnchorSurface(
     modifier: Modifier = Modifier,
+    width: androidx.compose.ui.unit.Dp,
 ) {
     val isDark = isSystemInDarkTheme()
-    val radius = 34.dp
-    val headerBright = MaterialTheme.colorScheme.surfaceBright.copy(alpha = if (isDark) 0.34f else 0.82f)
-    val headerMid = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.18f else 0.56f)
-    val shape = RoundedCornerShape(
-        topStart = radius,
-        topEnd = 38.dp,
-        bottomStart = 38.dp,
-        bottomEnd = 26.dp,
-    )
-    Surface(
+    val slabPrimary = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.84f else 0.88f)
+    val slabSecondary = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.90f else 0.94f)
+    val topHighlight = Color.White.copy(alpha = if (isDark) 0.045f else 0.085f)
+    val outline = MaterialTheme.colorScheme.outline.copy(alpha = if (isDark) 0.12f else 0.10f)
+    Box(
         modifier = modifier
-            .size(width = 172.dp, height = 92.dp)
-            .clip(shape),
-        shape = shape,
-        color = Color.Transparent,
-        tonalElevation = 0.dp,
-        shadowElevation = if (isDark) 8.dp else 3.dp,
-        border = BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = if (isDark) 0.18f else 0.12f),
-        ),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(shape)
-                .drawBehind {
-                    val path = createShapePath(shape)
-                    clipPath(path) {
-                        drawRect(
-                            brush = Brush.linearGradient(
-                                colors = listOf(
-                                    headerBright,
-                                    headerMid,
-                                    Color.Transparent,
-                                ),
-                                start = Offset.Zero,
-                                end = Offset(700f, 460f),
+            .width(width)
+            .height(146.dp)
+            .offset(y = (-spacingForHeader()).dp)
+            .drawBehind {
+                val path = Path().apply {
+                    fillType = PathFillType.NonZero
+                    moveTo(0f, -size.height * 0.45f)
+                    lineTo(size.width, -size.height * 0.45f)
+                    lineTo(size.width, size.height * 0.72f)
+                    quadraticTo(
+                        size.width * 0.98f,
+                        size.height * 0.88f,
+                        size.width * 0.88f,
+                        size.height * 0.88f,
+                    )
+                    lineTo(size.width * 0.12f, size.height * 0.88f)
+                    quadraticTo(
+                        size.width * 0.02f,
+                        size.height * 0.88f,
+                        0f,
+                        size.height * 0.72f,
+                    )
+                    close()
+                }
+                clipPath(path) {
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                slabSecondary,
+                                slabPrimary,
                             ),
-                        )
-                        drawRect(
-                            brush = Brush.radialGradient(
-                                colors = listOf(
-                                    AppThemeTokens.accentGlow.copy(alpha = if (isDark) 0.10f else 0.05f),
-                                    Color.Transparent,
-                                ),
-                                center = Offset(size.width * 0.30f, size.height * 0.24f),
-                                radius = size.maxDimension * 0.66f,
+                        ),
+                    )
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                topHighlight,
+                                Color.Transparent,
                             ),
-                        )
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = if (isDark) 0.05f else 0.10f),
-                                    Color.Transparent,
-                                ),
-                                startY = 0f,
-                                endY = size.height * 0.24f,
-                            ),
-                        )
-                    }
-                },
+                            startY = size.height * 0.24f,
+                            endY = size.height * 0.52f,
+                        ),
+                    )
+                }
+                drawPath(
+                    path = path,
+                    color = outline,
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            },
         )
     }
-}
 
 @Composable
 private fun BrandGlyph() {
@@ -494,40 +498,14 @@ private fun FoundationSurface(
     val isDark = isSystemInDarkTheme()
     val outline = MaterialTheme.colorScheme.outline.copy(alpha = borderAlpha)
     val frostLine = if (isDark) AppThemeTokens.frostLine else Color(0x40FFFFFF)
-    val graphiteLine = if (isDark) AppThemeTokens.graphiteLine else Color(0x120B1118)
-    val shadowAlpha = if (isDark) baseShadowAlpha else baseShadowAlpha * 0.28f
-    val bottomShadeAlpha = if (isDark) 0.10f else 0.025f
     val surfaceShadow = if (floating) {
-        if (isDark) 18.dp else 8.dp
+        if (isDark) 10.dp else 4.dp
     } else {
-        if (isDark) 12.dp else 5.dp
+        if (isDark) 6.dp else 2.dp
     }
     Surface(
         modifier = modifier
-            .clip(shape)
-            .drawBehind {
-                val path = createShapePath(shape)
-                clipPath(path) {
-                    drawRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(innerGlow, Color.Transparent),
-                            center = Offset(size.width * 0.68f, size.height * 0.18f),
-                            radius = size.maxDimension * 0.9f,
-                        ),
-                    )
-                    if (shadowAlpha > 0f) {
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = if (floating) shadowAlpha * 0.72f else shadowAlpha),
-                                    Color.Transparent,
-                                ),
-                                startY = size.height * 0.68f,
-                            ),
-                        )
-                    }
-                }
-            },
+            .clip(shape),
         shape = shape,
         color = Color.Transparent,
         tonalElevation = 0.dp,
@@ -546,15 +524,6 @@ private fun FoundationSurface(
                     clipPath(path) {
                         drawRect(brush = brush)
                         drawRect(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.White.copy(alpha = highlightAlpha),
-                                    Color.Transparent,
-                                    Color.Black.copy(alpha = bottomShadeAlpha),
-                                ),
-                            ),
-                        )
-                        drawRect(
                             brush = Brush.horizontalGradient(
                                 colors = listOf(
                                     frostLine.copy(alpha = edgeHighlightAlpha),
@@ -566,27 +535,25 @@ private fun FoundationSurface(
                             ),
                         )
                         drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    innerGlow.copy(alpha = if (isDark) 0.08f else 0.04f),
+                                    Color.Transparent,
+                                ),
+                                center = Offset(size.width * 0.70f, size.height * 0.16f),
+                                radius = size.maxDimension * 0.72f,
+                            ),
+                        )
+                        drawRect(
                             brush = Brush.verticalGradient(
                                 colors = listOf(
-                                    frostLine.copy(alpha = edgeHighlightAlpha * 0.65f),
+                                    Color.White.copy(alpha = highlightAlpha),
                                     Color.Transparent,
                                 ),
                                 startY = 0f,
                                 endY = size.height * 0.18f,
                             ),
                         )
-                        if (isDark) {
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        graphiteLine.copy(alpha = 0.9f),
-                                    ),
-                                    startY = size.height * 0.82f,
-                                    endY = size.height,
-                                ),
-                            )
-                        }
                     }
                 },
             contentAlignment = Alignment.Center,
@@ -604,3 +571,5 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.createShapePath(sha
         addOutline(outline)
     }
 }
+
+private fun spacingForHeader(): Int = 28
