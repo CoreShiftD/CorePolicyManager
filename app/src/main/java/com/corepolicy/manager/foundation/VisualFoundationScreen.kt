@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,11 +38,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -225,7 +230,7 @@ private fun IdentityHeader() {
                 ) {
                     Text(
                         text = "CorePolicy",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.60f),
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
@@ -233,7 +238,7 @@ private fun IdentityHeader() {
                     )
                     Text(
                         text = "Manager",
-                        style = MaterialTheme.typography.displaySmall,
+                        style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onBackground,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -254,15 +259,17 @@ private fun HeaderAnchorSurface(
 ) {
     val isDark = isSystemInDarkTheme()
     val radius = 34.dp
+    val headerBright = MaterialTheme.colorScheme.surfaceBright.copy(alpha = if (isDark) 0.34f else 0.82f)
+    val headerMid = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.18f else 0.56f)
     val shape = RoundedCornerShape(
         topStart = radius,
-        topEnd = 42.dp,
-        bottomStart = 42.dp,
-        bottomEnd = 28.dp,
+        topEnd = 38.dp,
+        bottomStart = 38.dp,
+        bottomEnd = 26.dp,
     )
     Surface(
         modifier = modifier
-            .size(width = 190.dp, height = 98.dp)
+            .size(width = 172.dp, height = 92.dp)
             .clip(shape),
         shape = shape,
         color = Color.Transparent,
@@ -277,41 +284,41 @@ private fun HeaderAnchorSurface(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(shape)
-                .background(
-                    brush = Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.surfaceBright.copy(alpha = if (isDark) 0.38f else 0.84f),
-                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.20f else 0.58f),
-                            Color.Transparent,
-                        ),
-                        start = Offset.Zero,
-                        end = Offset(700f, 460f),
-                    ),
-                )
                 .drawBehind {
-                    val roundness = CornerRadius(radius.toPx(), radius.toPx())
-                    drawRoundRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                AppThemeTokens.accentGlow.copy(alpha = if (isDark) 0.12f else 0.06f),
-                                Color.Transparent,
+                    val path = createShapePath(shape)
+                    clipPath(path) {
+                        drawRect(
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    headerBright,
+                                    headerMid,
+                                    Color.Transparent,
+                                ),
+                                start = Offset.Zero,
+                                end = Offset(700f, 460f),
                             ),
-                            center = Offset(size.width * 0.28f, size.height * 0.24f),
-                            radius = size.maxDimension * 0.72f,
-                        ),
-                        cornerRadius = roundness,
-                    )
-                    drawRoundRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = if (isDark) 0.05f else 0.10f),
-                                Color.Transparent,
+                        )
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    AppThemeTokens.accentGlow.copy(alpha = if (isDark) 0.10f else 0.05f),
+                                    Color.Transparent,
+                                ),
+                                center = Offset(size.width * 0.30f, size.height * 0.24f),
+                                radius = size.maxDimension * 0.66f,
                             ),
-                            startY = 0f,
-                            endY = size.height * 0.26f,
-                        ),
-                        cornerRadius = roundness,
-                    )
+                        )
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = if (isDark) 0.05f else 0.10f),
+                                    Color.Transparent,
+                                ),
+                                startY = 0f,
+                                endY = size.height * 0.24f,
+                            ),
+                        )
+                    }
                 },
         )
     }
@@ -320,11 +327,11 @@ private fun HeaderAnchorSurface(
 @Composable
 private fun BrandGlyph() {
     val isDark = isSystemInDarkTheme()
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(20.dp)
     val line = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.88f else 0.70f)
     val dot = MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.96f else 0.78f)
     Surface(
-        modifier = Modifier.size(46.dp),
+        modifier = Modifier.size(42.dp),
         shape = shape,
         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = if (isDark) 0.58f else 0.74f),
         border = BorderStroke(
@@ -398,7 +405,6 @@ private fun HeroSlab() {
             .fillMaxWidth()
             .height(300.dp),
         shape = RoundedCornerShape(radius),
-        cornerRadius = radius,
         brush = Brush.linearGradient(
             colors = listOf(
                 MaterialTheme.colorScheme.surfaceBright.copy(alpha = 0.99f),
@@ -423,10 +429,8 @@ private fun FloatingGlassPanel(
         modifier = Modifier
             .fillMaxWidth(0.72f)
             .height(132.dp)
-            .offset(y = offsetY)
-            .blur(0.35.dp),
+            .offset(y = offsetY),
         shape = RoundedCornerShape(radius),
-        cornerRadius = radius,
         brush = Brush.linearGradient(
             colors = listOf(
                 MaterialTheme.colorScheme.surfaceBright.copy(alpha = 0.24f),
@@ -461,7 +465,6 @@ private fun MatteStage(
             bottomEnd = 54.dp,
             bottomStart = 26.dp,
         ),
-        cornerRadius = radius,
         brush = Brush.verticalGradient(
             colors = listOf(
                 MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.86f),
@@ -479,8 +482,7 @@ private fun MatteStage(
 @Composable
 private fun FoundationSurface(
     modifier: Modifier,
-    shape: RoundedCornerShape,
-    cornerRadius: androidx.compose.ui.unit.Dp,
+    shape: Shape,
     brush: Brush,
     innerGlow: Color,
     borderAlpha: Float = 0.22f,
@@ -504,29 +506,26 @@ private fun FoundationSurface(
         modifier = modifier
             .clip(shape)
             .drawBehind {
-                val roundness = CornerRadius(
-                    x = cornerRadius.toPx(),
-                    y = cornerRadius.toPx(),
-                )
-                drawRoundRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(innerGlow, Color.Transparent),
-                        center = Offset(size.width * 0.68f, size.height * 0.18f),
-                        radius = size.maxDimension * 0.9f,
-                    ),
-                    cornerRadius = roundness,
-                )
-                if (shadowAlpha > 0f) {
-                    drawRoundRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = if (floating) shadowAlpha * 0.72f else shadowAlpha),
-                                Color.Transparent,
-                            ),
-                            startY = size.height * 0.68f,
+                val path = createShapePath(shape)
+                clipPath(path) {
+                    drawRect(
+                        brush = Brush.radialGradient(
+                            colors = listOf(innerGlow, Color.Transparent),
+                            center = Offset(size.width * 0.68f, size.height * 0.18f),
+                            radius = size.maxDimension * 0.9f,
                         ),
-                        cornerRadius = roundness,
                     )
+                    if (shadowAlpha > 0f) {
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = if (floating) shadowAlpha * 0.72f else shadowAlpha),
+                                    Color.Transparent,
+                                ),
+                                startY = size.height * 0.68f,
+                            ),
+                        )
+                    }
                 }
             },
         shape = shape,
@@ -542,61 +541,66 @@ private fun FoundationSurface(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(shape)
-                .background(brush)
                 .drawBehind {
-                    val roundness = CornerRadius(
-                        x = cornerRadius.toPx(),
-                        y = cornerRadius.toPx(),
-                    )
-                    drawRoundRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = highlightAlpha),
-                                Color.Transparent,
-                                Color.Black.copy(alpha = bottomShadeAlpha),
-                            ),
-                        ),
-                        cornerRadius = roundness,
-                    )
-                    drawRoundRect(
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(
-                                frostLine.copy(alpha = edgeHighlightAlpha),
-                                Color.Transparent,
-                                Color.Transparent,
-                            ),
-                            startX = 0f,
-                            endX = size.width * 0.56f,
-                        ),
-                        topLeft = Offset(0f, 0f),
-                        cornerRadius = roundness,
-                    )
-                    drawRoundRect(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                frostLine.copy(alpha = edgeHighlightAlpha * 0.65f),
-                                Color.Transparent,
-                            ),
-                            startY = 0f,
-                            endY = size.height * 0.18f,
-                        ),
-                        cornerRadius = roundness,
-                    )
-                    if (isDark) {
-                        drawRoundRect(
+                    val path = createShapePath(shape)
+                    clipPath(path) {
+                        drawRect(brush = brush)
+                        drawRect(
                             brush = Brush.verticalGradient(
                                 colors = listOf(
+                                    Color.White.copy(alpha = highlightAlpha),
                                     Color.Transparent,
-                                    graphiteLine.copy(alpha = 0.9f),
+                                    Color.Black.copy(alpha = bottomShadeAlpha),
                                 ),
-                                startY = size.height * 0.82f,
-                                endY = size.height,
                             ),
-                            cornerRadius = roundness,
                         )
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    frostLine.copy(alpha = edgeHighlightAlpha),
+                                    Color.Transparent,
+                                    Color.Transparent,
+                                ),
+                                startX = 0f,
+                                endX = size.width * 0.56f,
+                            ),
+                        )
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    frostLine.copy(alpha = edgeHighlightAlpha * 0.65f),
+                                    Color.Transparent,
+                                ),
+                                startY = 0f,
+                                endY = size.height * 0.18f,
+                            ),
+                        )
+                        if (isDark) {
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        graphiteLine.copy(alpha = 0.9f),
+                                    ),
+                                    startY = size.height * 0.82f,
+                                    endY = size.height,
+                                ),
+                            )
+                        }
                     }
                 },
             contentAlignment = Alignment.Center,
         ) {}
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.createShapePath(shape: Shape): Path {
+    val outline = shape.createOutline(
+        size = Size(size.width, size.height),
+        layoutDirection = layoutDirection,
+        density = this,
+    )
+    return Path().apply {
+        addOutline(outline)
     }
 }
