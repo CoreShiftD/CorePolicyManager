@@ -17,11 +17,11 @@ data class SpacingScale(
 
 val ComfortableSpacing = SpacingScale(
     xSmall = 8.dp,
-    small = 14.dp,
-    medium = 20.dp,
-    large = 28.dp,
-    xLarge = 40.dp,
-    xxLarge = 56.dp,
+    small = 16.dp,
+    medium = 24.dp,
+    large = 32.dp,
+    xLarge = 44.dp,
+    xxLarge = 64.dp,
 )
 
 val LocalSpacing = staticCompositionLocalOf { ComfortableSpacing }

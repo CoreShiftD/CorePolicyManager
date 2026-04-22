@@ -15,15 +15,21 @@ object AppThemeTokens {
     val Night = Color(0xFF05070A)
     val Ink = Color(0xFF0B0F14)
     val Shell = Color(0xFF10151D)
+    val ShellHigh = Color(0xFF171D27)
+    val ShellSoft = Color(0xFF0E131A)
     val Slate = Color(0xFF8E97A5)
+    val SlateBright = Color(0xFFAAB3C1)
     val Frost = Color(0xFFE7ECF3)
     val Halo = Color(0xFF8FB5FF)
     val Bloom = Color(0xFF79E0D0)
     val Cinder = Color(0xFF151B23)
     val backgroundMid = Color(0xFF060A10)
     val backgroundEdge = Color(0xFF020304)
+    val vignette = Color(0xFF010203)
     val accentGlow = Color(0xFF89AFFF)
     val secondaryGlow = Color(0xFF5AD7C8)
+    val edgeLight = Color(0x33F3F7FF)
+    val edgeShadow = Color(0xCC020305)
 }
 
 private val FallbackLightColors = lightColorScheme(
@@ -89,19 +95,19 @@ private fun ColorScheme.refinedDark(
         background = backgroundBase,
         surface = surfaceBase,
         surfaceDim = backgroundBase,
-        surfaceBright = Color(0xFF171E29),
+        surfaceBright = AppThemeTokens.ShellHigh,
         surfaceContainerLowest = backgroundBase,
-        surfaceContainerLow = Color(0xFF080B10),
-        surfaceContainer = Color(0xFF0D1219),
-        surfaceContainerHigh = Color(0xFF111723),
-        surfaceContainerHighest = Color(0xFF161E2A),
+        surfaceContainerLow = AppThemeTokens.ShellSoft,
+        surfaceContainer = Color(0xFF0D1218),
+        surfaceContainerHigh = Color(0xFF121924),
+        surfaceContainerHighest = Color(0xFF18202C),
         surfaceVariant = Color(0xFF161D26),
         inverseSurface = Color(0xFFE3E8F0),
         inverseOnSurface = Color(0xFF10141A),
         onBackground = AppThemeTokens.Frost,
         onSurface = AppThemeTokens.Frost,
-        onSurfaceVariant = AppThemeTokens.Slate,
-        outline = Color(0xFF313C49),
+        onSurfaceVariant = AppThemeTokens.SlateBright,
+        outline = Color(0xFF34404D),
     )
 }
 
