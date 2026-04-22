@@ -21,4 +21,11 @@ dependencyResolutionManagement {
 
 rootProject.name = "CorePolicyManager"
 include(":app")
-include(":ui")
+include(":core:model")
+include(":core:domain")
+include(":core:data")
+include(":core:designsystem")
+include(":feature:overview")
+include(":feature:daemon")
+include(":feature:policies")
+include(":feature:settings")
