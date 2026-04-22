@@ -8,15 +8,21 @@ import androidx.compose.runtime.CompositionLocalProvider
 @Composable
 fun AppTheme(
     useDarkTheme: Boolean = isSystemInDarkTheme(),
-    compactMode: Boolean = false,
+    useDynamicColor: Boolean = true,
+    preferAmoled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
+    val colorScheme = rememberAppColorScheme(
+        useDarkTheme = useDarkTheme,
+        useDynamicColor = useDynamicColor,
+        preferAmoled = preferAmoled,
+    )
     CompositionLocalProvider(
-        LocalSpacing provides if (compactMode) CompactSpacing else ComfortableSpacing,
+        LocalSpacing provides ComfortableSpacing,
         LocalAppShapes provides LocalAppShapes.current,
     ) {
         MaterialTheme(
-            colorScheme = if (useDarkTheme) CorePolicyDarkColors else CorePolicyLightColors,
+            colorScheme = colorScheme,
             typography = CorePolicyTypography,
             shapes = CorePolicyShapes,
             content = content,

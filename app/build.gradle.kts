@@ -88,15 +88,9 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
-    implementation(project(":feature:overview"))
-    implementation(project(":feature:daemon"))
-    implementation(project(":feature:policies"))
-    implementation(project(":feature:settings"))
 
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.foundation)
