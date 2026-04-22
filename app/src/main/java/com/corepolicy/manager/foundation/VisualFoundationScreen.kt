@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -212,11 +213,13 @@ private fun MinimalWordmark() {
 
 @Composable
 private fun HeroSlab() {
+    val radius = 42.dp
     FoundationSurface(
         modifier = Modifier
             .fillMaxWidth()
             .height(300.dp),
-        shape = RoundedCornerShape(42.dp),
+        shape = RoundedCornerShape(radius),
+        cornerRadius = radius,
         brush = Brush.linearGradient(
             colors = listOf(
                 MaterialTheme.colorScheme.surfaceBright.copy(alpha = 0.99f),
@@ -236,13 +239,15 @@ private fun HeroSlab() {
 private fun FloatingGlassPanel(
     offsetY: androidx.compose.ui.unit.Dp,
 ) {
+    val radius = 32.dp
     FoundationSurface(
         modifier = Modifier
             .fillMaxWidth(0.72f)
             .height(132.dp)
             .offset(y = offsetY)
             .blur(0.35.dp),
-        shape = RoundedCornerShape(32.dp),
+        shape = RoundedCornerShape(radius),
+        cornerRadius = radius,
         brush = Brush.linearGradient(
             colors = listOf(
                 MaterialTheme.colorScheme.surfaceBright.copy(alpha = 0.24f),
@@ -265,6 +270,7 @@ private fun FloatingGlassPanel(
 private fun MatteStage(
     offsetX: androidx.compose.ui.unit.Dp,
 ) {
+    val radius = 34.dp
     FoundationSurface(
         modifier = Modifier
             .fillMaxWidth()
@@ -276,6 +282,7 @@ private fun MatteStage(
             bottomEnd = 54.dp,
             bottomStart = 26.dp,
         ),
+        cornerRadius = radius,
         brush = Brush.verticalGradient(
             colors = listOf(
                 MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.86f),
@@ -294,6 +301,7 @@ private fun MatteStage(
 private fun FoundationSurface(
     modifier: Modifier,
     shape: RoundedCornerShape,
+    cornerRadius: androidx.compose.ui.unit.Dp,
     brush: Brush,
     innerGlow: Color,
     borderAlpha: Float = 0.22f,
@@ -317,12 +325,17 @@ private fun FoundationSurface(
         modifier = modifier
             .clip(shape)
             .drawBehind {
+                val roundness = CornerRadius(
+                    x = cornerRadius.toPx(),
+                    y = cornerRadius.toPx(),
+                )
                 drawRoundRect(
                     brush = Brush.radialGradient(
                         colors = listOf(innerGlow, Color.Transparent),
                         center = Offset(size.width * 0.68f, size.height * 0.18f),
                         radius = size.maxDimension * 0.9f,
                     ),
+                    cornerRadius = roundness,
                 )
                 if (shadowAlpha > 0f) {
                     drawRoundRect(
@@ -333,6 +346,7 @@ private fun FoundationSurface(
                             ),
                             startY = size.height * 0.68f,
                         ),
+                        cornerRadius = roundness,
                     )
                 }
             },
@@ -351,7 +365,11 @@ private fun FoundationSurface(
                 .clip(shape)
                 .background(brush)
                 .drawBehind {
-                    drawRect(
+                    val roundness = CornerRadius(
+                        x = cornerRadius.toPx(),
+                        y = cornerRadius.toPx(),
+                    )
+                    drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
                                 Color.White.copy(alpha = highlightAlpha),
@@ -359,8 +377,9 @@ private fun FoundationSurface(
                                 Color.Black.copy(alpha = bottomShadeAlpha),
                             ),
                         ),
+                        cornerRadius = roundness,
                     )
-                    drawRect(
+                    drawRoundRect(
                         brush = Brush.horizontalGradient(
                             colors = listOf(
                                 frostLine.copy(alpha = edgeHighlightAlpha),
@@ -371,8 +390,9 @@ private fun FoundationSurface(
                             endX = size.width * 0.56f,
                         ),
                         topLeft = Offset(0f, 0f),
+                        cornerRadius = roundness,
                     )
-                    drawRect(
+                    drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
                                 frostLine.copy(alpha = edgeHighlightAlpha * 0.65f),
@@ -381,9 +401,10 @@ private fun FoundationSurface(
                             startY = 0f,
                             endY = size.height * 0.18f,
                         ),
+                        cornerRadius = roundness,
                     )
                     if (isDark) {
-                        drawRect(
+                        drawRoundRect(
                             brush = Brush.verticalGradient(
                                 colors = listOf(
                                     Color.Transparent,
@@ -392,6 +413,7 @@ private fun FoundationSurface(
                                 startY = size.height * 0.82f,
                                 endY = size.height,
                             ),
+                            cornerRadius = roundness,
                         )
                     }
                 },
