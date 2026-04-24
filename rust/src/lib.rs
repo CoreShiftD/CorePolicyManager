@@ -71,6 +71,8 @@ extern "C" fn handle_signal(_sig: libc::c_int) {
 pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::SysError> {
     const MAX_ACTIONS_PER_TICK: usize = 10_000;
 
+    RUNNING.store(true, Ordering::SeqCst);
+
     // Ensure runtime directories exist
     if let Err(e) = paths::ensure_dirs() {
         return Err(crate::low_level::spawn::SysError::sys(
@@ -78,6 +80,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             "ensure_dirs",
         ));
     }
+
+    // PID file management
+    let pid = std::process::id();
 
     // Register signal handlers
     unsafe {
@@ -114,6 +119,12 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     addr.sun_family = libc::AF_UNIX as u16;
     let path_bytes = socket_path.as_bytes();
+    if path_bytes.len() >= addr.sun_path.len() {
+        return Err(crate::low_level::spawn::SysError::sys(
+            libc::ENAMETOOLONG,
+            "socket_path too long",
+        ));
+    }
     for (i, &b) in path_bytes.iter().enumerate() {
         addr.sun_path[i] = b as _;
     }
@@ -134,6 +145,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     let ret = unsafe { libc::listen(ipc_fd.as_raw_fd(), 128) };
     if ret < 0 {
+        let _ = std::fs::remove_file(socket_path);
         return Err(crate::low_level::spawn::SysError::sys(
             std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
             "listen",
@@ -186,12 +198,30 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     let mut effect_executor = crate::runtime::EffectExecutor::new(reactor);
 
+    if let Err(e) = std::fs::write(paths::PID_PATH, pid.to_string()) {
+        crate::runtime::log_runtime_event(
+            crate::core::CORE_OWNER,
+            crate::core::LogLevel::Warn,
+            crate::core::LogEvent::Generic(format!("failed to write pid file: {}", e)),
+        );
+    }
+
     let _ = effect_executor.apply(crate::core::Effect::Log {
         owner: crate::core::CORE_OWNER,
         level: crate::core::LogLevel::Info,
         event: crate::core::LogEvent::Generic(
             "daemon start version=0.1.0 git=a472b4f log_schema=structured_v2".to_string(),
         ),
+    });
+    let _ = effect_executor.apply(crate::core::Effect::Log {
+        owner: crate::core::CORE_OWNER,
+        level: crate::core::LogLevel::Info,
+        event: crate::core::LogEvent::Generic(format!("socket bound path={}", socket_path)),
+    });
+    let _ = effect_executor.apply(crate::core::Effect::Log {
+        owner: crate::core::CORE_OWNER,
+        level: crate::core::LogLevel::Info,
+        event: crate::core::LogEvent::Generic("ipc listener ready".to_string()),
     });
 
     // Load log level from system property if possible (placeholder for Android)
@@ -880,7 +910,13 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         }
     }
 
+    crate::runtime::log_runtime_event(
+        crate::core::CORE_OWNER,
+        crate::core::LogLevel::Info,
+        crate::core::LogEvent::Generic("daemon shutting down".to_string()),
+    );
     let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(paths::PID_PATH);
     Ok(())
 }
 
@@ -1162,6 +1198,10 @@ pub fn run_replay(path: &str) -> u64 {
         }
     }
 
-    println!("Replay finished deterministically.");
+    crate::runtime::log_runtime_event(
+        crate::core::CORE_OWNER,
+        crate::core::LogLevel::Info,
+        crate::core::LogEvent::Generic("replay finished deterministically".to_string()),
+    );
     state.hash
 }

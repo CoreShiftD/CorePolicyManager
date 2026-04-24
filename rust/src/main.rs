@@ -3,46 +3,89 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use CoreShift::DaemonConfig;
+use std::process::ExitCode;
 
-fn main() {
-    let mut args = std::env::args().skip(1);
+enum Command {
+    Daemon,
+    Help,
+    Preload,
+    Record(String),
+    Replay(String),
+}
 
-    if let Some(cmd) = args.next() {
-        match cmd.as_str() {
-            "preload" => {
-                let _ = CoreShift::run_daemon(DaemonConfig {
-                    enable_warmup: true,
-                    record_path: None,
-                });
-            }
-            "replay" => {
-                if let Some(path) = args.next() {
-                    CoreShift::run_replay(&path);
-                } else {
-                    eprintln!("Usage: replay <file>");
-                }
-            }
-            "record" => {
-                if let Some(path) = args.next() {
-                    let _ = CoreShift::run_daemon(DaemonConfig {
-                        enable_warmup: false,
-                        record_path: Some(path),
-                    });
-                } else {
-                    eprintln!("Usage: record <file>");
-                }
-            }
-            _ => {
-                let _ = CoreShift::run_daemon(DaemonConfig {
-                    enable_warmup: false,
-                    record_path: None,
-                });
-            }
-        }
-    } else {
-        let _ = CoreShift::run_daemon(DaemonConfig {
+fn log_cli(level: CoreShift::core::LogLevel, message: impl Into<String>) {
+    CoreShift::runtime::log_runtime_event(
+        CoreShift::core::CORE_OWNER,
+        level,
+        CoreShift::core::LogEvent::Generic(message.into()),
+    );
+}
+
+fn parse_command(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
+    match args.next().as_deref() {
+        None => Ok(Command::Daemon),
+        Some("help" | "--help" | "-h") => Ok(Command::Help),
+        Some("preload") => Ok(Command::Preload),
+        Some("record") => args
+            .next()
+            .map(Command::Record)
+            .ok_or_else(|| "invalid arguments usage='record <file>'".to_string()),
+        Some("replay") => args
+            .next()
+            .map(Command::Replay)
+            .ok_or_else(|| "invalid arguments usage='replay <file>'".to_string()),
+        Some(other) => Err(format!("unknown command '{}'", other)),
+    }
+}
+
+fn run_command(command: Command) -> Result<(), String> {
+    match command {
+        Command::Daemon => CoreShift::run_daemon(DaemonConfig {
             enable_warmup: false,
             record_path: None,
-        });
+        })
+        .map_err(|e| format!("{:?}", e)),
+        Command::Help => {
+            log_cli(
+                CoreShift::core::LogLevel::Info,
+                "help requested usage='coreshift [command] [args]' commands='preload, record <file>, replay <file>, help'",
+            );
+            Ok(())
+        }
+        Command::Preload => CoreShift::run_daemon(DaemonConfig {
+            enable_warmup: true,
+            record_path: None,
+        })
+        .map_err(|e| format!("{:?}", e)),
+        Command::Record(path) => CoreShift::run_daemon(DaemonConfig {
+            enable_warmup: false,
+            record_path: Some(path),
+        })
+        .map_err(|e| format!("{:?}", e)),
+        Command::Replay(path) => {
+            CoreShift::run_replay(&path);
+            Ok(())
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let command = match parse_command(std::env::args().skip(1)) {
+        Ok(command) => command,
+        Err(err) => {
+            log_cli(CoreShift::core::LogLevel::Error, err);
+            return ExitCode::from(2);
+        }
+    };
+
+    match run_command(command) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            log_cli(
+                CoreShift::core::LogLevel::Error,
+                format!("fatal error: {}", err),
+            );
+            ExitCode::FAILURE
+        }
     }
 }
