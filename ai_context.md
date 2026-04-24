@@ -1,6 +1,6 @@
 # AI Project Context
 
-Generated: 2026-04-24T07:03:05
+Generated: 2026-04-24T08:28:37
 
 ## File Tree
 
@@ -79,6 +79,7 @@ rust/src/main.rs
 rust/src/mid_level/ipc.rs
 rust/src/mid_level/mod.rs
 rust/src/runtime.rs
+rust/src/tests.rs
 scripts/build-rust-android.sh
 settings.gradle.kts
 ```
@@ -2159,30 +2160,61 @@ pub struct ExecOutcome {
     pub result: Result<ExecResult, ExecError>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogLevel {
+    Trace,
+    Debug,
     Info,
     Warn,
     Error,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum LogEvent {
-    Submit { id: u64 },
-    Spawn { id: u64, pid: i32 },
-    Cancel { id: u64 },
-    ForceKill { id: u64 },
-    Exit { id: u64, status: Option<i32> },
-    Timeout { id: u64 },
+    // Structured Events
+    TickSummary {
+        processed: usize,
+        dropped: usize,
+        queue_before: usize,
+        queue_after: usize,
+        elapsed_us: u64,
+    },
+    ActionDispatch {
+        kind: ActionKind,
+        id: Option<u64>,
+        addon_id: Option<u32>,
+        key: Option<String>,
+        service: Option<SystemService>,
+        payload_len: usize,
+    },
+    PreloadForeground {
+        pid: i32,
+        package: String,
+    },
+    PreloadSkip {
+        package: String,
+        reason: String,
+        remaining_ms: Option<u64>,
+    },
+    PreloadStart {
+        package: String,
+        paths: usize,
+    },
+    PreloadDone {
+        package: String,
+        paths: usize,
+        bytes: u64,
+        duration_ms: u64,
+    },
+    PreloadFail {
+        package: String,
+        reason: String,
+        backoff_ms: u64,
+    },
+    
+    // Legacy/Generic
+    Generic(String),
     Error { id: u64, err: String },
-
-    TickStart,
-    Observability { queue_len: usize, actions_processed: usize, dropped: usize },
-    TickEnd,
-    AddonReceived,
-    AddonTranslated,
-    AddonDropped,
-    ActionDispatched,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2300,6 +2332,7 @@ pub enum ActionKind {
     PackagesChanged,
     SystemRequest,
     AddonTask,
+    AddonLog,
     AddonEvent,
     CleanupJob,
     TrackTimeout,
@@ -2345,6 +2378,11 @@ pub enum Intent {
         key: String,
         payload: Vec<u8>,
     },
+    AddonLog {
+        addon_id: u32,
+        level: LogLevel,
+        msg: String,
+    },
 }
 
 pub fn validate_intent(intent: &Intent) -> bool {
@@ -2356,6 +2394,7 @@ pub fn validate_intent(intent: &Intent) -> bool {
         Intent::PackagesChanged => true,
         Intent::SystemRequest { .. } => true,
         Intent::AddonTask { .. } => true,
+        Intent::AddonLog { .. } => true,
     }
 }
 
@@ -2412,6 +2451,9 @@ pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
         }
         Intent::AddonTask { addon_id, key, payload } => {
             vec![Action::AddonTask { addon_id, key, payload }]
+        }
+        Intent::AddonLog { addon_id, level, msg } => {
+            vec![Action::AddonLog { addon_id, level, msg }]
         }
     }
 }
@@ -2532,6 +2574,11 @@ pub enum Action {
         key: String,
         payload: Vec<u8>,
     },
+    AddonLog {
+        addon_id: u32,
+        level: LogLevel,
+        msg: String,
+    },
     AddonEvent {
         addon_id: u32,
         key: String,
@@ -2604,6 +2651,7 @@ impl Action {
             Action::PackagesChanged => ActionKind::PackagesChanged,
             Action::SystemRequest { .. } => ActionKind::SystemRequest,
             Action::AddonTask { .. } => ActionKind::AddonTask,
+            Action::AddonLog { .. } => ActionKind::AddonLog,
             Action::AddonEvent { .. } => ActionKind::AddonEvent,
             Action::CleanupJob { .. } => ActionKind::CleanupJob,
             Action::TrackTimeout { .. } => ActionKind::TrackTimeout,
@@ -2661,6 +2709,7 @@ impl Action {
             | Action::PackagesChanged
             | Action::SystemRequest { .. }
             | Action::AddonTask { .. }
+            | Action::AddonLog { .. }
             | Action::AddonEvent { .. }
             | Action::EmitLog { .. } => Priority::Background,
         }
@@ -2724,6 +2773,11 @@ pub enum Effect {
         addon_id: u32,
         key: String,
         payload: Vec<u8>,
+    },
+    AddonLog {
+        addon_id: u32,
+        level: LogLevel,
+        msg: String,
     },
     SystemRequest {
         request_id: u64,
@@ -2816,10 +2870,22 @@ pub enum TimeoutState {
     WaitingForKillGrace(u64),
 }
 
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
+pub struct Metrics {
+    pub active_clients: u32,
+    pub dropped_actions: u64,
+    pub queue_depth: u32,
+    pub avg_tick_duration_us: u32,
+    pub peak_read_buf_kb: u32,
+    pub peak_write_buf_kb: u32,
+    pub restart_count: u32,
+}
+
 pub struct ExecutionState {
     pub core: crate::core::core_state::CoreState,
     pub timeout: crate::core::policy::TimeoutStateStore,
     pub result: crate::core::result::ResultState,
+    pub metrics: Metrics,
     pub clock: u64,
     pub hash: u64,
 }
@@ -2836,6 +2902,7 @@ impl ExecutionState {
             core: crate::core::core_state::CoreState::new(),
             timeout: crate::core::policy::TimeoutStateStore::new(),
             result: crate::core::result::ResultState::new(),
+            metrics: Metrics::default(),
             clock: 0,
             hash: 0,
         }
@@ -3232,6 +3299,16 @@ impl Module for ProcessModule {
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         match event {
+            Event::Tick => {
+                // Poll all running processes
+                for entry in state.timeouts() {
+                     if let Some(job) = state.job(entry.id) {
+                         if let Some(process) = job.process {
+                             actions.push(Action::PollProcess { process });
+                         }
+                     }
+                }
+            }
             Event::ProcessSpawnFailed { id, err } => {
                 let job = state.job(*id);
                 let owner = job.as_ref().map(|j| j.owner).unwrap_or(0);
@@ -3610,6 +3687,15 @@ impl Reducer for AddonReducer {
             Action::AddonTask { addon_id, key, payload } => {
                 effects.push(Effect::AddonTask { addon_id: *addon_id, key: key.clone(), payload: payload.clone() });
             }
+            Action::AddonLog { addon_id, level, msg } => {
+                effects.push(Effect::AddonLog { addon_id: *addon_id, level: *level, msg: msg.clone() });
+            }
+            Action::AddonEvent { addon_id: _, key: _ } => {
+                // Generic notify, no effect yet
+            }
+            Action::EmitLog { owner, level, event } => {
+                effects.push(Effect::Log { owner: *owner, level: *level, event: event.clone() });
+            }
             Action::SystemRequest { request_id, kind, payload } => {
                 effects.push(Effect::SystemRequest { request_id: *request_id, kind: *kind, payload: payload.clone() });
             }
@@ -3950,7 +4036,7 @@ pub struct Scheduler {
     normal_queue: VecDeque<RoutedAction>,
     background_queue: VecDeque<RoutedAction>,
     pub total_len: usize,
-    per_kind_counts: [usize; 43], // Based on ActionKind count
+    per_kind_counts: [usize; 40], // Exactly matches ActionKind count
     step_budget: usize,
     steps_executed: usize,
     rr_index: usize,
@@ -3960,11 +4046,11 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(step_budget: usize) -> Self {
         Self {
-            critical_queue: VecDeque::with_capacity(MAX_QUEUE),
-            normal_queue: VecDeque::with_capacity(MAX_QUEUE),
-            background_queue: VecDeque::with_capacity(MAX_QUEUE),
+            critical_queue: VecDeque::with_capacity(512),
+            normal_queue: VecDeque::with_capacity(1024),
+            background_queue: VecDeque::with_capacity(2048),
             total_len: 0,
-            per_kind_counts: [0; 43],
+            per_kind_counts: [0; 40],
             step_budget,
             steps_executed: 0,
             rr_index: 0,
@@ -3972,42 +4058,43 @@ impl Scheduler {
         }
     }
 
-    pub fn enqueue(&mut self, action: RoutedAction) -> Option<Event> {
+    pub fn enqueue(&mut self, action: RoutedAction, state: &mut crate::core::ExecutionState) -> Option<Event> {
         let kind = action.action.kind();
         let kind_idx = kind as usize;
+
+        if kind_idx >= self.per_kind_counts.len() {
+            state.metrics.dropped_actions += 1;
+            return Some(crate::core::Event::DroppedAction { kind });
+        }
+
         let count = self.per_kind_counts[kind_idx];
         if count >= MAX_PER_ACTION_KIND {
+            state.metrics.dropped_actions += 1;
             return Some(crate::core::Event::DroppedAction { kind });
         }
 
         let mut dropped_event = None;
 
         if self.total_len >= MAX_QUEUE {
-            // Drop lowest priority, oldest (FIFO drop -> pop_front)
-            let mut evicted = None;
             let action_prio = action.action.priority();
+            let mut evicted = None;
 
-            if !self.background_queue.is_empty() {
-                if action_prio <= Priority::Background {
-                    evicted = self.background_queue.pop_front();
-                }
-            } else if !self.normal_queue.is_empty() {
-                if action_prio <= Priority::Normal {
-                    evicted = self.normal_queue.pop_front();
-                }
-            } else if !self.critical_queue.is_empty() {
-                if action_prio <= Priority::Critical {
-                    evicted = self.critical_queue.pop_front();
-                }
+            if !self.background_queue.is_empty() && action_prio >= Priority::Background {
+                evicted = self.background_queue.pop_front();
+            } else if !self.normal_queue.is_empty() && action_prio >= Priority::Normal {
+                evicted = self.normal_queue.pop_front();
+            } else if !self.critical_queue.is_empty() && action_prio >= Priority::Critical {
+                 evicted = self.critical_queue.pop_front();
             }
 
             if let Some(ev) = evicted {
                 let ev_kind = ev.action.kind();
                 self.per_kind_counts[ev_kind as usize] -= 1;
                 self.total_len -= 1;
+                state.metrics.dropped_actions += 1;
                 dropped_event = Some(crate::core::Event::DroppedAction { kind: ev_kind });
             } else {
-                // Cannot evict, so drop the incoming action
+                state.metrics.dropped_actions += 1;
                 return Some(crate::core::Event::DroppedAction { kind });
             }
         }
@@ -4054,16 +4141,13 @@ impl Scheduler {
                     let kind = routed.action.kind();
                     self.per_kind_counts[kind as usize] -= 1;
                     return Some(routed);
-                } else {
-                    self.rr_index = (self.rr_index + 1) % schedule.len();
-                    self.rr_count = 0;
                 }
-            } else {
-                self.rr_index = (self.rr_index + 1) % schedule.len();
-                self.rr_count = 0;
             }
+            
+            self.rr_index = (self.rr_index + 1) % schedule.len();
+            self.rr_count = 0;
 
-            if self.rr_index == start_index && self.rr_count == 0 {
+            if self.rr_index == start_index {
                 if checked_all {
                     return None;
                 }
@@ -4265,36 +4349,88 @@ pub mod preload;
 
 ```rs
 use crate::core::state_view::StateView;
-use crate::core::{Event, Intent, SystemService};
+use crate::core::{Event, Intent, SystemService, LogLevel, LogEvent};
 use crate::high_level::addon::Addon;
 use crate::high_level::identity::{Principal, Request};
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct PreloadConfig {
+    pub enabled: bool,
+    pub global_max_in_flight: usize,
+    pub per_package_warmup_cooldown_ms: u64,
+    pub per_package_failure_backoff_ms: u64,
+    pub max_paths_per_package: usize,
+    pub max_file_size_bytes: u64,
+    pub debounce_ms: u64,
+}
+
+impl Default for PreloadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Disabled by default for safe rollout
+            global_max_in_flight: 4,
+            per_package_warmup_cooldown_ms: 60_000,
+            per_package_failure_backoff_ms: 300_000,
+            max_paths_per_package: 64,
+            max_file_size_bytes: 100 * 1024 * 1024, // 100 MB
+            debounce_ms: 500,
+        }
+    }
+}
+
 pub struct PreloadAddon {
+    config: PreloadConfig,
     pub dedup_cache: BTreeMap<String, u64>,
     pub negative_cache: BTreeMap<String, u64>,
     pub package_map: BTreeMap<String, std::path::PathBuf>,
     pub in_flight: BTreeSet<String>,
+    
+    last_foreground_pid: i32,
+    last_foreground_time: u64,
+    pending_foreground_pid: Option<i32>,
+    
+    total_failures: u32,
+    auto_disabled: bool,
 }
 
 impl PreloadAddon {
-    pub fn new() -> Self {
+    pub fn new(config: PreloadConfig) -> Self {
         Self {
+            config,
             dedup_cache: BTreeMap::new(),
             negative_cache: BTreeMap::new(),
             package_map: BTreeMap::new(),
             in_flight: BTreeSet::new(),
+            last_foreground_pid: -1,
+            last_foreground_time: 0,
+            pending_foreground_pid: None,
+            total_failures: 0,
+            auto_disabled: false,
         }
     }
 
     fn submit(&self, intent: Intent) -> Request {
         Request {
-            principal: Principal::Addon(102), // Preload ID
+            principal: Principal::Addon(102),
             client_id: None,
-            cause: crate::core::CauseId(0), // Will be assigned by core
+            cause: crate::core::CauseId(0),
             intent,
         }
     }
+
+    fn log(&self, level: LogLevel, event: LogEvent) -> Request {
+        self.submit(Intent::AddonLog {
+            addon_id: 102,
+            level,
+            msg: "structured".to_string(), // Kernel ignores this when event is used
+        })
+    }
+    
+    // We need to update Action::AddonLog to carry LogEvent too if we want full structure.
+    // For now, let's just use structured strings for the addon-originated logs 
+    // but the ones we defined in LogEvent for the runtime formatter.
 }
 
 impl Addon for PreloadAddon {
@@ -4303,38 +4439,118 @@ impl Addon for PreloadAddon {
         state: &dyn StateView,
         event: &Event,
     ) -> Vec<Request> {
+        if self.auto_disabled {
+            return Vec::new();
+        }
+
         let mut reqs = Vec::new();
-        match event {
-            Event::ForegroundChanged { pid } => {
-                let payload = serde_json::to_vec(pid).unwrap_or_default();
-                reqs.push(self.submit(Intent::SystemRequest {
-                    request_id: 0, // Using CauseId in core is better but for now 0
-                    kind: SystemService::ResolveIdentity,
-                    payload,
+        let now = state.now();
+
+        // Safety: Auto-disable if we hit too many global failures
+        if self.total_failures >= 50 {
+            self.auto_disabled = true;
+            reqs.push(self.submit(Intent::AddonLog {
+                addon_id: 102,
+                level: LogLevel::Error,
+                msg: "CRITICAL: PreloadAddon auto-disabled due to excessive failures".to_string(),
+            }));
+            return reqs;
+        }
+
+        if !self.config.enabled {
+            if std::path::Path::new("/data/local/tmp/coreshift.enable_preload").exists() {
+                self.config.enabled = true;
+                reqs.push(self.submit(Intent::AddonLog {
+                    addon_id: 102,
+                    level: LogLevel::Info,
+                    msg: "Preload enabled via override file".to_string(),
                 }));
+            } else {
+                return Vec::new();
+            }
+        }
+
+        match event {
+            Event::Tick => {
+                if let Some(pid) = self.pending_foreground_pid {
+                    if now.saturating_sub(self.last_foreground_time) >= self.config.debounce_ms {
+                        let payload = serde_json::to_vec(&pid).unwrap_or_default();
+                        reqs.push(self.submit(Intent::SystemRequest {
+                            request_id: 0,
+                            kind: SystemService::ResolveIdentity,
+                            payload,
+                        }));
+                        self.pending_foreground_pid = None;
+                    }
+                }
+            }
+            Event::ForegroundChanged { pid } => {
+                if *pid != self.last_foreground_pid {
+                    self.pending_foreground_pid = Some(*pid);
+                    self.last_foreground_time = now;
+                    self.last_foreground_pid = *pid;
+                }
             }
             Event::PackagesChanged => {
-                reqs.push(self.submit(Intent::PackagesChanged));
+                self.package_map.clear();
+                self.dedup_cache.clear();
+                self.negative_cache.clear();
+                reqs.push(self.submit(Intent::AddonLog {
+                    addon_id: 102,
+                    level: LogLevel::Info,
+                    msg: "PKG_EVENT: invalidated caches".to_string(),
+                }));
             }
-            Event::SystemResponse { request_id: _, kind, payload } => {
+            Event::SystemResponse { kind, payload, .. } => {
                 match kind {
                     SystemService::ResolveIdentity => {
                         if let Ok(package_name) = String::from_utf8(payload.clone()) {
+                            reqs.push(self.submit(Intent::AddonLog {
+                                addon_id: 102,
+                                level: LogLevel::Debug,
+                                msg: format!("preload foreground pid={} package={}", self.last_foreground_pid, package_name),
+                            }));
+
                              if self.in_flight.contains(&package_name) {
+                                reqs.push(self.submit(Intent::AddonLog {
+                                    addon_id: 102,
+                                    level: LogLevel::Debug,
+                                    msg: format!("preload skip package={} reason=already_in_flight", package_name),
+                                }));
+                                return reqs;
+                            }
+                            
+                            if self.in_flight.len() >= self.config.global_max_in_flight {
+                                reqs.push(self.submit(Intent::AddonLog {
+                                    addon_id: 102,
+                                    level: LogLevel::Warn,
+                                    msg: format!("preload skip package={} reason=global_budget_full", package_name),
+                                }));
                                 return reqs;
                             }
 
-                            let now = state.now();
-                            if let Some(t) = self.negative_cache.get(&package_name)
-                                && now.saturating_sub(*t) < 300_000
-                            {
-                                return reqs;
+                            if let Some(t) = self.negative_cache.get(&package_name) {
+                                let elapsed = now.saturating_sub(*t);
+                                if elapsed < self.config.per_package_failure_backoff_ms {
+                                    reqs.push(self.submit(Intent::AddonLog {
+                                        addon_id: 102,
+                                        level: LogLevel::Debug,
+                                        msg: format!("preload skip package={} reason=failure_backoff remaining_ms={}", package_name, self.config.per_package_failure_backoff_ms - elapsed),
+                                    }));
+                                    return reqs;
+                                }
                             }
 
-                            if let Some(last_warmup) = self.dedup_cache.get(&package_name)
-                                && now.saturating_sub(*last_warmup) < 60_000
-                            {
-                                return reqs;
+                            if let Some(last_warmup) = self.dedup_cache.get(&package_name) {
+                                let elapsed = now.saturating_sub(*last_warmup);
+                                if elapsed < self.config.per_package_warmup_cooldown_ms {
+                                    reqs.push(self.submit(Intent::AddonLog {
+                                        addon_id: 102,
+                                        level: LogLevel::Debug,
+                                        msg: format!("preload skip package={} reason=cooldown remaining_ms={}", package_name, self.config.per_package_warmup_cooldown_ms - elapsed),
+                                    }));
+                                    return reqs;
+                                }
                             }
 
                             if let Some(base_dir) = self.package_map.get(&package_name) {
@@ -4355,7 +4571,7 @@ impl Addon for PreloadAddon {
                         }
                     }
                     SystemService::ResolveDirectory => {
-                         if let Ok((package_name, base_dir)) = serde_json::from_slice::<(String, String)>(&payload) {
+                         if let Ok((package_name, base_dir)) = serde_json::from_slice::<(String, String)>(payload) {
                              self.package_map.insert(package_name.clone(), std::path::PathBuf::from(&base_dir));
                              let payload = serde_json::to_vec(&(package_name, base_dir)).unwrap_or_default();
                              reqs.push(self.submit(Intent::SystemRequest {
@@ -4366,9 +4582,20 @@ impl Addon for PreloadAddon {
                          }
                     }
                     SystemService::DiscoverPaths => {
-                        if let Ok((package_name, paths)) = serde_json::from_slice::<(String, Vec<String>)>(&payload) {
+                        if let Ok((package_name, mut paths)) = serde_json::from_slice::<(String, Vec<String>)>(payload) {
+                            if paths.is_empty() {
+                                self.negative_cache.insert(package_name.clone(), now);
+                                reqs.push(self.submit(Intent::AddonLog {
+                                    addon_id: 102,
+                                    level: LogLevel::Warn,
+                                    msg: format!("preload fail package={} reason=no_paths_discovered", package_name),
+                                }));
+                                return reqs;
+                            }
+
+                            paths.truncate(self.config.max_paths_per_package);
                             self.in_flight.insert(package_name.clone());
-                            // AddonTask is still the correct way for warmup work
+
                             let mut task_payload = vec![1u8]; // Type 1 = Warmup
                             task_payload.extend(serde_json::to_vec(&paths).unwrap_or_default());
 
@@ -4377,31 +4604,49 @@ impl Addon for PreloadAddon {
                                 key: format!("warmup:{}", package_name),
                                 payload: task_payload,
                             }));
+                            reqs.push(self.submit(Intent::AddonLog {
+                                addon_id: 102,
+                                level: LogLevel::Info,
+                                msg: format!("preload start package={} paths={}", package_name, paths.len()),
+                            }));
                         }
                     }
                 }
             }
-            Event::AddonCompleted { addon_id, key, .. } if *addon_id == 102 => {
+            Event::AddonCompleted { addon_id, key, payload } if *addon_id == 102 => {
                 if key.starts_with("warmup:") {
                     let package = &key[7..];
                     self.in_flight.remove(package);
-                    self.dedup_cache.insert(package.to_string(), state.now());
+                    self.dedup_cache.insert(package.to_string(), now);
+                    
+                    if let Ok((bytes, duration_ms)) = serde_json::from_slice::<(u64, u64)>(payload) {
+                        reqs.push(self.submit(Intent::AddonLog {
+                            addon_id: 102,
+                            level: LogLevel::Info,
+                            msg: format!("preload done package={} bytes={} duration_ms={}", package, bytes, duration_ms),
+                        }));
+                    }
                 }
             }
-            Event::AddonFailed { addon_id, key, .. } if *addon_id == 102 => {
-                if key.starts_with("warmup:") {
-                    let package = &key[7..];
-                    self.in_flight.remove(package);
-                    self.negative_cache.insert(package.to_string(), state.now());
+            Event::AddonFailed { addon_id, key, err } if *addon_id == 102 => {
+                let package = if key.starts_with("warmup:") {
+                    &key[7..]
                 } else if key.starts_with("resolve_dir:") {
-                    let package = &key[12..];
-                    self.in_flight.remove(package);
-                    self.negative_cache.insert(package.to_string(), state.now());
+                    &key[12..]
                 } else if key.starts_with("discover_paths:") {
-                    let package = &key[15..];
-                    self.in_flight.remove(package);
-                    self.negative_cache.insert(package.to_string(), state.now());
-                }
+                    &key[15..]
+                } else {
+                    "unknown"
+                };
+                
+                self.in_flight.remove(package);
+                self.negative_cache.insert(package.to_string(), now);
+                self.total_failures += 1;
+                reqs.push(self.submit(Intent::AddonLog {
+                    addon_id: 102,
+                    level: LogLevel::Warn,
+                    msg: format!("preload fail package={} reason={} err={} total_fails={}", package, key, err, self.total_failures),
+                }));
             }
             _ => {}
         }
@@ -4749,6 +4994,9 @@ pub mod core;
 pub mod high_level;
 pub mod runtime;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug)]
 pub enum RuntimeLimit {
     StepBudgetExceeded,
@@ -4790,8 +5038,21 @@ impl TraceStore {
     }
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+static RUNNING: AtomicBool = AtomicBool::new(true);
+
+extern "C" fn handle_signal(_sig: libc::c_int) {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
 pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::SysError> {
     const MAX_ACTIONS_PER_TICK: usize = 10_000;
+
+    // Register signal handlers
+    unsafe {
+        libc::signal(libc::SIGTERM, handle_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, handle_signal as *const () as libc::sighandler_t);
+    }
 
     use crate::core::{Core, ExecutionState};
     use crate::high_level::capability::{CapabilityRegistry, CapabilityToken};
@@ -4851,7 +5112,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     use crate::high_level::addon::{Addon, AddonSpec, EchoAddon, NoOpAddon};
     use crate::high_level::addons::preload::PreloadAddon;
 
-    let mut addons: Vec<(Box<dyn Addon>, AddonSpec)> = vec![
+    let mut addons: Vec<(Box<dyn Addon>, AddonSpec, u32)> = vec![
         (
             Box::new(NoOpAddon),
             AddonSpec {
@@ -4859,6 +5120,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 capability: CapabilityToken::empty(),
                 max_actions_per_tick: 50,
             },
+            0, // Initial error count
         ),
         (
             Box::new(EchoAddon),
@@ -4867,28 +5129,33 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 capability: CapabilityToken::empty(),
                 max_actions_per_tick: 50,
             },
+            0,
         ),
     ];
 
     if config.enable_warmup {
         addons.push((
-            Box::new(PreloadAddon::new()),
+            Box::new(PreloadAddon::new(crate::high_level::addons::preload::PreloadConfig::default())),
             AddonSpec {
                 id: 102,
                 capability: CapabilityToken::allow_all(), 
                 max_actions_per_tick: 100,
             },
+            0,
         ));
     }
 
     let mut effect_executor =
         crate::runtime::EffectExecutor::new(reactor, "/data/local/tmp/coreshift");
 
+    // Load log level from system property if possible (placeholder for Android)
+    // effect_executor.log_router.verbosity = LogLevel::Info;
+
     let mut capabilities = CapabilityRegistry::new();
     capabilities.insert(0, CapabilityToken::allow_all()); // System / IPC root
 
     // Capability assignment for addons
-    for (_, spec) in &addons {
+    for (_, spec, _) in &addons {
         capabilities.insert(spec.id, spec.capability.clone());
     }
 
@@ -4943,15 +5210,19 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     let mut last_tick_time = std::time::Instant::now();
     let mut tick_counter = 0u64;
+    let mut reactor_failure_count = 0;
 
-    loop {
+    while RUNNING.load(Ordering::SeqCst) {
+        let tick_start_time = std::time::Instant::now();
         tick_counter += 1;
-        let now = std::time::Instant::now();
-        let elapsed = now.duration_since(last_tick_time).as_millis() as u64;
+        let elapsed = tick_start_time.duration_since(last_tick_time).as_millis() as u64;
 
         const TICK_MS: u64 = 16;
         let ticks = elapsed / TICK_MS;
 
+        // Update metrics
+        state.metrics.active_clients = ipc.clients.len() as u32;
+        
         let mut sys_events = Vec::new();
         for _ in 0..ticks {
             sys_events.push(crate::core::Event::TimeAdvanced(TICK_MS));
@@ -4968,26 +5239,47 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         match reactor_res {
             Ok(evs) => {
                 sys_events.extend(evs);
+                reactor_failure_count = 0;
             }
             Err(e) => {
-                sys_events.push(crate::core::Event::ReactorError {
-                    err: format!("reactor wait failed: {}", e),
+                reactor_failure_count += 1;
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Error,
+                    event: crate::core::LogEvent::Error { id: 0, err: format!("reactor wait failed: {}", e) },
                 });
+                
+                if reactor_failure_count >= 10 {
+                    match Reactor::new() {
+                        Ok(new_reactor) => {
+                            effect_executor.reactor = new_reactor;
+                            let _ = effect_executor.reactor.add_with_token(ipc.fd.as_raw_fd(), ipc_token, true, false);
+                            ipc.clients.clear();
+                            ipc.client_tokens.clear();
+                            reactor_failure_count = 0;
+                            state.metrics.restart_count += 1;
+                        }
+                        Err(_) => {
+                             std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                }
             }
         }
 
         sys_events.append(&mut pending_events);
 
         let mut scheduler = crate::core::scheduler::Scheduler::new(MAX_ACTIONS_PER_TICK);
+        let queue_before = scheduler.total_len;
+        state.metrics.queue_depth = queue_before as u32;
+
+        for conn in ipc.clients.values() {
+            state.metrics.peak_read_buf_kb = state.metrics.peak_read_buf_kb.max((conn.read_buf.len() / 1024) as u32);
+            state.metrics.peak_write_buf_kb = state.metrics.peak_write_buf_kb.max((conn.write_buf.len() / 1024) as u32);
+        }
 
         // Phase 1: Collect
         let mut collected_actions: Vec<(crate::core::Action, crate::core::ActionMeta)> = Vec::new();
-
-        let _ = effect_executor.apply(crate::core::Effect::Log {
-            owner: crate::core::CORE_OWNER,
-            level: crate::core::LogLevel::Info,
-            event: crate::core::LogEvent::TickStart,
-        });
 
         for rev in reactor_events {
             let ipc_msgs = ipc.handle_event(&mut effect_executor.reactor, &rev);
@@ -5039,7 +5331,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             }
 
             let mut addon_reqs = Vec::new();
-            for (addon, spec) in &mut addons {
+            for (addon, spec, error_count) in &mut addons {
+                if *error_count >= 10 { continue; }
                 let reqs = addon.on_reactor_event(&state, &rev);
                 let count = std::cmp::min(reqs.len(), spec.max_actions_per_tick as usize);
                 for mut req in reqs.into_iter().take(count) {
@@ -5062,7 +5355,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
             for req in all_reqs {
                 if crate::core::validation::validate_request(&req, &state).is_ok() {
-                    // We expand first, then check caps for each action.
                     let actions = crate::core::expand_intent(req.intent.clone(), state.clock);
                     let mut allowed = true;
                     for action in &actions {
@@ -5161,16 +5453,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                                     }
                                 }
                             }
-                        } else if n < 0 {
-                            let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                            let _ = effect_executor.apply(crate::core::Effect::Log {
-                                owner: crate::core::CORE_OWNER,
-                                level: crate::core::LogLevel::Error,
-                                event: crate::core::LogEvent::Error {
-                                    id: 0,
-                                    err: format!("READ_ERR {}", err),
-                                },
-                            });
                         }
                     }
                 }
@@ -5191,7 +5473,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     }
 
                     // Feed core events to addons
-                    for (addon, spec) in &mut addons {
+                    for (addon, spec, error_count) in &mut addons {
+                        if *error_count >= 10 { continue; }
                         let reqs = addon.on_core_event(&state, &ev);
                         for mut req in reqs {
                             let cause = crate::core::CauseId(next_action_id);
@@ -5203,7 +5486,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             req.cause = cause;
                             req.principal = crate::high_level::identity::Principal::Addon(spec.id);
                             
-                            // Validate and Expand addon requests immediately
                             if crate::core::validation::validate_request(&req, &state).is_ok() {
                                 let actions = crate::core::expand_intent(req.intent, state.clock);
                                 for action in actions {
@@ -5241,13 +5523,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             if !collected_actions.is_empty() {
                 let current_actions = std::mem::take(&mut collected_actions);
                 for (action, meta) in current_actions {
-                    debug_assert!(
-                        capabilities.allows(&meta.source, action.kind()),
-                        "Capability enforcement before enqueue"
-                    );
-                    if !capabilities.allows(&meta.source, action.kind()) {
-                        continue;
-                    }
+                    if !capabilities.allows(&meta.source, action.kind()) { continue; }
 
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(meta.id));
@@ -5261,7 +5537,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
                         action,
                         meta: new_meta,
-                    }) {
+                    }, &mut state) {
                         sys_events.push(ev);
                     }
                     next_action_id += 1;
@@ -5270,10 +5546,26 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         }
 
         if tick_counter % 64 == 0 {
+            // Check log verbosity trigger files
+            let new_verbosity = if std::path::Path::new("/data/local/tmp/coreshift.log_trace").exists() {
+                crate::core::LogLevel::Trace
+            } else if std::path::Path::new("/data/local/tmp/coreshift.log_debug").exists() {
+                crate::core::LogLevel::Debug
+            } else {
+                crate::core::LogLevel::Info
+            };
+
+            if new_verbosity != effect_executor.log_router.verbosity {
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Info,
+                    event: crate::core::LogEvent::Generic(format!("log verbosity changed level={:?}", new_verbosity)),
+                });
+                effect_executor.log_router.verbosity = new_verbosity;
+            }
+
             crate::core::verify::verify_global(&state);
         }
-
-        // Phase 3: Enqueue (Merged into Phase 2 loop above)
 
         // Phase 4: Resolve
         let mut generated_effects = Vec::with_capacity(16);
@@ -5289,21 +5581,65 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             let mut made_progress = false;
 
             while let Some(routed) = scheduler.next() {
-                debug_assert!(true, "Action has source (in rust we checked this statically)");
-
                 let count = per_source_count
                     .entry(routed.meta.source.clone())
                     .or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;
-
-                    continue; // Drop action due to source limit
+                    continue; 
                 }
                 *count += 1;
 
                 ipc.intercept_action(&routed.action, routed.meta.reply_to);
-
                 tick_actions_processed += 1;
+
+                if let crate::core::Action::HandleAddonFailure { addon_id, .. } = routed.action {
+                    for (_, spec, error_count) in &mut addons {
+                        if spec.id == addon_id { *error_count += 1; }
+                    }
+                }
+
+                // Structured Action Log
+                let payload_len = match &routed.action {
+                    crate::core::Action::SystemRequest { payload, .. } => payload.len(),
+                    crate::core::Action::AddonTask { payload, .. } => payload.len(),
+                    _ => 0,
+                };
+                
+                let log_id = match &routed.action {
+                    crate::core::Action::Submit { id, .. } => Some(*id),
+                    crate::core::Action::SystemRequest { request_id, .. } => Some(*request_id),
+                    _ => None,
+                };
+
+                let log_addon = match &routed.action {
+                    crate::core::Action::AddonTask { addon_id, .. } => Some(*addon_id),
+                    crate::core::Action::AddonLog { addon_id, .. } => Some(*addon_id),
+                    _ => None,
+                };
+
+                let log_key = match &routed.action {
+                    crate::core::Action::AddonTask { key, .. } => Some(key.clone()),
+                    _ => None,
+                };
+
+                let log_svc = match &routed.action {
+                    crate::core::Action::SystemRequest { kind, .. } => Some(*kind),
+                    _ => None,
+                };
+
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Trace,
+                    event: crate::core::LogEvent::ActionDispatch {
+                        kind: routed.action.kind(),
+                        id: log_id,
+                        addon_id: log_addon,
+                        key: log_key,
+                        service: log_svc,
+                        payload_len,
+                    },
+                });
 
                 action_effects.clear();
 
@@ -5325,16 +5661,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
                 state.update_hash();
 
-                if !matches!(routed.action, crate::core::Action::EmitLog { .. }) {
-                    let _ = effect_executor.apply(crate::core::Effect::Log {
-                        owner: crate::core::CORE_OWNER,
-                        level: crate::core::LogLevel::Info,
-                        event: crate::core::LogEvent::ActionDispatched,
-                    });
-                }
-
                 let new_actions = core.dispatcher.dispatch(&state, &routed.action);
-
                 for action in new_actions {
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(routed.meta.id));
@@ -5346,7 +5673,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             source: routed.meta.source.clone(),
                             reply_to: routed.meta.reply_to,
                         },
-                    }) {
+                    }, &mut state) {
                         sys_events.push(ev);
                     }
                     next_action_id += 1;
@@ -5360,25 +5687,18 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         let current_events = std::mem::take(&mut sys_events);
                         for ev in current_events {
                             if let Some(f) = &mut record_file {
-                                let _ = bincode::serialize_into(
-                                    f,
-                                    &crate::core::replay::ReplayInput::Event(ev.clone()),
-                                );
+                                let _ = bincode::serialize_into(f, &crate::core::replay::ReplayInput::Event(ev.clone()));
                             }
                             let sys_actions = core.dispatcher.dispatch_event(&state, &ev);
                             for action in sys_actions {
                                 let cause = crate::core::CauseId(next_action_id);
                                 next_action_id += 1;
                                 trace_store.insert(cause, None);
-                                collected_actions.push((
-                                    action,
-                                    crate::core::ActionMeta {
-                                        id: cause,
-                                        parent: None,
+                                collected_actions.push((action, crate::core::ActionMeta {
+                                        id: cause, parent: None,
                                         source: crate::high_level::identity::Principal::System,
                                         reply_to: None,
-                                    },
-                                ));
+                                }));
                             }
                         }
                     }
@@ -5386,14 +5706,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     if !collected_actions.is_empty() {
                         let current_actions = std::mem::take(&mut collected_actions);
                         for (action, meta) in current_actions {
-                            debug_assert!(
-                                capabilities.allows(&meta.source, action.kind()),
-                                "Capability enforcement before enqueue"
-                            );
-                            if !capabilities.allows(&meta.source, action.kind()) {
-                                continue;
-                            }
-
+                            if !capabilities.allows(&meta.source, action.kind()) { continue; }
                             let next_id = crate::core::CauseId(next_action_id);
                             next_action_id += 1;
                             trace_store.insert(next_id, Some(meta.id));
@@ -5401,12 +5714,10 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
                                 action,
                                 meta: crate::core::ActionMeta {
-                                    id: next_id,
-                                    parent: Some(meta.id), // Here cause is already bound to ingress
-                                    source: meta.source.clone(),
-                                    reply_to: meta.reply_to,
+                                    id: next_id, parent: Some(meta.id),
+                                    source: meta.source.clone(), reply_to: meta.reply_to,
                                 },
-                            }) {
+                            }, &mut state) {
                                 sys_events.push(ev);
                             }
                         }
@@ -5414,18 +5725,19 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
             }
 
-            if !made_progress {
-                break;
-            }
-        } // Close resolve loop
+            if !made_progress { break; }
+        }
 
-        generated_effects.push(crate::core::Effect::Log {
-            owner: crate::core::CORE_OWNER,
-            level: crate::core::LogLevel::Info,
-            event: crate::core::LogEvent::TickEnd,
-        });
+        if tick_counter % 640 == 0 {
+            let m = &state.metrics;
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: crate::core::CORE_OWNER,
+                level: crate::core::LogLevel::Info,
+                event: crate::core::LogEvent::Generic(format!("METRICS: clients={} dropped={} queue={} avg_tick_us={} peak_r_kb={} peak_w_kb={}",
+                        m.active_clients, m.dropped_actions, m.queue_depth, m.avg_tick_duration_us, m.peak_read_buf_kb, m.peak_write_buf_kb)),
+            });
+        }
 
-        // Apply effects at the end of the tick boundary to avoid interleaving events
         for effect in generated_effects {
             let events = effect_executor.apply(effect);
             next_events.extend(events);
@@ -5434,17 +5746,20 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         std::mem::swap(&mut pending_events, &mut next_events);
         next_events.clear();
 
-        if state.clock % 100 == 0 {
-            let _ = effect_executor.apply(crate::core::Effect::Log {
-                owner: crate::core::CORE_OWNER,
-                level: crate::core::LogLevel::Info,
-                event: crate::core::LogEvent::Observability {
-                    queue_len: scheduler.total_len,
-                    actions_processed: tick_actions_processed,
-                    dropped: tick_dropped_actions,
-                },
-            });
-        }
+        let tick_duration_us = tick_start_time.elapsed().as_micros() as u64;
+        state.metrics.avg_tick_duration_us = (state.metrics.avg_tick_duration_us * 7 + tick_duration_us as u32) / 8;
+
+        let _ = effect_executor.apply(crate::core::Effect::Log {
+            owner: crate::core::CORE_OWNER,
+            level: crate::core::LogLevel::Debug,
+            event: crate::core::LogEvent::TickSummary {
+                processed: tick_actions_processed,
+                dropped: tick_dropped_actions,
+                queue_before,
+                queue_after: scheduler.total_len,
+                elapsed_us: tick_duration_us,
+            },
+        });
 
         if let Some(f) = &mut record_file {
             let stats = crate::core::replay::TickStats {
@@ -5455,6 +5770,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             let _ = bincode::serialize_into(f, &crate::core::replay::ReplayInput::TickEnd(stats));
         }
     }
+
+    let _ = std::fs::remove_file(socket_path);
+    Ok(())
 }
 
 pub fn run_replay(path: &str) -> u64 {
@@ -5487,13 +5805,9 @@ pub fn run_replay(path: &str) -> u64 {
         let mut tick_intents: Vec<crate::high_level::identity::Request> = Vec::new();
         let mut expected_hash = None;
 
-        // Replay modes natively serialize TimeAdvanced via the sys_events queue.
-        // We gracefully ignore the legacy `Time` format, if any.
-
         while current_input_idx < inputs.len() {
             match &inputs[current_input_idx] {
                 ReplayInput::Time(dur) => {
-                    // Legacy support: map old time format to explicit constant TICK_MS quantization.
                     let elapsed = dur.as_millis() as u64;
                     let ticks = elapsed / 16;
                     for _ in 0..ticks {
@@ -5568,14 +5882,13 @@ pub fn run_replay(path: &str) -> u64 {
                         source: req.principal.clone(),
                         reply_to: req.client_id,
                     },
-                }) {
+                }, &mut state) {
                     tick_events.push(ev);
                 }
                 next_action_id += 1;
             }
         }
 
-        // Ensure any intents that dropped actions get their dropped actions processed
         let mut collected_actions: Vec<crate::core::Action> = Vec::new();
         while !tick_events.is_empty() || !collected_actions.is_empty() {
             if !tick_events.is_empty() {
@@ -5601,7 +5914,7 @@ pub fn run_replay(path: &str) -> u64 {
                             source: crate::high_level::identity::Principal::System,
                             reply_to: None,
                         },
-                    }) {
+                    }, &mut state) {
                         tick_events.push(ev);
                     }
                     next_action_id += 1;
@@ -5620,16 +5933,12 @@ pub fn run_replay(path: &str) -> u64 {
             let mut made_progress = false;
 
             while let Some(routed) = scheduler.next() {
-                let count = per_source_count
-                    .entry(routed.meta.source.clone())
-                    .or_insert(0);
+                let count = per_source_count.entry(routed.meta.source.clone()).or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;
-
-                    continue; // Drop action due to source limit
+                    continue; 
                 }
                 *count += 1;
-
                 tick_actions_processed += 1;
 
                 action_effects.clear();
@@ -5644,7 +5953,6 @@ pub fn run_replay(path: &str) -> u64 {
                             clock: &mut state.clock,
                         };
                         reducer.apply(&mut ctx, &routed.action, &mut action_effects);
-                        // Drop effects in replay mode
                     }
                 }
                 state.update_hash();
@@ -5661,15 +5969,12 @@ pub fn run_replay(path: &str) -> u64 {
                             source: routed.meta.source.clone(),
                             reply_to: routed.meta.reply_to,
                         },
-                    }) {
+                    }, &mut state) {
                         tick_events.push(ev);
                     }
                     next_action_id += 1;
                 }
             }
-
-            // Pending events dropped by scheduler during replay are collected here,
-            // but normally they would go into the next tick.
 
             if !tick_events.is_empty() || !collected_actions.is_empty() {
                 made_progress = true;
@@ -5697,7 +6002,7 @@ pub fn run_replay(path: &str) -> u64 {
                                     source: crate::high_level::identity::Principal::System,
                                     reply_to: None,
                                 },
-                            }) {
+                            }, &mut state) {
                                 tick_events.push(ev);
                             }
                             next_action_id += 1;
@@ -5706,30 +6011,15 @@ pub fn run_replay(path: &str) -> u64 {
                 }
             }
 
-            if !made_progress {
-                break;
-            }
+            if !made_progress { break; }
         }
 
         if let Some(expected) = expected_hash {
             let actual = state.hash;
-            assert_eq!(
-                actual, expected.hash,
-                "Determinism violation: state hash diverged at tick {}",
-                tick_idx
-            );
-            // Ignore stats matching for legacy hashes
+            assert_eq!(actual, expected.hash, "Determinism violation: state hash diverged at tick {}", tick_idx);
             if expected.actions_processed > 0 || expected.dropped_actions > 0 {
-                assert_eq!(
-                    tick_actions_processed, expected.actions_processed,
-                    "Determinism violation: actions processed diverged at tick {}",
-                    tick_idx
-                );
-                assert_eq!(
-                    tick_dropped_actions, expected.dropped_actions,
-                    "Determinism violation: dropped actions diverged at tick {}",
-                    tick_idx
-                );
+                assert_eq!(tick_actions_processed, expected.actions_processed, "Determinism violation: actions processed diverged at tick {}", tick_idx);
+                assert_eq!(tick_dropped_actions, expected.dropped_actions, "Determinism violation: dropped actions diverged at tick {}", tick_idx);
             }
             tick_idx += 1;
         }
@@ -5737,34 +6027,6 @@ pub fn run_replay(path: &str) -> u64 {
 
     println!("Replay finished deterministically.");
     state.hash
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deterministic_replay() {
-        use crate::core::replay::{ReplayInput, TickStats};
-
-        let path = "test_replay.bin";
-        let mut file = std::fs::File::create(path).unwrap();
-
-        // Write some dummy inputs
-        let stats = TickStats {
-            hash: 0,
-            actions_processed: 0,
-            dropped_actions: 0,
-        };
-        bincode::serialize_into(&mut file, &ReplayInput::TickEnd(stats)).unwrap();
-
-        let hash1 = run_replay(path);
-        let hash2 = run_replay(path);
-
-        assert_eq!(hash1, hash2);
-
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 ```
@@ -7715,6 +7977,12 @@ use libc::{
 use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+const MAX_CLIENTS: usize = 32;
+const MAX_PACKET_SIZE: usize = 128 * 1024; // 128 KB
+const MAX_READ_BUF: usize = 256 * 1024; // 256 KB
+const MAX_WRITE_BUF: usize = 1024 * 1024; // 1 MB
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadState {
     Header { needed: usize },
     Body { len: usize },
@@ -7756,8 +8024,6 @@ impl IpcModule {
         }
     }
 
-    /// Verifies the credentials of a peer on a connected Unix domain socket.
-    /// Returns `Ok(uid)` if successful, or a `SysError` if validation fails.
     pub fn verify_peer_credentials(&self, peer_fd: RawFd) -> Result<u32, SysError> {
         let mut cred: ucred = unsafe { std::mem::zeroed() };
         let mut len: socklen_t = std::mem::size_of::<ucred>() as socklen_t;
@@ -7784,6 +8050,10 @@ impl IpcModule {
 
     pub fn accept_clients(&mut self, reactor: &mut crate::low_level::reactor::Reactor) {
         loop {
+            if self.clients.len() >= MAX_CLIENTS {
+                return;
+            }
+
             let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
             let mut addr_len: socklen_t = std::mem::size_of::<libc::sockaddr_un>() as socklen_t;
 
@@ -7799,19 +8069,17 @@ impl IpcModule {
             if client_fd < 0 {
                 let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
                 if err == libc::EAGAIN || err == libc::EWOULDBLOCK {
-                    return; // Non-blocking, no more clients for now
+                    return;
                 }
                 return;
             }
 
             if let Ok(client_fd_obj) = Fd::new(client_fd, "accept4") {
-                // Extract UID
                 let uid = match self.verify_peer_credentials(client_fd) {
                     Ok(u) => u,
-                    Err(_) => continue, // Drop on verification failure
+                    Err(_) => continue, 
                 };
 
-                // Register with reactor
                 let token = match reactor.add(&client_fd_obj, true, true) {
                     Ok(t) => t,
                     Err(_) => continue,
@@ -7826,8 +8094,8 @@ impl IpcModule {
                 let conn = Conn {
                     fd: client_fd_obj,
                     token,
-                    read_buf: Vec::new(),
-                    write_buf: Vec::new(),
+                    read_buf: Vec::with_capacity(4096),
+                    write_buf: Vec::with_capacity(4096),
                     state: ReadState::Header { needed: 4 },
                     uid,
                 };
@@ -7844,15 +8112,14 @@ impl IpcModule {
             return Vec::new();
         }
 
-        let mut actions = Vec::new();
         let client_id = match self.client_tokens.get(&event.token) {
             Some(&id) => id,
-            None => return actions,
+            None => return Vec::new(),
         };
 
         if event.error {
             self.disconnect(client_id, reactor);
-            return actions;
+            return Vec::new();
         }
 
         let mut should_disconnect = false;
@@ -7868,7 +8135,7 @@ impl IpcModule {
                         }
                         Ok(n) => {
                             conn.read_buf.extend_from_slice(&buf[..n]);
-                            if conn.read_buf.len() > 16 * 1024 * 1024 {
+                            if conn.read_buf.len() > MAX_READ_BUF {
                                 should_disconnect = true;
                                 break;
                             }
@@ -7886,7 +8153,6 @@ impl IpcModule {
                 }
 
                 if !should_disconnect {
-                    // Process read_buf
                     loop {
                         match conn.state {
                             ReadState::Header { needed } => {
@@ -7895,7 +8161,7 @@ impl IpcModule {
                                     len_buf.copy_from_slice(&conn.read_buf[..4]);
                                     let body_len = u32::from_le_bytes(len_buf) as usize;
 
-                                    if body_len > 10 * 1024 * 1024 {
+                                    if body_len > MAX_PACKET_SIZE || body_len == 0 {
                                         should_disconnect = true;
                                         break;
                                     }
@@ -7911,7 +8177,6 @@ impl IpcModule {
                                     let payload = conn.read_buf.drain(..len).collect::<Vec<_>>();
                                     conn.state = ReadState::Header { needed: 4 };
 
-                                    // Decode payload
                                     if !payload.is_empty() {
                                         let req_type = payload[0];
                                         let req = match req_type {
@@ -7942,9 +8207,7 @@ impl IpcModule {
                                         };
 
                                         if let Some(cmd) = req {
-
-
-                                            actions.push(WireMsg { client_id, command: cmd, uid: conn.uid });
+                                            return vec![WireMsg { client_id, command: cmd, uid: conn.uid }];
                                         } else {
                                             should_disconnect = true;
                                             break;
@@ -7965,30 +8228,24 @@ impl IpcModule {
 
         if event.writable && !should_disconnect {
             if let Some(conn) = self.clients.get_mut(&client_id) {
-                if !conn.write_buf.is_empty() {
-                    let mut total_written = 0;
-                    while total_written < conn.write_buf.len() {
-                        match conn.fd.write(conn.write_buf[total_written..].as_ptr(), conn.write_buf.len() - total_written) {
-                            Ok(0) => {
+                while !conn.write_buf.is_empty() {
+                    match conn.fd.write(conn.write_buf.as_ptr(), conn.write_buf.len()) {
+                        Ok(0) => {
+                            should_disconnect = true;
+                            break;
+                        }
+                        Ok(n) => {
+                            conn.write_buf.drain(..n);
+                        }
+                        Err(e) => {
+                            let raw_err = e.raw_os_error();
+                            if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
+                                break;
+                            } else {
                                 should_disconnect = true;
                                 break;
                             }
-                            Ok(n) => {
-                                total_written += n;
-                            }
-                            Err(e) => {
-                                let raw_err = e.raw_os_error();
-                                if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
-                                    break;
-                                } else {
-                                    should_disconnect = true;
-                                    break;
-                                }
-                            }
                         }
-                    }
-                    if total_written > 0 {
-                        conn.write_buf.drain(..total_written);
                     }
                 }
             }
@@ -7998,7 +8255,7 @@ impl IpcModule {
             self.disconnect(client_id, reactor);
         }
 
-        actions
+        Vec::new()
     }
 
     pub fn disconnect(&mut self, client_id: u32, reactor: &mut crate::low_level::reactor::Reactor) {
@@ -8006,7 +8263,6 @@ impl IpcModule {
             reactor.del(&conn.fd);
             self.client_tokens.remove(&conn.token);
         }
-
     }
 
     pub fn intercept_action(&mut self, action: &crate::core::Action, reply_to: Option<u32>) {
@@ -8030,18 +8286,12 @@ impl IpcModule {
                     Self::queue_response(conn, WireResponse::Result(result.clone()));
                 }
             }
-            crate::core::Action::Rejected {
-                ..
-            } => {
+            crate::core::Action::Rejected { .. } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
                     Self::queue_response(conn, WireResponse::Error);
                 }
             }
-            crate::core::Action::Finished {
-                id,
-                result,
-                ..
-            } => {
+            crate::core::Action::Finished { id, result, .. } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
                     let outcome = crate::core::ExecOutcome {
                         id: *id,
@@ -8055,24 +8305,26 @@ impl IpcModule {
     }
 
     fn queue_response(conn: &mut Conn, resp: WireResponse) {
+        if conn.write_buf.len() > MAX_WRITE_BUF {
+            return; // Drop response on buffer overflow
+        }
+
         let payload = match resp {
             WireResponse::Exec(id) => {
-                let mut p = vec![1u8];
+                let mut p = Vec::with_capacity(9);
+                p.push(1u8);
                 p.extend_from_slice(&id.to_le_bytes());
                 p
             }
             WireResponse::Result(res) => {
-                let mut p = vec![2u8];
+                let mut p = Vec::with_capacity(1024);
+                p.push(2u8);
                 let json = serde_json::to_vec(&res).unwrap_or_default();
                 p.extend_from_slice(&json);
                 p
             }
-            WireResponse::CancelOk => {
-                vec![3u8]
-            }
-            WireResponse::Error => {
-                vec![4u8]
-            }
+            WireResponse::CancelOk => vec![3u8],
+            WireResponse::Error => vec![4u8],
         };
         let len = payload.len() as u32;
         conn.write_buf.extend_from_slice(&len.to_le_bytes());
@@ -8081,7 +8333,6 @@ impl IpcModule {
 }
 
 use crate::high_level::api::Command;
-
 
 enum WireResponse {
     Exec(u64),
@@ -8107,7 +8358,7 @@ pub mod ipc;
 
 ```rs
 use crate::arena::Arena;
-use crate::core::{ControlSignal, Effect, Event, IoHandle, LogEvent, LogLevel, SystemService};
+use crate::core::{Action, ActionKind, ControlSignal, Effect, Event, IoHandle, LogEvent, LogLevel, SystemService};
 use crate::low_level::io::DrainState;
 use crate::low_level::reactor::{Event as ReactorEvent, Reactor};
 use crate::low_level::spawn::{Process, SpawnBackend, SpawnOptions, SysError, spawn_start};
@@ -8160,6 +8411,7 @@ impl FileSink {
 pub struct LogRouter {
     sinks: HashMap<u32, FileSink>,
     default: FileSink,
+    pub verbosity: LogLevel,
 }
 
 impl LogRouter {
@@ -8169,6 +8421,7 @@ impl LogRouter {
         Self {
             sinks: HashMap::new(),
             default: FileSink::new(&default_path),
+            verbosity: LogLevel::Info,
         }
     }
 
@@ -8182,6 +8435,9 @@ impl LogRouter {
     }
 
     pub fn write(&mut self, owner: u32, level: LogLevel, msg: String) {
+        if (level as u8) < (self.verbosity as u8) {
+            return;
+        }
         if owner == crate::core::CORE_OWNER {
             self.default.write(level, msg);
         } else {
@@ -8243,29 +8499,47 @@ impl EffectExecutor {
         Ok(sys_events)
     }
 
+    fn format_log_event(&self, event: &LogEvent) -> String {
+        match event {
+            LogEvent::TickSummary { processed, dropped, queue_before, queue_after, elapsed_us } => {
+                format!("tick processed={} dropped={} queue_before={} queue_after={} elapsed_ms={}",
+                    processed, dropped, queue_before, queue_after, elapsed_us / 1000)
+            }
+            LogEvent::ActionDispatch { kind, id, addon_id, key, service, payload_len } => {
+                let mut parts = vec![format!("action={:?}", kind)];
+                if let Some(i) = id { parts.push(format!("id={}", i)); }
+                if let Some(a) = addon_id { parts.push(format!("addon_id={}", a)); }
+                if let Some(k) = key { parts.push(format!("key={}", k)); }
+                if let Some(s) = service { parts.push(format!("service={:?}", s)); }
+                if *payload_len > 0 { parts.push(format!("payload_len={}", payload_len)); }
+                parts.join(" ")
+            }
+            LogEvent::PreloadForeground { pid, package } => {
+                format!("preload foreground pid={} package={}", pid, package)
+            }
+            LogEvent::PreloadSkip { package, reason, remaining_ms } => {
+                let mut s = format!("preload skip package={} reason={}", package, reason);
+                if let Some(r) = remaining_ms { s.push_str(&format!(" remaining_ms={}", r)); }
+                s
+            }
+            LogEvent::PreloadStart { package, paths } => {
+                format!("preload start package={} paths={}", package, paths)
+            }
+            LogEvent::PreloadDone { package, paths, bytes, duration_ms } => {
+                format!("preload done package={} paths={} bytes={} duration_ms={}", package, paths, bytes, duration_ms)
+            }
+            LogEvent::PreloadFail { package, reason, backoff_ms } => {
+                format!("preload fail package={} reason={} backoff_ms={}", package, reason, backoff_ms)
+            }
+            LogEvent::Generic(s) => s.clone(),
+            LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
+        }
+    }
+
     pub fn apply(&mut self, effect: Effect) -> Vec<Event> {
         match effect {
-            Effect::Log {
-                owner,
-                level,
-                event,
-            } => {
-                let msg = match event {
-                    LogEvent::Submit { id } => format!("Submit id={}", id),
-                    LogEvent::Spawn { id, pid } => format!("Spawn id={}, pid={}", id, pid),
-                    LogEvent::Cancel { id } => format!("Cancel id={}", id),
-                    LogEvent::ForceKill { id } => format!("ForceKill id={}", id),
-                    LogEvent::Exit { id, status } => format!("Exit id={}, status={:?}", id, status),
-                    LogEvent::Timeout { id } => format!("Timeout id={}", id),
-                    LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
-                    LogEvent::TickStart => "tick_start".to_string(),
-                    LogEvent::TickEnd => "tick_end".to_string(),
-                    LogEvent::AddonReceived => "addon_received".to_string(),
-                    LogEvent::AddonTranslated => "addon_translated".to_string(),
-                    LogEvent::AddonDropped => "addon_dropped".to_string(),
-                    LogEvent::ActionDispatched => "action_dispatched".to_string(),
-                    LogEvent::Observability { queue_len, actions_processed, dropped } => format!("queue_len={} processed={} dropped={}", queue_len, actions_processed, dropped),
-                };
+            Effect::Log { owner, level, event } => {
+                let msg = self.format_log_event(&event);
                 self.log_router.write(owner, level, msg);
                 vec![]
             }
@@ -8575,6 +8849,10 @@ impl EffectExecutor {
                     _ => vec![Event::AddonFailed { addon_id, key, err: "unknown task type".to_string() }]
                 }
             }
+            Effect::AddonLog { addon_id, level, msg } => {
+                self.log_router.write(addon_id, level, msg);
+                vec![]
+            }
             Effect::SystemRequest { request_id, kind, payload } => {
                 match kind {
                     SystemService::ResolveIdentity => {
@@ -8679,6 +8957,328 @@ impl EffectExecutor {
                 }
             }
         }
+    }
+}
+
+```
+
+---
+
+## `rust/src/tests.rs`
+
+```rs
+#[cfg(test)]
+mod tests {
+    use crate::core::scheduler::Scheduler;
+    use crate::core::{Action, ActionMeta, CauseId, RoutedAction, ActionKind, JobRequest, ExecutionState, SystemService, LogEvent};
+    use crate::high_level::identity::Principal;
+
+    #[test]
+    fn test_scheduler_budget() {
+        let mut scheduler = Scheduler::new(10);
+        let mut state = ExecutionState::new();
+        let meta = ActionMeta {
+            id: CauseId(1),
+            parent: None,
+            source: Principal::System,
+            reply_to: None,
+        };
+
+        for i in 0..20 {
+            scheduler.enqueue(RoutedAction {
+                action: Action::AdvanceTime { delta: i as u64 },
+                meta: meta.clone(),
+            }, &mut state);
+        }
+
+        let mut count = 0;
+        while let Some(_) = scheduler.next() {
+            count += 1;
+        }
+
+        assert_eq!(count, 10);
+        assert!(scheduler.is_exhausted());
+    }
+
+    #[test]
+    fn test_scheduler_priority_eviction() {
+        let mut scheduler = Scheduler::new(1000000);
+        let mut state = ExecutionState::new();
+        let meta = ActionMeta {
+            id: CauseId(1),
+            parent: None,
+            source: Principal::System,
+            reply_to: None,
+        };
+
+        // Fill background queue
+        for _ in 0..4096 {
+            // EmitLog is Priority::Background
+            scheduler.enqueue(RoutedAction {
+                action: Action::EmitLog {
+                    owner: 0,
+                    level: crate::core::LogLevel::Info,
+                    event: LogEvent::Generic("test".to_string()),
+                },
+                meta: meta.clone(),
+            }, &mut state);
+        }
+        
+        // MAX_PER_ACTION_KIND is 1000
+        assert_eq!(scheduler.total_len, 1000);
+
+        // Enqueue critical action - it should NOT evict because queue is NOT full (1000 < 4096)
+        let res = scheduler.enqueue(RoutedAction {
+            action: Action::AdvanceTime { delta: 1 },
+            meta: meta.clone(),
+        }, &mut state);
+
+        assert!(res.is_none());
+        assert_eq!(scheduler.total_len, 1001);
+    }
+
+    #[test]
+    fn test_deterministic_replay_advanced() {
+        use crate::run_replay;
+        use crate::core::replay::ReplayInput;
+        use std::fs::File;
+
+        let path = "test_replay_adv.bin";
+        let mut file = File::create(path).unwrap();
+
+        // Tick 1: Submit a job
+        let intent = crate::core::Intent::Submit {
+            id: 1,
+            owner: 0,
+            job: JobRequest { command: vec!["ls".to_string()] },
+        };
+        bincode::serialize_into(&mut file, &ReplayInput::Intent(Principal::System, intent)).unwrap();
+        
+        // Tick 2: Advance time
+        bincode::serialize_into(&mut file, &ReplayInput::Event(crate::core::Event::TimeAdvanced(100))).unwrap();
+        
+        drop(file);
+        
+        let hash1 = run_replay(path);
+        let hash2 = run_replay(path);
+        assert_eq!(hash1, hash2);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_ipc_malformed_flood() {
+        // This test simulates a flood of malformed IPC packets to ensure no panics
+        use crate::mid_level::ipc::{IpcModule, ReadState};
+        use crate::low_level::reactor::{Reactor, Token};
+        use std::os::unix::net::UnixStream;
+        use std::os::unix::io::IntoRawFd;
+
+        let (server_sock, client_sock) = UnixStream::pair().unwrap();
+        server_sock.set_nonblocking(true).unwrap();
+        client_sock.set_nonblocking(true).unwrap();
+
+        let mut reactor = Reactor::new().unwrap();
+        let server_fd = crate::low_level::reactor::Fd::new(server_sock.into_raw_fd(), "test").unwrap();
+
+        let mut ipc = IpcModule::new(server_fd, Token(1));
+        
+        // Simulate a client connection
+        let (s2, _c2) = UnixStream::pair().unwrap();
+        s2.set_nonblocking(true).unwrap();
+        let client_id = 1;
+        let token = Token(2);
+        let conn = crate::mid_level::ipc::Conn {
+            fd: crate::low_level::reactor::Fd::new(s2.into_raw_fd(), "test").unwrap(),
+            token,
+            read_buf: vec![0u8; 1024 * 1024], // Already over limit!
+            write_buf: vec![],
+            state: ReadState::Header { needed: 4 },
+            uid: 1000,
+        };
+        ipc.clients.insert(client_id, conn);
+        ipc.client_tokens.insert(token, client_id);
+
+        let event = crate::low_level::reactor::Event {
+            token,
+            readable: true,
+            writable: false,
+            error: false,
+        };
+
+        // Should trigger disconnect due to MAX_READ_BUF
+        let msgs = ipc.handle_event(&mut reactor, &event);
+        assert!(msgs.is_empty());
+        assert!(ipc.clients.is_empty());
+    }
+
+    #[test]
+    fn test_preload_addon_debouncing() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use crate::core::{Event, ExecutionState};
+        use crate::high_level::addon::Addon;
+
+        let mut config = PreloadConfig::default();
+        config.enabled = true;
+        config.debounce_ms = 100;
+        let mut addon = PreloadAddon::new(config);
+        let state = ExecutionState::new();
+
+        // PID 100 foregrounded at t=0
+        let reqs = addon.on_core_event(&state, &Event::ForegroundChanged { pid: 100 });
+        assert!(reqs.is_empty()); // Should be pending
+
+        // PID 200 foregrounded at t=50 (overwrites 100)
+        let mut state50 = ExecutionState::new();
+        state50.clock = 50;
+        let reqs = addon.on_core_event(&state50, &Event::ForegroundChanged { pid: 200 });
+        assert!(reqs.is_empty());
+
+        // t=140: No tick yet (but wait, tick triggers resolve)
+        let mut state140 = ExecutionState::new();
+        state140.clock = 140; // 50 + 90 < 100
+        let reqs = addon.on_core_event(&state140, &Event::Tick);
+        assert!(reqs.is_empty());
+
+        // t=151: Tick triggers resolve for 200
+        let mut state151 = ExecutionState::new();
+        state151.clock = 151; // 50 + 101 > 100
+        let reqs = addon.on_core_event(&state151, &Event::Tick);
+        assert_eq!(reqs.len(), 1);
+        if let crate::core::Intent::SystemRequest { kind, .. } = &reqs[0].intent {
+            assert_eq!(*kind, crate::core::SystemService::ResolveIdentity);
+        } else {
+            panic!("Expected SystemRequest");
+        }
+    }
+
+    #[test]
+    fn test_preload_addon_deduplication() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use crate::core::{Event, ExecutionState, SystemService};
+        use crate::high_level::addon::Addon;
+
+        let mut config = PreloadConfig::default();
+        config.enabled = true;
+        let mut addon = PreloadAddon::new(config);
+        let mut state = ExecutionState::new();
+
+        // Successful resolve for "com.test"
+        let reqs = addon.on_core_event(&state, &Event::SystemResponse {
+            request_id: 0,
+            kind: SystemService::ResolveIdentity,
+            payload: "com.test".to_string().into_bytes(),
+        });
+        // Now ResolveIdentity triggers a Log and then the next step or logic.
+        // Wait, ResolveIdentity in current code:
+        // if let Ok(package_name) = ... {
+        //    reqs.push(log(foreground...));
+        //    if in_flight... { reqs.push(log(skip...)); return reqs; }
+        //    ...
+        // }
+        // So at least 1 log.
+        assert!(reqs.len() >= 1); 
+
+        // Simulate it's now in-flight (marked in-flight after DiscoverPaths)
+        let reqs = addon.on_core_event(&state, &Event::SystemResponse {
+            request_id: 0,
+            kind: SystemService::ResolveDirectory,
+            payload: serde_json::to_vec(&("com.test".to_string(), "/data/app/test".to_string())).unwrap(),
+        });
+        assert_eq!(reqs.len(), 1);
+
+        let reqs = addon.on_core_event(&state, &Event::SystemResponse {
+            request_id: 0,
+            kind: SystemService::DiscoverPaths,
+            payload: serde_json::to_vec(&("com.test".to_string(), vec!["base.apk".to_string()])).unwrap(),
+        });
+        // Warmup + Log
+        assert!(reqs.len() >= 2);
+        assert!(addon.in_flight.contains("com.test"));
+
+        // Another resolve for "com.test" while in-flight
+        let reqs = addon.on_core_event(&state, &Event::SystemResponse {
+            request_id: 0,
+            kind: SystemService::ResolveIdentity,
+            payload: "com.test".to_string().into_bytes(),
+        });
+        // Resolved log + Skip log
+        assert_eq!(reqs.len(), 2);
+        if let crate::core::Intent::AddonLog { msg, .. } = &reqs[1].intent {
+            assert!(msg.contains("skip") && msg.contains("already_in_flight"));
+        } else {
+             panic!("Expected SKIP log");
+        }
+    }
+
+    #[test]
+    fn test_preload_addon_failure_backoff() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use crate::core::{Event, ExecutionState, SystemService};
+        use crate::high_level::addon::Addon;
+
+        let mut config = PreloadConfig::default();
+        config.enabled = true;
+        config.per_package_failure_backoff_ms = 1000;
+        let mut addon = PreloadAddon::new(config);
+        
+        let mut state = ExecutionState::new();
+        state.clock = 100;
+
+        // Fail a warmup
+        addon.in_flight.insert("com.fail".to_string());
+        let _ = addon.on_core_event(&state, &Event::AddonFailed {
+            addon_id: 102,
+            key: "warmup:com.fail".to_string(),
+            err: "io error".to_string(),
+        });
+
+        assert!(addon.negative_cache.contains_key("com.fail"));
+
+        // Try again at t=500 (too soon)
+        state.clock = 500;
+        let reqs = addon.on_core_event(&state, &Event::SystemResponse {
+            request_id: 0,
+            kind: SystemService::ResolveIdentity,
+            payload: "com.fail".to_string().into_bytes(),
+        });
+        // Resolved log + Skip log
+        assert_eq!(reqs.len(), 2);
+        if let crate::core::Intent::AddonLog { msg, .. } = &reqs[1].intent {
+            assert!(msg.contains("skip") && msg.contains("failure_backoff"));
+        } else {
+             panic!("Expected SKIP log");
+        }
+
+        // Try again at t=1200 (after backoff)
+        state.clock = 1200;
+        let reqs = addon.on_core_event(&state, &Event::SystemResponse {
+            request_id: 0,
+            kind: SystemService::ResolveIdentity,
+            payload: "com.fail".to_string().into_bytes(),
+        });
+        // Resolved log + next step (ResolveDirectory)
+        assert_eq!(reqs.len(), 2);
+    }
+
+    #[test]
+    fn test_preload_addon_cache_invalidation() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use crate::core::{Event, ExecutionState};
+        use crate::high_level::addon::Addon;
+
+        let mut config = PreloadConfig::default();
+        config.enabled = true;
+        let mut addon = PreloadAddon::new(config);
+        let state = ExecutionState::new();
+
+        addon.package_map.insert("com.test".to_string(), "path".into());
+        addon.dedup_cache.insert("com.test".to_string(), 100);
+
+        let _ = addon.on_core_event(&state, &Event::PackagesChanged);
+
+        assert!(addon.package_map.is_empty());
+        assert!(addon.dedup_cache.is_empty());
     }
 }
 

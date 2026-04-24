@@ -28,6 +28,20 @@ Use the provided script to build for all supported targets and package them for 
 - **ARM64 (arm64-v8a)**: `aarch64-linux-android`
 - **ARMv7 (armeabi-v7a)**: `armv7-linux-androideabi`
 
+## Runtime Testing (on device)
+
+The daemon checks for control files under `/data/local/tmp/coreshift/control/` at runtime.
+
+### Enable Preload
+```bash
+touch /data/local/tmp/coreshift/control/enable_preload
+```
+
+### Log Verbosity
+- **Debug**: `touch /data/local/tmp/coreshift/control/log_debug`
+- **Trace**: `touch /data/local/tmp/coreshift/control/log_trace`
+- **Reset to Info**: `rm /data/local/tmp/coreshift/control/log_*`
+
 ## Output Artifacts
 
 The final packaged payloads are located at:
