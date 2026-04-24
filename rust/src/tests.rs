@@ -167,6 +167,184 @@ mod tests_internal {
     }
 
     #[test]
+    fn test_ipc_partial_frame_waits_for_complete_body() {
+        use crate::low_level::reactor::{Event, Reactor, Token};
+        use crate::mid_level::ipc::{Conn, IpcModule, ReadState};
+        use std::io::Write;
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (server_sock, _client_sock) = UnixStream::pair().unwrap();
+        server_sock.set_nonblocking(true).unwrap();
+
+        let mut reactor = Reactor::new().unwrap();
+        let mut ipc = IpcModule::new(
+            crate::low_level::reactor::Fd::new(server_sock.into_raw_fd(), "test").unwrap(),
+            Token(1),
+        );
+
+        let (conn_sock, mut peer_sock) = UnixStream::pair().unwrap();
+        conn_sock.set_nonblocking(true).unwrap();
+        peer_sock.set_nonblocking(true).unwrap();
+        let token = Token(2);
+        ipc.clients.insert(
+            1,
+            Conn {
+                fd: crate::low_level::reactor::Fd::new(conn_sock.into_raw_fd(), "test").unwrap(),
+                token,
+                read_buf: Vec::new(),
+                write_buf: Vec::new(),
+                state: ReadState::Header { needed: 4 },
+                uid: 1000,
+            },
+        );
+        ipc.client_tokens.insert(token, 1);
+
+        let mut payload = vec![3u8];
+        payload.extend_from_slice(&7u64.to_le_bytes());
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&payload);
+
+        peer_sock.write_all(&frame[..6]).unwrap();
+        let msgs = ipc.handle_event(
+            &mut reactor,
+            &Event {
+                token,
+                readable: true,
+                writable: false,
+                error: false,
+            },
+        );
+        assert!(msgs.is_empty());
+        assert!(ipc.clients.contains_key(&1));
+
+        peer_sock.write_all(&frame[6..]).unwrap();
+        let msgs = ipc.handle_event(
+            &mut reactor,
+            &Event {
+                token,
+                readable: true,
+                writable: false,
+                error: false,
+            },
+        );
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0].command {
+            crate::high_level::api::Command::Cancel { id } => assert_eq!(*id, 7),
+            other => panic!("unexpected command {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ipc_response_overflow_drops_client() {
+        use crate::low_level::reactor::Token;
+        use crate::mid_level::ipc::{Conn, IpcModule, ReadState};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (server_sock, _client_sock) = UnixStream::pair().unwrap();
+        server_sock.set_nonblocking(true).unwrap();
+        let mut ipc = IpcModule::new(
+            crate::low_level::reactor::Fd::new(server_sock.into_raw_fd(), "test").unwrap(),
+            Token(1),
+        );
+
+        let (conn_sock, _peer_sock) = UnixStream::pair().unwrap();
+        conn_sock.set_nonblocking(true).unwrap();
+        let token = Token(2);
+        ipc.clients.insert(
+            1,
+            Conn {
+                fd: crate::low_level::reactor::Fd::new(conn_sock.into_raw_fd(), "test").unwrap(),
+                token,
+                read_buf: Vec::new(),
+                write_buf: vec![0u8; (1024 * 1024) - 12],
+                state: ReadState::Header { needed: 4 },
+                uid: 1000,
+            },
+        );
+        ipc.client_tokens.insert(token, 1);
+
+        ipc.intercept_action(&crate::core::Action::Started { id: 42 }, Some(1));
+        assert!(!ipc.clients.contains_key(&1));
+        assert!(!ipc.client_tokens.contains_key(&token));
+    }
+
+    #[test]
+    fn test_ipc_writable_event_handles_partial_write() {
+        use crate::low_level::reactor::{Event, Reactor, Token};
+        use crate::mid_level::ipc::{Conn, IpcModule, ReadState};
+        use std::io::Read;
+        use std::os::unix::io::{AsRawFd, IntoRawFd};
+        use std::os::unix::net::UnixStream;
+
+        let (server_sock, _client_sock) = UnixStream::pair().unwrap();
+        server_sock.set_nonblocking(true).unwrap();
+        let mut reactor = Reactor::new().unwrap();
+        let mut ipc = IpcModule::new(
+            crate::low_level::reactor::Fd::new(server_sock.into_raw_fd(), "test").unwrap(),
+            Token(1),
+        );
+
+        let (conn_sock, peer_sock) = UnixStream::pair().unwrap();
+        conn_sock.set_nonblocking(true).unwrap();
+        peer_sock.set_nonblocking(true).unwrap();
+
+        let sndbuf: libc::c_int = 4096;
+        let ret = unsafe {
+            libc::setsockopt(
+                conn_sock.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &sndbuf as *const _ as *const libc::c_void,
+                std::mem::size_of_val(&sndbuf) as libc::socklen_t,
+            )
+        };
+        assert_eq!(ret, 0);
+
+        let token = Token(2);
+        let original_len = 256 * 1024;
+        ipc.clients.insert(
+            1,
+            Conn {
+                fd: crate::low_level::reactor::Fd::new(conn_sock.into_raw_fd(), "test").unwrap(),
+                token,
+                read_buf: Vec::new(),
+                write_buf: vec![7u8; original_len],
+                state: ReadState::Header { needed: 4 },
+                uid: 1000,
+            },
+        );
+        ipc.client_tokens.insert(token, 1);
+
+        let msgs = ipc.handle_event(
+            &mut reactor,
+            &Event {
+                token,
+                readable: false,
+                writable: true,
+                error: false,
+            },
+        );
+        assert!(msgs.is_empty());
+        let remaining = ipc
+            .clients
+            .get(&1)
+            .expect("client must remain connected")
+            .write_buf
+            .len();
+        assert!(remaining > 0);
+        assert!(remaining < original_len);
+
+        let mut received = vec![0u8; original_len];
+        let n = (&peer_sock)
+            .read(received.as_mut_slice())
+            .expect("peer should receive at least one chunk");
+        assert!(n > 0);
+    }
+
+    #[test]
     fn execution_state_job_view_handles_stale_core_handles() {
         use crate::core::state_view::StateView;
 
