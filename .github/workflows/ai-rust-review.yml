@@ -102,24 +102,64 @@ jobs:
             exit 1
           fi
 
+      - name: Diagnostics and Model Selection
+        if: env.REBASE_FAILED != 'true'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_MODEL: ${{ github.event.inputs.model || 'auto' }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
+          gemini --version
+          
+          echo "Fetching available models..."
+          curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY" > models_raw.json
+          
+          if jq -e '.error' models_raw.json > /dev/null; then
+             echo "ERROR: API returned error when listing models."
+             jq . models_raw.json
+             exit 1
+          fi
+
+          AVAILABLE_MODELS=$(jq -r '.models[] | select(.supportedGenerationMethods[]? == "generateContent") | .name' models_raw.json | sed 's/models\///')
+          echo "Available generateContent models:"
+          echo "$AVAILABLE_MODELS"
+
+          # Fallback prioritized list
+          case "$INPUT_MODEL" in
+            pro) REQUESTED="gemini-2.5-pro gemini-2.0-pro gemini-1.5-pro" ;;
+            flash-lite) REQUESTED="gemini-2.5-flash-lite gemini-2.0-flash-lite gemini-1.5-flash-8b" ;;
+            *) REQUESTED="gemini-2.5-flash gemini-2.0-flash gemini-1.5-flash-latest gemini-1.5-flash" ;;
+          esac
+
+          FALLBACK_ORDER="$REQUESTED gemini-2.5-flash gemini-2.0-flash gemini-1.5-flash-latest gemini-1.5-flash"
+          
+          RESOLVED_MODEL=""
+          for m in $FALLBACK_ORDER; do
+            if echo "$AVAILABLE_MODELS" | grep -q "^$m$"; then
+              RESOLVED_MODEL="$m"
+              break
+            fi
+          done
+
+          if [ -z "$RESOLVED_MODEL" ]; then
+            echo "ERROR: No Gemini generateContent model available for this key from fallback list."
+            exit 1
+          fi
+
+          echo "SELECTED_MODEL=$RESOLVED_MODEL"
+          echo "SELECTED_MODEL=$RESOLVED_MODEL" >> "$GITHUB_ENV"
+
       - name: Gemini Agentic Edit
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_CLI_TRUST_WORKSPACE: "true"
-          INPUT_MODEL: ${{ github.event.inputs.model || 'auto' }}
         run: |
-          if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
-          
-          case "$INPUT_MODEL" in
-            pro) MODEL_NAME="gemini-1.5-pro" ;;
-            flash-lite) MODEL_NAME="gemini-1.5-flash-8b" ;;
-            *) MODEL_NAME="gemini-1.5-flash" ;;
-          esac
+          MODEL_NAME="${{ env.SELECTED_MODEL }}"
+          echo "Running Gemini CLI with model: $MODEL_NAME"
           
           PROMPT="You are a senior maintenance engineer working on this repository. Your task is to make one focused, high-value, low-risk improvement to the CoreShift Rust daemon. Choose the best opportunity from the current codebase. Priorities (highest first): failing tests, missing tests for important logic, clippy warnings, panic/error handling improvements, dead code removal, logging clarity, scheduler correctness, IPC robustness, docs that prevent misuse, micro performance improvements with clear reasoning. Avoid trivial cosmetic edits. You may modify up to 3 files and 180 lines total. Do not redesign architecture. Do not add major dependencies. Do not touch app/src/main/jniLibs, target, build, .gradle, secrets, ai_context.md. Stop after one focused improvement. At the end of your output, provide a single line: SUMMARY: <short description of the change>."
           
-          echo "Running Gemini CLI in auto-edit mode with model: $MODEL_NAME"
           gemini \
             --model "$MODEL_NAME" \
             --approval-mode=auto_edit \
@@ -186,7 +226,7 @@ jobs:
           
           git add rust/ scripts/ docs/ README.md .gitignore
           if ! git diff --staged --quiet; then
-            git commit -m "AI(rust): improve $SUMMARY"
+            git commit -m "AI(rust): improve $SUMMARY (model=${{ env.SELECTED_MODEL }})"
           fi
 
       - name: Upload Artifacts
@@ -198,6 +238,7 @@ jobs:
             gemini_output.txt
             git-diff.patch
             changed_file_list.txt
+            models_raw.json
           retention-days: 7
 
       - name: Handle Conflict
