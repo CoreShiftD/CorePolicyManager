@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::core::{Action, Event, JobLifecycle, Module};
+use smallvec::SmallVec;
 
 pub struct LifecycleModule;
 
@@ -11,8 +12,8 @@ impl Module for LifecycleModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         action: &Action,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         match action {
             Action::Admitted { id } => {
                 actions.push(Action::SetLifecycle {
@@ -90,8 +91,8 @@ impl Module for LifecycleModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &Event,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         match event {
             Event::ProcessStarted {
                 id,

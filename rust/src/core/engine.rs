@@ -30,8 +30,8 @@ impl Dispatcher {
         &self,
         state: &dyn crate::core::state_view::StateView,
         action: &crate::core::Action,
-    ) -> Vec<crate::core::Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = crate::core::ActionList::new();
         for module in &self.modules {
             actions.extend(module.handle(state, action));
         }
@@ -42,8 +42,8 @@ impl Dispatcher {
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &crate::core::Event,
-    ) -> Vec<crate::core::Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = crate::core::ActionList::new();
         for module in &self.modules {
             actions.extend(module.handle_event(state, event));
         }

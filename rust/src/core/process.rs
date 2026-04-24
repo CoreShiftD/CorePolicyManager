@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::core::{Action, Event, Module};
+use smallvec::SmallVec;
 
 pub struct ProcessModule;
 
@@ -11,8 +12,8 @@ impl Module for ProcessModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         action: &Action,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         match action {
             Action::Control { id, signal } => {
                 if let Some(job) = state.job(*id)
@@ -56,8 +57,8 @@ impl Module for ProcessModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &Event,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         match event {
             Event::Tick => {
                 // Poll all running processes

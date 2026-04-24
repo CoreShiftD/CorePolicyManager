@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use serde::{Deserialize, Serialize};
+use smallvec::{SmallVec, smallvec};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
@@ -332,6 +333,8 @@ pub fn validate_intent(intent: &Intent) -> bool {
     }
 }
 
+pub type ActionList = SmallVec<[Action; 4]>;
+
 fn default_policy(cmd: &[String]) -> ExecPolicy {
     if cmd.first().map(|s| s.as_str()) == Some("dumpsys") {
         ExecPolicy {
@@ -348,10 +351,10 @@ fn default_policy(cmd: &[String]) -> ExecPolicy {
     }
 }
 
-pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
+pub fn expand_intent(intent: Intent, now: u64) -> ActionList {
     match intent {
         Intent::Submit { id, owner, job } => {
-            let mut actions = vec![Action::Submit {
+            let mut actions = smallvec![Action::Submit {
                 id,
                 owner,
                 job: job.clone(),
@@ -368,15 +371,15 @@ pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
 
             actions
         }
-        Intent::Control { id, signal } => vec![Action::Control { id, signal }],
-        Intent::Query { id } => vec![Action::Query { id }],
-        Intent::ForegroundChanged { pid } => vec![Action::ForegroundChanged { pid }],
-        Intent::PackagesChanged => vec![Action::PackagesChanged],
+        Intent::Control { id, signal } => smallvec![Action::Control { id, signal }],
+        Intent::Query { id } => smallvec![Action::Query { id }],
+        Intent::ForegroundChanged { pid } => smallvec![Action::ForegroundChanged { pid }],
+        Intent::PackagesChanged => smallvec![Action::PackagesChanged],
         Intent::SystemRequest {
             request_id,
             kind,
             payload,
-        } => vec![Action::SystemRequest {
+        } => smallvec![Action::SystemRequest {
             request_id,
             kind,
             payload,
@@ -385,7 +388,7 @@ pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
             addon_id,
             key,
             payload,
-        } => vec![Action::AddonTask {
+        } => smallvec![Action::AddonTask {
             addon_id,
             key,
             payload,
@@ -394,7 +397,7 @@ pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
             addon_id,
             level,
             msg,
-        } => vec![Action::AddonLog {
+        } => smallvec![Action::AddonLog {
             addon_id,
             level,
             msg,
@@ -715,16 +718,13 @@ pub enum Effect {
 }
 
 pub trait Module {
-    fn handle(
-        &self,
-        state: &dyn crate::core::state_view::StateView,
-        action: &Action,
-    ) -> Vec<Action>;
+    fn handle(&self, state: &dyn crate::core::state_view::StateView, action: &Action)
+    -> ActionList;
     fn handle_event(
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &Event,
-    ) -> Vec<Action>;
+    ) -> ActionList;
 }
 
 pub const CORE_OWNER: u32 = 0;

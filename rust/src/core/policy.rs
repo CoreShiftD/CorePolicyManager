@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::core::{Action, Module, TimeoutEntry};
+use smallvec::SmallVec;
 use std::collections::BTreeMap;
 
 pub struct TimeoutStateStore {
@@ -44,16 +45,16 @@ impl Module for TimeoutPolicyModule {
         &self,
         _state: &dyn crate::core::state_view::StateView,
         _action: &Action,
-    ) -> Vec<Action> {
-        Vec::new()
+    ) -> crate::core::ActionList {
+        SmallVec::new()
     }
 
     fn handle_event(
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &crate::core::Event,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         if let crate::core::Event::Tick = event {
             let now = state.now();
 
@@ -94,8 +95,8 @@ impl Module for AdmissionControlModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         action: &Action,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         if let Action::Submit { id, owner, .. } = action {
             if state.active_jobs() >= state.max_jobs() {
                 actions.push(Action::Rejected {
@@ -114,7 +115,7 @@ impl Module for AdmissionControlModule {
         &self,
         _state: &dyn crate::core::state_view::StateView,
         _event: &crate::core::Event,
-    ) -> Vec<Action> {
-        Vec::new()
+    ) -> crate::core::ActionList {
+        SmallVec::new()
     }
 }

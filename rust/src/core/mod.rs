@@ -27,9 +27,9 @@ pub use self::state::{
     TimeoutEntry, TimeoutState,
 };
 pub use self::types::{
-    Action, ActionKind, ActionMeta, CORE_OWNER, CancelPolicy, CauseId, ControlSignal, Effect,
-    Event, ExecError, ExecOutcome, ExecPolicy, ExecResult, ExecSpec, Handle, Intent, IoHandle,
-    IoStream, IoTag, JobHandle, JobRequest, JobTag, LogEvent, LogLevel, Module, Priority,
+    Action, ActionKind, ActionList, ActionMeta, CORE_OWNER, CancelPolicy, CauseId, ControlSignal,
+    Effect, Event, ExecError, ExecOutcome, ExecPolicy, ExecResult, ExecSpec, Handle, Intent,
+    IoHandle, IoStream, IoTag, JobHandle, JobRequest, JobTag, LogEvent, LogLevel, Module, Priority,
     ProcessHandle, ProcessTag, RoutedAction, SystemService, WARMUP_OWNER, expand_intent,
     validate_intent,
 };
