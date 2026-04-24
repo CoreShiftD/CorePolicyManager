@@ -22,19 +22,16 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 ## Workflow Behavior
 
 -   **Triggers**: Workflows are triggered manually (`workflow_dispatch`) and on a scheduled 6-hour cron (`0 */6 * * *`).
--   **Agentic Editing**: Workflows use the **Gemini CLI** in `auto-edit` mode. The AI agent directly modifies source files in the checked-out branch, prioritizing **meaningful progress over trivial churn**.
--   **Philosophy**: Each run attempts one focused, high-value, low-risk improvement that increases quality, reliability, performance, maintainability, or developer experience. Trivial cosmetic edits are discouraged.
--   **Model Selection & Fallback**:
-    -   Workflows use **Gemini 2.5** model IDs by default where available.
-    -   Manual runs allow choosing between `auto`, `flash`, `pro`, and `flash-lite`. 
-    -   Scheduled runs default to `flash`.
-    -   **Discovery**: The workflow dynamically queries the Gemini API to find available models for the provided API key.
-    -   **Fallback**: If a requested model is unavailable (e.g. `pro`), it automatically falls back to current stable alternatives (`gemini-2.0-flash`, `gemini-1.5-flash-latest`).
+-   **Iterative Sessions**: Each workflow run is a **30-minute AI session**. It performs repeated improvement passes within this budget.
+    -   **Active Phase**: New improvements are attempted for the first **25 minutes**.
+    -   **Cleanup Phase**: Final **5 minutes** are reserved for final validation and pushing accumulated changes.
+-   **Philosophy**: Each run attempts focused, high-value improvements. successful passes are committed separately to maintain a clean history.
+-   **Model Selection**: Manual runs allow choosing between `auto`, `flash`, `pro`, and `flash-lite`. Scheduled runs default to `flash`.
 -   **Strict Safety Gates**:
-    -   **Max 3 files** changed per pass.
-    -   **Max 180 total lines** changed.
+    -   **Max 3 files** (or 5 in deep mode) changed per pass.
+    -   **Max 180 total lines** (or 300 in deep mode) changed.
     -   Changes are restricted to specific allowed source paths.
     -   Unsafe paths (secrets, binaries, build artifacts) are automatically rejected and reverted.
--   **Validation Gating**: Every edit is validated via a full build/test suite before being committed.
--   **Daily Branches**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`) for manual review.
--   **Artifacts**: Raw AI output, the generated `git-diff.patch`, `changed_file_list.txt`, and the discovered `models_raw.json` are uploaded as job artifacts for every run.
+-   **Validation Gating**: Every pass is validated via its respective test suite before commitment. A final full build check is performed before the session ends.
+-   **Daily Branches**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`).
+-   **Artifacts**: Detailed artifacts for every pass (output, patch, status) are retained for 3 days for transparency.
