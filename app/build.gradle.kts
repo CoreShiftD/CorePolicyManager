@@ -30,6 +30,11 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnit4Runner"
+
+        ndk {
+            // Only include supported Rust daemon ABIs
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -58,9 +63,12 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
             
             proguardFiles(
@@ -81,8 +89,13 @@ android {
     }
 
     packaging {
+        jniLibs {
+            // Keep native libraries uncompressed for faster extraction/execution on Android 6.0+
+            useLegacyPackaging = false
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/*.kotlin_module"
         }
     }
 }
