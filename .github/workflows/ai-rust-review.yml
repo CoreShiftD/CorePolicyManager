@@ -107,7 +107,7 @@ jobs:
             *) MODEL_NAME="gemini-1.5-flash" ;;
           esac
           
-          PROMPT="You are editing the CoreShift Rust daemon. Make ONE tiny safe improvement only. Allowed paths: rust/, scripts/build-rust-android.sh, docs/android-build.md, docs/runtime-notes.md, README.md. Prefer clippy cleanup, tests, comments that clarify behavior, docs alignment, or small maintainability improvements. Do not redesign architecture. Do not add dependencies. Do not touch app/src/main/jniLibs, target, build, .gradle, secrets, ai_context.md. Stop after one small change."
+          PROMPT="You are a senior maintenance engineer working on this repository. Your task is to make one focused, high-value, low-risk improvement to the CoreShift Rust daemon. Choose the best opportunity from the current codebase. Priorities (highest first): failing tests, missing tests for important logic, clippy warnings, panic/error handling improvements, dead code removal, logging clarity, scheduler correctness, IPC robustness, docs that prevent misuse, micro performance improvements with clear reasoning. Avoid trivial cosmetic edits. You may modify up to 3 files and 180 lines total. Do not redesign architecture. Do not add major dependencies. Do not touch app/src/main/jniLibs, target, build, .gradle, secrets, ai_context.md. Stop after one focused improvement. At the end of your output, provide a single line: SUMMARY: <short description of the change>."
           
           echo "Running Gemini CLI in auto-edit mode with model: $MODEL_NAME"
           gemini \
@@ -120,16 +120,17 @@ jobs:
         run: |
           git diff > git-diff.patch
           git status --short
+          git diff --name-only > changed_file_list.txt
           
           if [ ! -s git-diff.patch ]; then
             echo "GEMINI_EDIT_PRODUCED=none" >> "$GITHUB_ENV"
             exit 0
           fi
           
-          FILES_CHANGED=$(git diff --name-only | wc -l)
+          FILES_CHANGED=$(cat changed_file_list.txt | wc -l)
           LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
           
-          if [ "$FILES_CHANGED" -gt 1 ] || [ "$LINES_CHANGED" -gt 50 ]; then
+          if [ "$FILES_CHANGED" -gt 3 ] || [ "$LINES_CHANGED" -gt 180 ]; then
             echo "ERROR: Gemini edit exceeded strict limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
             git restore --worktree --staged .
             echo "GEMINI_EDIT_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
@@ -169,9 +170,12 @@ jobs:
           git restore --staged app/src/main/jniLibs || true
           git restore app/src/main/jniLibs || true
           
+          SUMMARY=$(grep "SUMMARY:" gemini_output.txt | tail -n 1 | sed 's/SUMMARY: //')
+          if [ -z "$SUMMARY" ]; then SUMMARY="meaningful improvement"; fi
+          
           git add rust/ scripts/ docs/ README.md .gitignore
           if ! git diff --staged --quiet; then
-            git commit -m "AI(rust): apply Gemini agentic improvement"
+            git commit -m "AI(rust): improve $SUMMARY"
           fi
 
       - name: Upload Artifacts
@@ -182,6 +186,7 @@ jobs:
           path: |
             gemini_output.txt
             git-diff.patch
+            changed_file_list.txt
           retention-days: 7
 
       - name: Handle Conflict
@@ -200,6 +205,7 @@ jobs:
           fi
           
           if [[ "$CURRENT_BRANCH" == ai/rust-* ]]; then
+            echo "Pushing $CURRENT_BRANCH..."
             git fetch origin "$CURRENT_BRANCH"
             git rebase "origin/$CURRENT_BRANCH" || (git rebase --abort && exit 0)
             git push origin "$CURRENT_BRANCH"

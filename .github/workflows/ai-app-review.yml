@@ -108,7 +108,7 @@ jobs:
             *) MODEL_NAME="gemini-1.5-flash" ;;
           esac
           
-          PROMPT="You are editing the CorePolicyManager Android app. Make ONE tiny safe improvement only. Allowed paths: app/ excluding app/src/main/jniLibs/**/*.so, core/, feature/, gradle/, build.gradle.kts, settings.gradle.kts, gradle.properties, README.md. Prefer formatting, docs alignment, small Compose/Gradle cleanup, or maintainability improvements. Do not redesign architecture. Do not add dependencies unless clearly necessary. Do not touch generated artifacts, secrets, ai_context.md. Stop after one small change."
+          PROMPT="You are a senior maintenance engineer working on this repository. Your task is to make one focused, high-value, low-risk improvement to the CorePolicyManager Android app. Choose the best opportunity from the current codebase. Priorities (highest first): build issues, release config issues, Compose stability/performance, state handling bugs, permission flow correctness, lint issues, dependency alignment, UX papercuts, docs/setup clarity. Avoid trivial cosmetic edits. You may modify up to 3 files and 180 lines total. Do not redesign architecture. Do not add dependencies unless clearly necessary. Do not touch generated artifacts, secrets, ai_context.md. Stop after one focused improvement. At the end of your output, provide a single line: SUMMARY: <short description of the change>."
           
           echo "Running Gemini CLI in auto-edit mode with model: $MODEL_NAME"
           gemini \
@@ -121,16 +121,17 @@ jobs:
         run: |
           git diff > git-diff.patch
           git status --short
+          git diff --name-only > changed_file_list.txt
           
           if [ ! -s git-diff.patch ]; then
             echo "GEMINI_EDIT_PRODUCED=none" >> "$GITHUB_ENV"
             exit 0
           fi
           
-          FILES_CHANGED=$(git diff --name-only | wc -l)
+          FILES_CHANGED=$(cat changed_file_list.txt | wc -l)
           LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
           
-          if [ "$FILES_CHANGED" -gt 1 ] || [ "$LINES_CHANGED" -gt 50 ]; then
+          if [ "$FILES_CHANGED" -gt 3 ] || [ "$LINES_CHANGED" -gt 180 ]; then
             echo "ERROR: Gemini edit exceeded strict limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
             git restore --worktree --staged .
             echo "GEMINI_EDIT_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
@@ -160,9 +161,12 @@ jobs:
           git restore --staged app/src/main/jniLibs || true
           git restore app/src/main/jniLibs || true
           
+          SUMMARY=$(grep "SUMMARY:" gemini_output.txt | tail -n 1 | sed 's/SUMMARY: //')
+          if [ -z "$SUMMARY" ]; then SUMMARY="meaningful improvement"; fi
+          
           git add app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties README.md .gitignore
           if ! git diff --staged --quiet; then
-            git commit -m "AI(app): apply Gemini agentic improvement"
+            git commit -m "AI(app): improve $SUMMARY"
           fi
 
       - name: Upload Artifacts
@@ -173,6 +177,7 @@ jobs:
           path: |
             gemini_output.txt
             git-diff.patch
+            changed_file_list.txt
           retention-days: 7
 
       - name: Handle Conflict
@@ -191,6 +196,7 @@ jobs:
           fi
           
           if [[ "$CURRENT_BRANCH" == ai/app-* ]]; then
+            echo "Pushing $CURRENT_BRANCH..."
             git fetch origin "$CURRENT_BRANCH"
             git rebase "origin/$CURRENT_BRANCH" || (git rebase --abort && exit 0)
             git push origin "$CURRENT_BRANCH"
