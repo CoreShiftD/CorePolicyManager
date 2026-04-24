@@ -97,5 +97,16 @@ pub fn verify_global(state: &ExecutionState) -> Result<(), String> {
         ));
     }
 
+    #[cfg(debug_assertions)]
+    {
+        let recomputed = core.recompute_hash_full();
+        if recomputed != core.hash {
+            return Err(format!(
+                "core hash drift expected={} actual={}",
+                core.hash, recomputed
+            ));
+        }
+    }
+
     Ok(())
 }

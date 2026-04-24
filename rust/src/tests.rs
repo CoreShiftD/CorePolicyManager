@@ -222,6 +222,33 @@ mod tests_internal {
         assert!(err.contains("job missing runtime mapping"));
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn verify_global_reports_core_hash_drift() {
+        let mut state = ExecutionState::new();
+        state.core.insert_job(
+            11,
+            3,
+            crate::core::ExecSpec {
+                argv: vec!["true".to_string()],
+                stdin: None,
+                capture_stdout: false,
+                capture_stderr: false,
+                max_output: 0,
+            },
+            crate::core::ExecPolicy {
+                timeout_ms: None,
+                kill_grace_ms: 0,
+                cancel: crate::core::CancelPolicy::None,
+            },
+        );
+        state.core.hash ^= 1;
+
+        let err =
+            crate::core::verify::verify_global(&state).expect_err("hash drift must be reported");
+        assert!(err.contains("core hash drift"));
+    }
+
     #[test]
     fn test_preload_addon_debouncing() {
         use crate::core::{Event, ExecutionState};

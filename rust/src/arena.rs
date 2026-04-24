@@ -130,4 +130,14 @@ impl<T> Arena<T> {
             }
         })
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (u32, u32, &T)> {
+        self.slots.iter().enumerate().filter_map(|(i, slot)| {
+            if let Slot::Occupied { generation, data } = slot {
+                Some((i as u32, *generation, data))
+            } else {
+                None
+            }
+        })
+    }
 }
