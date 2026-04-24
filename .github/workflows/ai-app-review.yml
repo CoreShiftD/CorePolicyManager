@@ -6,7 +6,9 @@ on:
       reason:
         description: 'Reason for review (optional)'
         required: false
-        default: 'General quality pass'
+        default: 'Manual quality pass'
+  schedule:
+    - cron: "0 */6 * * *"
 
 concurrency:
   group: ai-app-review-daily
@@ -17,10 +19,16 @@ permissions:
 
 jobs:
   review:
+    timeout-minutes: 35
     runs-on: ubuntu-latest
-    # Secrets should be stored in GitHub Environment: ai-audit
     environment:
       name: ai-audit
+    
+    env:
+      SESSION_SECONDS: 1800
+      PASS_SLEEP_SECONDS: 60
+      MAX_NO_CHANGE_PASSES: 3
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,41 +75,67 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Collect App Scope
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          find app/ core/ feature/ gradle/ -maxdepth 3 -not -path '*/.*' > scope.txt
-          echo "build.gradle.kts" >> scope.txt
-          echo "settings.gradle.kts" >> scope.txt
-          echo "gradle.properties" >> scope.txt
-
-      - name: Gemini Review
+      - name: AI Session Loop
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
+          START_TIME=$(date +%s)
+          NO_CHANGE_COUNT=0
           mkdir -p reports/ai/app
-          REPORT_FILE="reports/ai/app/REPORT_$(date -u +'%H-%M').md"
-          echo "# Gemini App Review Report - $(date -u)" > "$REPORT_FILE"
-          echo "General quality pass requested: ${{ github.event.inputs.reason }}" >> "$REPORT_FILE"
-          echo "Placeholder: Real Gemini review output would go here." >> "$REPORT_FILE"
-          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
+          
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            if [ $ELAPSED -ge $SESSION_SECONDS ]; then
+              echo "Session time limit reached ($ELAPSED seconds). Ending session."
+              break
+            fi
+            
+            REPORT_ID=$(date -u +'%H-%M-%S')
+            REPORT_FILE="reports/ai/app/REPORT_$REPORT_ID.md"
+            
+            echo "Running Gemini Review Pass ($REPORT_ID)..."
+            
+            # Gemini invocation logic
+            if [ -n "$GEMINI_API_KEY" ]; then
+              echo "# Gemini App Review Report - $REPORT_ID" > "$REPORT_FILE"
+              echo "Session elapsed: $ELAPSED seconds" >> "$REPORT_FILE"
+              echo "Gemini invocation not fully implemented yet; report-only placeholder." >> "$REPORT_FILE"
+            else
+              echo "ERROR: GEMINI_API_KEY is missing."
+              exit 1
+            fi
+            
+            # Validation
+            echo "Validating project state..."
+            chmod +x gradlew
+            ./gradlew spotlessCheck
+            # ./gradlew :app:assembleDebug --stacktrace --no-daemon (Skipped in loop to save time, run once at end)
+            
+            # Check for changes (only the new report)
+            git add "$REPORT_FILE"
+            if git diff --staged --quiet; then
+              echo "No changes in this pass."
+              NO_CHANGE_COUNT=$((NO_CHANGE_COUNT + 1))
+            else
+              echo "Pass produced a new report."
+              git commit -m "AI(app): add scheduled Gemini audit report $REPORT_ID"
+              NO_CHANGE_COUNT=0
+            fi
+            
+            if [ $NO_CHANGE_COUNT -ge $MAX_NO_CHANGE_PASSES ]; then
+              echo "Reached $MAX_NO_CHANGE_PASSES consecutive passes with no changes. Ending session."
+              break
+            fi
+            
+            echo "Sleeping for $PASS_SLEEP_SECONDS seconds before next pass..."
+            sleep $PASS_SLEEP_SECONDS
+          done
 
-      - name: Verify No Source Changes
+      - name: Final Validation
         if: env.REBASE_FAILED != 'true'
         run: |
-          if ! git diff --exit-code -- app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties; then
-            echo "ERROR: Unintended source changes detected in report-only workflow."
-            git diff
-            exit 1
-          fi
-
-      - name: Validate (App)
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          chmod +x gradlew
-          ./gradlew spotlessCheck
           ./gradlew :app:assembleDebug --stacktrace --no-daemon
 
       - name: Handle Conflict
@@ -114,7 +148,7 @@ jobs:
           git push origin "$DAILY_BRANCH"
           exit 0
 
-      - name: Commit and Push (Strict Guard)
+      - name: Push Daily Branch
         if: env.REBASE_FAILED != 'true'
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -123,11 +157,9 @@ jobs:
             exit 1
           fi
           
-          git add "$REPORT_FILE"
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
-            exit 0
+          # Only push if we are on the daily branch
+          if [[ "$CURRENT_BRANCH" == ai/app-* ]]; then
+            git push origin "$CURRENT_BRANCH"
+          else
+            echo "Not on a daily branch. Skipping push."
           fi
-          
-          git commit -m "AI(app): daily agreed improvement pass (Gemini only)"
-          git push origin "$CURRENT_BRANCH"

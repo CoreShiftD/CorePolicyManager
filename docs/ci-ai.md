@@ -21,7 +21,11 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 
 ## Workflow Behavior
 
--   **Manual Dispatch**: Workflows are triggered manually (`workflow_dispatch`).
+-   **Triggers**: Workflows are triggered manually (`workflow_dispatch`) and on a scheduled 6-hour cron (`0 */6 * * *`).
+-   **Job Timeout**: Each job has a strict `timeout-minutes: 35`.
+-   **Session Budget**: Each workflow run targets a **30-minute AI session** (`SESSION_SECONDS=1800`). It performs repeated review passes within this budget.
 -   **Gemini-Only**: Codex and OpenAI integration has been removed to simplify quota management and focus on Gemini-based reviews.
 -   **Report-Only**: Currently, workflows generate reports under `reports/ai/` rather than mutating source code.
--   **No Direct Push to Main**: All AI-generated improvements and reports are committed to isolated branches (e.g., `ai/app-YYYY-MM-DD`).
+-   **No Direct Push to Main**: All AI-generated improvements and reports are committed to **daily branches** (e.g., `ai/app-YYYY-MM-DD`).
+-   **Branch Reuse**: Scheduled runs reuse the same daily branch, rebasing it onto `main` to accumulate improvements throughout the day.
+-   **Cost Awareness**: Gemini API quota and costs may apply. Manual runs are recommended for specific targeted reviews.

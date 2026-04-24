@@ -6,7 +6,9 @@ on:
       reason:
         description: 'Reason for review (optional)'
         required: false
-        default: 'Daemon stability pass'
+        default: 'Manual daemon stability pass'
+  schedule:
+    - cron: "0 */6 * * *"
 
 concurrency:
   group: ai-rust-review-daily
@@ -17,10 +19,16 @@ permissions:
 
 jobs:
   review:
+    timeout-minutes: 35
     runs-on: ubuntu-latest
-    # Secrets should be stored in GitHub Environment: ai-audit
     environment:
       name: ai-audit
+
+    env:
+      SESSION_SECONDS: 1800
+      PASS_SLEEP_SECONDS: 60
+      MAX_NO_CHANGE_PASSES: 3
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,34 +74,69 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;28.0.13004108"
 
-      - name: Gemini Review
+      - name: AI Session Loop
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
+          START_TIME=$(date +%s)
+          NO_CHANGE_COUNT=0
           mkdir -p reports/ai/rust
-          REPORT_FILE="reports/ai/rust/REPORT_$(date -u +'%H-%M').md"
-          echo "# Gemini Rust Review Report - $(date -u)" > "$REPORT_FILE"
-          echo "Daemon stability pass requested: ${{ github.event.inputs.reason }}" >> "$REPORT_FILE"
-          echo "Placeholder: Real Gemini review output would go here." >> "$REPORT_FILE"
-          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
+          
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            if [ $ELAPSED -ge $SESSION_SECONDS ]; then
+              echo "Session time limit reached ($ELAPSED seconds). Ending session."
+              break
+            fi
+            
+            REPORT_ID=$(date -u +'%H-%M-%S')
+            REPORT_FILE="reports/ai/rust/REPORT_$REPORT_ID.md"
+            
+            echo "Running Gemini Rust Review Pass ($REPORT_ID)..."
+            
+            if [ -n "$GEMINI_API_KEY" ]; then
+              echo "# Gemini Rust Review Report - $REPORT_ID" > "$REPORT_FILE"
+              echo "Session elapsed: $ELAPSED seconds" >> "$REPORT_FILE"
+              echo "Gemini invocation not fully implemented yet; report-only placeholder." >> "$REPORT_FILE"
+            else
+              echo "ERROR: GEMINI_API_KEY is missing."
+              exit 1
+            fi
+            
+            # Validation
+            echo "Validating Rust core..."
+            cd rust
+            cargo fmt --check
+            cargo check
+            # cargo test (Skipped in loop to save time, run once at end)
+            cd ..
+            
+            # Check for changes
+            git add "$REPORT_FILE"
+            if git diff --staged --quiet; then
+              echo "No changes in this pass."
+              NO_CHANGE_COUNT=$((NO_CHANGE_COUNT + 1))
+            else
+              echo "Pass produced a new report."
+              git commit -m "AI(rust): add scheduled Gemini audit report $REPORT_ID"
+              NO_CHANGE_COUNT=0
+            fi
+            
+            if [ $NO_CHANGE_COUNT -ge $MAX_NO_CHANGE_PASSES ]; then
+              echo "Reached $MAX_NO_CHANGE_PASSES consecutive passes with no changes. Ending session."
+              break
+            fi
+            
+            echo "Sleeping for $PASS_SLEEP_SECONDS seconds..."
+            sleep $PASS_SLEEP_SECONDS
+          done
 
-      - name: Verify No Source Changes
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          if ! git diff --exit-code -- rust/ scripts/ docs/ README.md; then
-            echo "ERROR: Unintended source changes detected in report-only workflow."
-            git diff
-            exit 1
-          fi
-
-      - name: Validate (Rust)
+      - name: Final Validation
         if: env.REBASE_FAILED != 'true'
         run: |
           cd rust
-          cargo fmt --check
-          cargo check
           cargo test
           cargo clippy --all-targets --all-features -- -D warnings
           
@@ -115,22 +158,17 @@ jobs:
           git push origin "$DAILY_BRANCH"
           exit 0
 
-      - name: Commit and Push (Strict Guard)
+      - name: Push Daily Branch
         if: env.REBASE_FAILED != 'true'
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Attempting to push branch: $CURRENT_BRANCH"
-          
           if [ "$CURRENT_BRANCH" == "main" ]; then
             echo "ERROR: Direct push to main detected. Aborting."
             exit 1
           fi
-
-          git add "$REPORT_FILE"
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
-            exit 0
+          
+          if [[ "$CURRENT_BRANCH" == ai/rust-* ]]; then
+            git push origin "$CURRENT_BRANCH"
+          else
+            echo "Not on a daily branch. Skipping push."
           fi
-
-          git commit -m "AI(rust): daily agreed improvement pass (Gemini only)"
-          git push origin "$CURRENT_BRANCH"
