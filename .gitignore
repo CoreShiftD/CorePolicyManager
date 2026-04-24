@@ -26,3 +26,15 @@ private/
 app/src/main/jniLibs/**/*.so
 
 
+
+# Android signing / secrets
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing.properties
+local.signing.properties
+app/keystore/
+secrets/
+*.pem
+*.key

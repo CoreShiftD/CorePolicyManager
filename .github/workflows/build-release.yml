@@ -86,31 +86,32 @@ jobs:
 
       - name: Restore keystore (optional)
         env:
-          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
-          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          STORE_FILE_BASE64: ${{ secrets.STORE_FILE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -z "$RELEASE_KEYSTORE_B64" ]; then
+          if [ -z "$STORE_FILE_BASE64" ]; then
             echo "No keystore provided, using debug/default signing"
             exit 0
           fi
 
-          if [ -z "$RELEASE_KEYSTORE_PASSWORD" ] || [ -z "$RELEASE_KEY_ALIAS" ] || [ -z "$RELEASE_KEY_PASSWORD" ]; then
+          if [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
             echo "Keystore provided but one or more signing secrets are missing."
             exit 1
           fi
 
-          echo "$RELEASE_KEYSTORE_B64" | base64 --decode > release.keystore
+          mkdir -p app/keystore
+          echo "$STORE_FILE_BASE64" | base64 --decode > app/keystore/release.jks
 
           cat <<EOK > keystore.properties
-          storeFile=$PWD/release.keystore
-          storePassword=$RELEASE_KEYSTORE_PASSWORD
-          keyAlias=$RELEASE_KEY_ALIAS
-          keyPassword=$RELEASE_KEY_PASSWORD
+          STORE_FILE=app/keystore/release.jks
+          STORE_PASSWORD=$STORE_PASSWORD
+          KEY_ALIAS=$KEY_ALIAS
+          KEY_PASSWORD=$KEY_PASSWORD
           EOK
 
-          echo "RELEASE_STORE_FILE=$PWD/release.keystore" >> "$GITHUB_ENV"
+          echo "RELEASE_SIGNED=true" >> "$GITHUB_ENV"
 
       - name: Build release APK
         run: |
@@ -118,7 +119,7 @@ jobs:
           ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
       - name: Verify release signing
-        if: ${{ env.RELEASE_STORE_FILE != '' }}
+        if: ${{ env.RELEASE_SIGNED == 'true' }}
         run: |
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           if [ -z "$APK" ]; then

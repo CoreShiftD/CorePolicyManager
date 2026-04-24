@@ -32,6 +32,28 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnit4Runner"
     }
 
+    val keystorePropertiesFile = rootProject.file("keystore.properties")
+    val keystoreProperties = java.util.Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(keystorePropertiesFile.inputStream())
+    }
+
+    signingConfigs {
+        create("release") {
+            val storeFileProp = keystoreProperties["STORE_FILE"] as String? ?: System.getenv("STORE_FILE")
+            val storePasswordProp = keystoreProperties["STORE_PASSWORD"] as String? ?: System.getenv("STORE_PASSWORD")
+            val keyAliasProp = keystoreProperties["KEY_ALIAS"] as String? ?: System.getenv("KEY_ALIAS")
+            val keyPasswordProp = keystoreProperties["KEY_PASSWORD"] as String? ?: System.getenv("KEY_PASSWORD")
+
+            if (storeFileProp != null) {
+                storeFile = file(storeFileProp)
+                storePassword = storePasswordProp
+                keyAlias = keyAliasProp
+                keyPassword = keyPasswordProp
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
@@ -39,6 +61,8 @@ android {
         }
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
+            
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
