@@ -12,12 +12,20 @@ pub struct FileSink {
 impl FileSink {
     pub fn new(path: &str) -> Self {
         use std::fs::OpenOptions;
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .ok()
-            .or_else(|| OpenOptions::new().write(true).open("/dev/null").ok());
+        let file_res = OpenOptions::new().create(true).append(true).open(path);
+
+        let file = match file_res {
+            Ok(f) => Some(f),
+            Err(e) => {
+                use std::io::Write;
+                let msg = format!(
+                    "coreshift: warning: failed to open log file at {}: {}; degrading to /dev/null\n",
+                    path, e
+                );
+                let _ = std::io::stderr().write_all(msg.as_bytes());
+                OpenOptions::new().write(true).open("/dev/null").ok()
+            }
+        };
         Self { file }
     }
 
