@@ -162,7 +162,8 @@ Because this targets Android systems:
 - Prefer reusable buffers.
 - Audit memory growth in long-lived services.
 - Close file descriptors promptly.
-- Keep logging efficient and rate-limited when noisy.
+- Keep logging efficient and rate-limited when noisy. Idle metrics should be rate-limited heavily unless trace/debug overrides are present.
+- Control files (like `enable_preload`) remain available for manual toggles, even if CLI modes auto-enable features.
 
 ---
 

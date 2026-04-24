@@ -457,6 +457,10 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut tick_counter = 0u64;
     let mut reactor_failure_count = 0;
 
+    let mut last_metrics_clients = 0;
+    let mut last_metrics_queue = 0;
+    let mut last_metrics_dropped = 0;
+
     while RUNNING.load(Ordering::SeqCst) {
         let t0 = std::time::Instant::now();
         tick_counter += 1;
@@ -1035,12 +1039,32 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
         if tick_counter.is_multiple_of(640) {
             let m = &state.metrics;
-            let _ = effect_executor.apply(crate::core::Effect::Log {
-                owner: crate::core::CORE_OWNER,
-                level: crate::core::LogLevel::Info,
-                event: crate::core::LogEvent::Generic(format!("METRICS: clients={} dropped={} queue={} avg_tick_us={} peak_r_kb={} peak_w_kb={}",
-                        m.active_clients, m.dropped_actions, m.queue_depth, m.avg_tick_duration_us, m.peak_read_buf_kb, m.peak_write_buf_kb)),
-            });
+            let log_router_verbosity = effect_executor.log_router.verbosity;
+            let is_verbose = (log_router_verbosity as u8) <= (crate::core::LogLevel::Debug as u8);
+
+            let changed = m.active_clients != last_metrics_clients
+                || m.queue_depth != last_metrics_queue
+                || m.dropped_actions != last_metrics_dropped;
+
+            if is_verbose || changed {
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Info,
+                    event: crate::core::LogEvent::Generic(format!("METRICS: clients={} dropped={} queue={} avg_tick_us={} peak_r_kb={} peak_w_kb={}",
+                            m.active_clients, m.dropped_actions, m.queue_depth, m.avg_tick_duration_us, m.peak_read_buf_kb, m.peak_write_buf_kb)),
+                });
+                last_metrics_clients = m.active_clients;
+                last_metrics_queue = m.queue_depth;
+                last_metrics_dropped = m.dropped_actions;
+            } else if tick_counter.is_multiple_of(6400) {
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Info,
+                    event: crate::core::LogEvent::Generic(
+                        "daemon idle: listening for IPC clients".to_string(),
+                    ),
+                });
+            }
         }
 
         for effect in generated_effects {

@@ -28,7 +28,11 @@ The daemon uses structured logging routed to the filesystem.
 You can control daemon verbosity and features dynamically by touching control files in the runtime directory (`/data/local/tmp/coreshift/control/`):
 - **Enable Debug Logging**: `touch log_debug`
 - **Enable Trace Logging**: `touch log_trace`
-- **Enable Preload Addon**: `touch enable_preload`
+- **Enable Preload Addon**: `touch enable_preload` *(Note: Running `coreshift preload` auto-creates this file).*
+
+## Idle Diagnostics
+
+By default, the daemon suppresses noisy, repetitive metric logs. It heavily rate-limits idle output and prefers meaningful state transitions. Metrics are only printed when active clients connect, queue depths change, or actions are dropped. You can force verbose metric output by enabling Trace/Debug logging.
 
 ## Common Startup Failures
 
