@@ -23,6 +23,7 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 
 ## Workflow Behavior
 
--   **Manual & Scheduled**: Workflows are triggered manually (`workflow_dispatch`) or hourly (`cron`).
+-   **Manual Dispatch**: Workflows are triggered manually (`workflow_dispatch`). Hourly cron schedules have been removed to prevent unexpected API costs.
+-   **Cost Awareness**: Note that consumer subscriptions (ChatGPT Plus, Gemini Advanced) do not necessarily include Developer API usage. API keys may require separate billing or credit quotas.
 -   **No Direct Push to Main**: All AI-generated improvements and reports are committed to isolated branches (e.g., `ai/app-YYYY-MM-DD`).
 -   **Dual-Agent Agreement**: Changes are proposed by both Codex and Gemini and only considered stable if both agents agree on the path and intent.

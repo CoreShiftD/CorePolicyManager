@@ -7,8 +7,8 @@ on:
         description: 'Reason for review (optional)'
         required: false
         default: 'General quality pass'
-  schedule:
-    - cron: "0 * * * *"
+  # Hourly cron removed to prevent unexpected API costs.
+  # Manual dispatch only. Run when review is needed.
 
 concurrency:
   group: ai-app-review-daily
