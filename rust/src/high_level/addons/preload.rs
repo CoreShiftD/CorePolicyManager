@@ -319,4 +319,31 @@ impl Addon for PreloadAddon {
         }
         reqs
     }
+
+    fn get_status(&self) -> String {
+        let mut s = String::new();
+        s.push_str(&format!("enabled: {}\n", self.config.enabled));
+        s.push_str(&format!(
+            "last_foreground_pid: {}\n",
+            self.last_foreground_pid
+        ));
+        s.push_str(&format!(
+            "last_foreground_time: {}\n",
+            self.last_foreground_time
+        ));
+        s.push_str(&format!(
+            "pending_foreground_pid: {:?}\n",
+            self.pending_foreground_pid
+        ));
+        s.push_str(&format!("package_map_count: {}\n", self.package_map.len()));
+        s.push_str(&format!("dedup_cache_count: {}\n", self.dedup_cache.len()));
+        s.push_str(&format!(
+            "negative_cache_count: {}\n",
+            self.negative_cache.len()
+        ));
+        s.push_str(&format!("in_flight_count: {}\n", self.in_flight.len()));
+        s.push_str(&format!("total_failures: {}\n", self.total_failures));
+        s.push_str(&format!("auto_disabled: {}\n", self.auto_disabled));
+        s
+    }
 }

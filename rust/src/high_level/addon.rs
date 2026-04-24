@@ -28,6 +28,9 @@ pub trait Addon {
     ) -> Vec<crate::high_level::identity::Request> {
         Vec::new()
     }
+    fn get_status(&self) -> String {
+        "status not supported".to_string()
+    }
 }
 
 pub struct NoOpAddon;

@@ -279,6 +279,7 @@ impl IpcModule {
                                                 None
                                             }
                                         }
+                                        4 => Some(Command::PreloadStatus),
                                         _ => None,
                                     };
 
@@ -408,6 +409,12 @@ impl IpcModule {
             }
             WireResponse::CancelOk => vec![3u8],
             WireResponse::Error => vec![4u8],
+            WireResponse::PreloadStatus(status) => {
+                let mut p = Vec::with_capacity(status.len() + 1);
+                p.push(5u8);
+                p.extend_from_slice(status.as_bytes());
+                p
+            }
         };
         // Bound the entire framed response up front so we never partially append
         // a reply that would exceed the per-client write budget.
@@ -449,9 +456,22 @@ impl IpcModule {
 
 use crate::high_level::api::Command;
 
-enum WireResponse {
+pub enum WireResponse {
     Exec(u64),
     Result(Option<ExecOutcome>),
     CancelOk,
     Error,
+    PreloadStatus(String),
+}
+
+impl IpcModule {
+    pub fn send_preload_status(&mut self, client_id: u32, status: String) {
+        let mut overflow_reason = None;
+        if let Some(conn) = self.clients.get_mut(&client_id) {
+            overflow_reason = Self::queue_response(conn, WireResponse::PreloadStatus(status)).err();
+        }
+        if let Some(reason) = overflow_reason {
+            self.drop_client(client_id, &reason);
+        }
+    }
 }
