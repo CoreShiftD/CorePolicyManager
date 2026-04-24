@@ -108,35 +108,32 @@ jobs:
           esac
           echo "RESOLVED_MODEL=$MODEL_NAME" >> "$GITHUB_ENV"
           
-          {
-            find rust/ -type f -not -path '*/.*' -not -name "*.so" -not -name "*.lock" -maxdepth 4
-            echo "scripts/build-rust-android.sh"
-            echo "docs/android-build.md"
-            echo "docs/runtime-notes.md"
-            echo "README.md"
-            echo ".gitignore"
-          } | while read -r f; do
+          # 1. Collect Context (Reduced Scope)
+          echo "--- GIT STATUS ---" > full_context.txt
+          git status >> full_context.txt
+          echo "--- CARGO.TOML ---" >> full_context.txt
+          cat rust/Cargo.toml >> full_context.txt
+          
+          # Pick 2-3 key files for context
+          for f in rust/src/lib.rs rust/src/main.rs rust/src/core/mod.rs; do
             if [ -f "$f" ]; then
-              echo "--- FILE: $f ---"
-              cat "$f"
-              echo ""
+              echo "--- FILE: $f ---" >> full_context.txt
+              cat "$f" >> full_context.txt
             fi
-          done > full_context.txt
+          done
 
-          PROMPT_PREFIX="You are running as a conservative maintenance bot. Return ONLY a unified diff patch. Make at most one small improvement. Limit changes to 3 files and 120 changed lines total. Prefer formatting, lint fixes, docs alignment, small tests, and obvious maintainability cleanup. Do not redesign architecture. Do not add dependencies. Do not touch secrets or generated artifacts. If no safe patch exists, return exactly: NO_PATCH"
+          PROMPT_PREFIX="You are a conservative maintenance bot. Return ONLY a unified diff patch. Make exactly ONE tiny improvement in ONE file. Limit changes to 1 file and 50 changed lines total. Prefer formatting, lint fixes, or obvious maintainability cleanup. Do not redesign architecture. Do not add dependencies. If no safe patch exists, return exactly: NO_PATCH"
           
           jq -n --arg prefix "$PROMPT_PREFIX" --rawfile context full_context.txt \
-            '{contents: [{parts: [{text: ($prefix + "\n\nFiles:\n" + $context)}]}]}' > payload.json
+            '{contents: [{parts: [{text: ($prefix + "\n\nContext:\n" + $context)}]}]}' > payload.json
 
-          # Attempt call with fallback
-          echo "Calling Gemini with model: $MODEL_NAME"
           curl -s -X POST -H 'Content-Type: application/json' \
             -d @payload.json \
             "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent?key=$GEMINI_API_KEY" > response.json
 
-          # Check for quota/error if Pro was requested
+          # Check for error if Pro was requested
           if [ "$MODEL_NAME" == "gemini-1.5-pro" ] && jq -e '.error' response.json > /dev/null; then
-            echo "Pro quota exceeded or error detected. Falling back to Flash."
+            echo "Fallback to Flash..."
             MODEL_NAME="gemini-1.5-flash"
             echo "RESOLVED_MODEL=$MODEL_NAME (fallback)" >> "$GITHUB_ENV"
             curl -s -X POST -H 'Content-Type: application/json' \
@@ -149,8 +146,14 @@ jobs:
           if [ -z "$RAW_RESPONSE" ] || [ "$RAW_RESPONSE" == "NO_PATCH" ]; then
             echo "PATCH_PRODUCED=none" >> "$GITHUB_ENV"
           else
-            echo "$RAW_RESPONSE" | sed '/^```/d' > gemini.patch
-            if [ ! -s gemini.patch ] || ! grep -q "^diff --git" gemini.patch; then
+            # Extract patch, removing markdown fences if any
+            echo "$RAW_RESPONSE" | sed -n '/^diff --git/,/$/p' > gemini.patch
+            if [ ! -s gemini.patch ]; then
+               # Fallback to simple format if diff --git not found
+               echo "$RAW_RESPONSE" | sed '/^```/d' > gemini.patch
+            fi
+
+            if [ ! -s gemini.patch ] || ! grep -qE "^(diff --git|--- |\+\+\+ )" gemini.patch; then
               echo "PATCH_PRODUCED=false" >> "$GITHUB_ENV"
             else
               if git apply --check gemini.patch; then
@@ -159,9 +162,9 @@ jobs:
                 FILES_CHANGED=$(git diff --name-only | wc -l)
                 LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
                 
-                if [ "$FILES_CHANGED" -gt 3 ] || [ "$LINES_CHANGED" -gt 120 ]; then
-                  echo "ERROR: Patch exceeded limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
-                  git checkout .
+                if [ "$FILES_CHANGED" -gt 1 ] || [ "$LINES_CHANGED" -gt 50 ]; then
+                  echo "ERROR: Patch exceeded strict limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
+                  git restore --worktree --staged .
                   echo "PATCH_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
                 else
                   echo "PATCH_PRODUCED=true" >> "$GITHUB_ENV"
@@ -171,6 +174,13 @@ jobs:
               fi
             fi
           fi
+
+      - name: Upload Gemini Response
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-response-rust
+          path: response.json
+          retention-days: 1
 
       - name: Validate (Rust)
         if: env.REBASE_FAILED != 'true' && env.PATCH_PRODUCED == 'true'
@@ -205,7 +215,7 @@ jobs:
             
             if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
               echo "ERROR: Unsafe file changes detected. Reverting."
-              git checkout .
+              git restore --worktree --staged .
               exit 1
             fi
             
@@ -213,25 +223,29 @@ jobs:
             if ! git diff --staged --quiet; then
               git commit -m "AI(rust): apply Gemini patch (model=${{ env.RESOLVED_MODEL }})"
             fi
-          else
+          elif [[ "$PATCH_PRODUCED" == "exceeded_limits" || "$PATCH_PRODUCED" == "invalid" ]]; then
             mkdir -p reports/ai/rust
-            REPORT_FILE="reports/ai/rust/audit-$(date -u +'%Y-%m-%d-%H-%M').md"
-            echo "# Gemini Audit - No Patch Applied" > "$REPORT_FILE"
+            REPORT_FILE="reports/ai/rust/audit-$(date -u +'%H-%M-%S').md"
+            echo "# Gemini Audit Failure" > "$REPORT_FILE"
             echo "Model: ${{ env.RESOLVED_MODEL }}" >> "$REPORT_FILE"
-            echo "Reason: $PATCH_PRODUCED" >> "$REPORT_FILE"
+            echo "Status: $PATCH_PRODUCED" >> "$REPORT_FILE"
             git add "$REPORT_FILE"
-            git commit -m "AI(rust): record Gemini no-op audit (model=${{ env.RESOLVED_MODEL }})"
+            git commit -m "AI(rust): record Gemini audit failure (model=${{ env.RESOLVED_MODEL }})"
           fi
 
       - name: Handle Conflict
         if: env.REBASE_FAILED == 'true'
         run: |
           mkdir -p reports/ai/rust
-          CONFLICT_FILE="reports/ai/rust/conflict-$(date -u +'%Y-%m-%d-%H-%M').md"
+          CONFLICT_FILE="reports/ai/rust/push-conflict-$(date -u +'%H-%M-%S').md"
           echo "# Rebase Conflict Report" > "$CONFLICT_FILE"
           echo "Failed to rebase $DAILY_BRANCH onto origin/main." >> "$CONFLICT_FILE"
           git add "$CONFLICT_FILE"
           git commit -m "AI(rust): report rebase conflict"
+          
+          # Attempt final push of conflict report
+          git fetch origin "$DAILY_BRANCH"
+          git rebase "origin/$DAILY_BRANCH" || git rebase --abort
           git push origin "$DAILY_BRANCH"
           exit 0
 
@@ -243,6 +257,10 @@ jobs:
             echo "ERROR: Direct push to main detected."
             exit 1
           fi
+          
           if [[ "$CURRENT_BRANCH" == ai/rust-* ]]; then
+            echo "Pushing $CURRENT_BRANCH..."
+            git fetch origin "$CURRENT_BRANCH"
+            git rebase "origin/$CURRENT_BRANCH" || (echo "Push race conflict" && exit 1)
             git push origin "$CURRENT_BRANCH"
           fi
