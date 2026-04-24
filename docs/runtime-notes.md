@@ -22,6 +22,7 @@ Because modern Android versions restrict the execution of binaries directly from
 
 - **CLI help mode** (`help`, `--help`, `-h`) writes help text to stdout for normal shell usage.
 - **CLI replay/record modes** stay shell-facing entrypoints. They are not daemon lifecycle logging surfaces.
+- Replay file-open failures surface as normal CLI errors instead of aborting with a panic.
 - **Daemon mode** writes runtime output through structured logging only.
 - Structured daemon output is routed through `LogLevel`, `LogEvent`, and the runtime `LogRouter`.
 - Core logs default to `/data/local/tmp/coreshift/core.log`; addon logs are written under `/data/local/tmp/coreshift/addons/`.

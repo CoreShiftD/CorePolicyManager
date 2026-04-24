@@ -67,6 +67,7 @@ CoreShift is controlled through the Android shell via trigger files located in t
 - Daemon-mode lifecycle output and runtime diagnostics are written through structured logging to the runtime log path.
 - Invalid CLI usage is treated as an error path and is logged through the runtime logger.
 - `record <file>` and `replay <file>` remain shell-facing commands; replay is not daemon mode and should not be treated as a long-lived service launch.
+- Replay startup failures now return normal CLI errors instead of panicking on file open.
 
 ## IPC and Spawn Safety
 
