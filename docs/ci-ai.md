@@ -33,5 +33,15 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
     -   Changes are restricted to specific allowed source paths.
     -   Unsafe paths (secrets, binaries, build artifacts) are automatically rejected and reverted.
 -   **Validation Gating**: Every pass is validated via its respective test suite before commitment. A final full build check is performed before the session ends.
--   **Daily Branches**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`).
+-   **Daily Branches**: All improvements are committed to isolated **daily branches** (e.g., \`ai/rust-YYYY-MM-DD\`) for manual review.
 -   **Artifacts**: Detailed artifacts for every pass (output, patch, status) are retained for 3 days for transparency.
+
+## Commit Policy
+
+AI agents and automated workflows must use **Signed-off-by** commits for traceability and contribution provenance. This ensures compliance with the Developer Certificate of Origin (DCO).
+
+### Standards
+- Every automated commit uses \`git commit --signoff\`.
+- Agents must include the signoff footer in any git instructions they generate.
+- If git identity is missing, agents will instruct the user to configure \`user.name\` and \`user.email\` before proceeding.
+
