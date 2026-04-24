@@ -17,8 +17,8 @@ local.properties
 
 # AI context and local notes
 ai_context.md
-.ai.md
 AGENTS.md
+.ai.md
 codex/
 chatgpt/
 private/
