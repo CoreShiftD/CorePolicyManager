@@ -74,6 +74,23 @@ extern "C" fn handle_signal(_sig: libc::c_int) {
     RUNNING.store(false, Ordering::SeqCst);
 }
 
+const TICK_MS: u64 = 16;
+
+#[inline]
+fn compute_reactor_timeout_ms(policy_timeout_ms: i32, elapsed_ms: u64) -> i32 {
+    let tick_timeout_ms = if elapsed_ms >= TICK_MS {
+        0
+    } else {
+        (TICK_MS - elapsed_ms) as i32
+    };
+
+    match policy_timeout_ms {
+        -1 => tick_timeout_ms,
+        0.. => policy_timeout_ms.min(tick_timeout_ms),
+        _ => tick_timeout_ms,
+    }
+}
+
 pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::SysError> {
     const MAX_ACTIONS_PER_TICK: usize = 10_000;
 
@@ -310,7 +327,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         tick_counter += 1;
         let elapsed = t0.duration_since(last_tick_time).as_millis() as u64;
 
-        const TICK_MS: u64 = 16;
         let ticks = elapsed / TICK_MS;
 
         // Update metrics
@@ -326,7 +342,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         }
 
         let mut reactor_events = Vec::new();
-        let timeout = core.dispatcher.compute_timeout_ms(&state);
+        let timeout =
+            compute_reactor_timeout_ms(core.dispatcher.compute_timeout_ms(&state), elapsed);
 
         let reactor_res = effect_executor.process_reactor_events(&mut reactor_events, timeout);
         match reactor_res {
