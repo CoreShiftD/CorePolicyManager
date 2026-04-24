@@ -1,0 +1,25 @@
+use crate::high_level::capability::CapabilityToken;
+use crate::low_level::reactor::Event as ReactorEvent;
+use crate::core::state_view::StateView;
+use crate::core::Event;
+
+pub struct AddonSpec {
+    pub id: u32,
+    pub capability: CapabilityToken,
+    pub max_actions_per_tick: u32,
+}
+
+pub trait Addon {
+    fn on_reactor_event(&mut self, _state: &dyn StateView, _event: &ReactorEvent) -> Vec<crate::high_level::identity::Request> {
+        Vec::new()
+    }
+    fn on_core_event(&mut self, _state: &dyn StateView, _event: &Event) -> Vec<crate::high_level::identity::Request> {
+        Vec::new()
+    }
+}
+
+pub struct NoOpAddon;
+impl Addon for NoOpAddon {}
+
+pub struct EchoAddon;
+impl Addon for EchoAddon {}
