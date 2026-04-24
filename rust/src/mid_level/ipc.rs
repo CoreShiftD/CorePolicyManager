@@ -155,101 +155,99 @@ impl IpcModule {
 
         let mut should_disconnect = false;
 
-        if event.readable {
-            if let Some(conn) = self.clients.get_mut(&client_id) {
-                let mut buf = [0u8; 4096];
-                loop {
-                    match conn.fd.read(buf.as_mut_ptr(), buf.len()) {
-                        Ok(0) => {
+        if event.readable && let Some(conn) = self.clients.get_mut(&client_id) {
+            let mut buf = [0u8; 4096];
+            loop {
+                match conn.fd.read(buf.as_mut_ptr(), buf.len()) {
+                    Ok(0) => {
+                        should_disconnect = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        conn.read_buf.extend_from_slice(&buf[..n]);
+                        if conn.read_buf.len() > MAX_READ_BUF {
                             should_disconnect = true;
                             break;
                         }
-                        Ok(n) => {
-                            conn.read_buf.extend_from_slice(&buf[..n]);
-                            if conn.read_buf.len() > MAX_READ_BUF {
-                                should_disconnect = true;
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            let raw_err = e.raw_os_error();
-                            if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
-                                break;
-                            } else {
-                                should_disconnect = true;
-                                break;
-                            }
+                    }
+                    Err(e) => {
+                        let raw_err = e.raw_os_error();
+                        if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
+                            break;
+                        } else {
+                            should_disconnect = true;
+                            break;
                         }
                     }
                 }
+            }
 
-                if !should_disconnect {
-                    loop {
-                        match conn.state {
-                            ReadState::Header { needed } => {
-                                if conn.read_buf.len() >= needed {
-                                    let mut len_buf = [0u8; 4];
-                                    len_buf.copy_from_slice(&conn.read_buf[..4]);
-                                    let body_len = u32::from_le_bytes(len_buf) as usize;
+            if !should_disconnect {
+                loop {
+                    match conn.state {
+                        ReadState::Header { needed } => {
+                            if conn.read_buf.len() >= needed {
+                                let mut len_buf = [0u8; 4];
+                                len_buf.copy_from_slice(&conn.read_buf[..4]);
+                                let body_len = u32::from_le_bytes(len_buf) as usize;
 
-                                    if body_len > MAX_PACKET_SIZE || body_len == 0 {
-                                        should_disconnect = true;
-                                        break;
-                                    }
-
-                                    conn.read_buf.drain(..4);
-                                    conn.state = ReadState::Body { len: body_len };
-                                } else {
+                                if body_len > MAX_PACKET_SIZE || body_len == 0 {
+                                    should_disconnect = true;
                                     break;
                                 }
+
+                                conn.read_buf.drain(..4);
+                                conn.state = ReadState::Body { len: body_len };
+                            } else {
+                                break;
                             }
-                            ReadState::Body { len } => {
-                                if conn.read_buf.len() >= len {
-                                    let payload = conn.read_buf.drain(..len).collect::<Vec<_>>();
-                                    conn.state = ReadState::Header { needed: 4 };
+                        }
+                        ReadState::Body { len } => {
+                            if conn.read_buf.len() >= len {
+                                let payload = conn.read_buf.drain(..len).collect::<Vec<_>>();
+                                conn.state = ReadState::Header { needed: 4 };
 
-                                    if !payload.is_empty() {
-                                        let req_type = payload[0];
-                                        let req = match req_type {
-                                            1 => {
-                                                serde_json::from_slice::<Command>(&payload[1..]).ok()
-                                            }
-                                            2 => {
-                                                if payload.len() == 9 {
-                                                    let mut id_buf = [0u8; 8];
-                                                    id_buf.copy_from_slice(&payload[1..9]);
-                                                    let id = u64::from_le_bytes(id_buf);
-                                                    Some(Command::GetResult { id })
-                                                } else {
-                                                    None
-                                                }
-                                            }
-                                            3 => {
-                                                if payload.len() == 9 {
-                                                    let mut id_buf = [0u8; 8];
-                                                    id_buf.copy_from_slice(&payload[1..9]);
-                                                    let id = u64::from_le_bytes(id_buf);
-                                                    Some(Command::Cancel { id })
-                                                } else {
-                                                    None
-                                                }
-                                            }
-                                            _ => None,
-                                        };
-
-                                        if let Some(cmd) = req {
-                                            return vec![WireMsg { client_id, command: cmd, uid: conn.uid }];
-                                        } else {
-                                            should_disconnect = true;
-                                            break;
+                                if !payload.is_empty() {
+                                    let req_type = payload[0];
+                                    let req = match req_type {
+                                        1 => {
+                                            serde_json::from_slice::<Command>(&payload[1..]).ok()
                                         }
+                                        2 => {
+                                            if payload.len() == 9 {
+                                                let mut id_buf = [0u8; 8];
+                                                id_buf.copy_from_slice(&payload[1..9]);
+                                                let id = u64::from_le_bytes(id_buf);
+                                                Some(Command::GetResult { id })
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        3 => {
+                                            if payload.len() == 9 {
+                                                let mut id_buf = [0u8; 8];
+                                                id_buf.copy_from_slice(&payload[1..9]);
+                                                let id = u64::from_le_bytes(id_buf);
+                                                Some(Command::Cancel { id })
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                        _ => None,
+                                    };
+
+                                    if let Some(cmd) = req {
+                                        return vec![WireMsg { client_id, command: cmd, uid: conn.uid }];
                                     } else {
                                         should_disconnect = true;
                                         break;
                                     }
                                 } else {
+                                    should_disconnect = true;
                                     break;
                                 }
+                            } else {
+                                break;
                             }
                         }
                     }
@@ -257,25 +255,23 @@ impl IpcModule {
             }
         }
 
-        if event.writable && !should_disconnect {
-            if let Some(conn) = self.clients.get_mut(&client_id) {
-                while !conn.write_buf.is_empty() {
-                    match conn.fd.write(conn.write_buf.as_ptr(), conn.write_buf.len()) {
-                        Ok(0) => {
+        if event.writable && !should_disconnect && let Some(conn) = self.clients.get_mut(&client_id) {
+            while !conn.write_buf.is_empty() {
+                match conn.fd.write(conn.write_buf.as_ptr(), conn.write_buf.len()) {
+                    Ok(0) => {
+                        should_disconnect = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        conn.write_buf.drain(..n);
+                    }
+                    Err(e) => {
+                        let raw_err = e.raw_os_error();
+                        if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
+                            break;
+                        } else {
                             should_disconnect = true;
                             break;
-                        }
-                        Ok(n) => {
-                            conn.write_buf.drain(..n);
-                        }
-                        Err(e) => {
-                            let raw_err = e.raw_os_error();
-                            if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
-                                break;
-                            } else {
-                                should_disconnect = true;
-                                break;
-                            }
                         }
                     }
                 }

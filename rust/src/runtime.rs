@@ -55,6 +55,12 @@ pub struct LogRouter {
     pub verbosity: LogLevel,
 }
 
+impl Default for LogRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LogRouter {
     pub fn new() -> Self {
         Self {
@@ -118,11 +124,10 @@ impl EffectExecutor {
     ) -> Result<Vec<Event>, SysError> {
         let nevents = self.reactor.wait(events, 64, timeout_ms)?;
         let mut sys_events = Vec::new();
-
         for ev in events.iter().take(nevents) {
             let idx = ev.token.0 as usize;
-            if idx < self.fd_map.len() {
-                if let Some((io, stream)) = self.fd_map[idx] {
+            if idx < self.fd_map.len()
+                && let Some((io, stream)) = self.fd_map[idx] {
                     sys_events.push(Event::IoReady {
                         io,
                         stream,
@@ -130,7 +135,6 @@ impl EffectExecutor {
                         writable: ev.writable,
                         error: ev.error,
                     });
-                }
             }
         }
         Ok(sys_events)
@@ -241,10 +245,9 @@ impl EffectExecutor {
                     if let Some(fd) = raw_fd {
                         self.reactor.del_raw(fd);
                         for slot in self.fd_map.iter_mut() {
-                            if let Some((mapped_io, mapped_stream)) = slot {
-                                if *mapped_io == io && *mapped_stream == stream {
+                            if let Some((mapped_io, mapped_stream)) = slot
+                                && *mapped_io == io && *mapped_stream == stream {
                                     *slot = None;
-                                }
                             }
                         }
                     } else {

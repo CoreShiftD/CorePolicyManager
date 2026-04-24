@@ -1009,6 +1009,12 @@ pub struct Core {
     pub routing: std::collections::HashMap<ActionKind, Vec<usize>>,
 }
 
+impl Default for Core {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Core {
     pub fn new() -> Self {
         let reducers: Vec<Box<dyn crate::core::reducer::Reducer>> = vec![

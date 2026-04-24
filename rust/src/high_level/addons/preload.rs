@@ -110,8 +110,8 @@ impl Addon for PreloadAddon {
 
         match event {
             Event::Tick => {
-                if let Some(pid) = self.pending_foreground_pid {
-                    if now.saturating_sub(self.last_foreground_time) >= self.config.debounce_ms {
+                if let Some(pid) = self.pending_foreground_pid
+                    && now.saturating_sub(self.last_foreground_time) >= self.config.debounce_ms {
                         let payload = serde_json::to_vec(&pid).unwrap_or_default();
                         reqs.push(self.submit(Intent::SystemRequest {
                             request_id: 0,
@@ -119,15 +119,13 @@ impl Addon for PreloadAddon {
                             payload,
                         }));
                         self.pending_foreground_pid = None;
-                    }
                 }
             }
-            Event::ForegroundChanged { pid } => {
-                if *pid != self.last_foreground_pid {
+            Event::ForegroundChanged { pid }
+                if *pid != self.last_foreground_pid => {
                     self.pending_foreground_pid = Some(*pid);
                     self.last_foreground_time = now;
                     self.last_foreground_pid = *pid;
-                }
             }
             Event::PackagesChanged => {
                 self.package_map.clear();
@@ -251,9 +249,8 @@ impl Addon for PreloadAddon {
                     }
                 }
             }
-            Event::AddonCompleted { addon_id, key, payload } if *addon_id == 102 => {
-                if key.starts_with("warmup:") {
-                    let package = &key[7..];
+            Event::AddonCompleted { addon_id, key, payload } if *addon_id == 102
+                && let Some(package) = key.strip_prefix("warmup:") => {
                     self.in_flight.remove(package);
                     self.dedup_cache.insert(package.to_string(), now);
                     
@@ -264,18 +261,12 @@ impl Addon for PreloadAddon {
                             msg: format!("preload done package={} bytes={} duration_ms={}", package, bytes, duration_ms),
                         }));
                     }
-                }
             }
             Event::AddonFailed { addon_id, key, err } if *addon_id == 102 => {
-                let package = if key.starts_with("warmup:") {
-                    &key[7..]
-                } else if key.starts_with("resolve_dir:") {
-                    &key[12..]
-                } else if key.starts_with("discover_paths:") {
-                    &key[15..]
-                } else {
-                    "unknown"
-                };
+                let package = key.strip_prefix("warmup:")
+                    .or_else(|| key.strip_prefix("resolve_dir:"))
+                    .or_else(|| key.strip_prefix("discover_paths:"))
+                    .unwrap_or("unknown");
                 
                 self.in_flight.remove(package);
                 self.negative_cache.insert(package.to_string(), now);

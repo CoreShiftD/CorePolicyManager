@@ -84,7 +84,7 @@ impl Scheduler {
         dropped_event
     }
 
-    pub fn next(&mut self) -> Option<RoutedAction> {
+    pub fn pop_next(&mut self) -> Option<RoutedAction> {
         if self.steps_executed >= self.step_budget {
             return None;
         }

@@ -3,9 +3,6 @@ use serde::{Deserialize, Serialize};
 
 /// Token/Capability enforcement layers bounding operation intent.
 // Replaced by CapabilityToken
-
-
-
 /// Strict command schema defining finite execution space.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Command {

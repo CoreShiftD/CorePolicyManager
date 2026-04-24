@@ -80,8 +80,8 @@ impl Module for ResultModule {
         event: &Event,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
-        if let Event::ProcessExited { process, status } = event {
-            if let Some(job) = state.job_by_process(*process) {
+        if let Event::ProcessExited { process, status } = event
+            && let Some(job) = state.job_by_process(*process) {
                 // For now, assume process exits without explicit buffered IO completion.
                 // A proper design will receive IoDataReceived or the drain contents from runtime.
                 // We simply synthesize empty stdout/stderr if the drain parts aren't forwarded.
@@ -99,7 +99,6 @@ impl Module for ResultModule {
                     result: Ok(result),
                 });
             }
-        }
         actions
     }
 }

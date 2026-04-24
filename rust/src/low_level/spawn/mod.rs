@@ -236,7 +236,7 @@ unsafe fn close_range_fast(keep_fd: Option<RawFd>) {
     let skip_fd = keep_fd.unwrap_or(-1);
     let dir_fd = unsafe {
         libc::open(
-            b"/proc/self/fd\0".as_ptr() as *const libc::c_char,
+            c"/proc/self/fd".as_ptr(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
         )
     };
@@ -460,9 +460,11 @@ fn resolve_backend(opts: &SpawnOptions) -> Backend {
 /// - No relative ordering or interleaving is guaranteed between the collected `stdout` and `stderr` buffers.
 use crate::low_level::io::DrainState;
 
+pub type SpawnDrain = DrainState<fn(&[u8]) -> bool>;
+
 pub struct RunningProcess {
     pub process: Process,
-    pub drain: DrainState<fn(&[u8]) -> bool>,
+    pub drain: SpawnDrain,
 }
 
 use crate::low_level::reactor::Reactor;
@@ -535,7 +537,7 @@ pub fn spawn(opts: SpawnOptions) -> Result<Output, SysError> {
 fn spawn_posix_internal(
     job_id: u64,
     opts: SpawnOptions,
-) -> Result<(pid_t, DrainState<fn(&[u8]) -> bool>), SysError> {
+) -> Result<(pid_t, SpawnDrain), SysError> {
     let mut pipes = Pipes::new(
         opts.stdin.as_deref(),
         opts.capture_stdout,
@@ -645,7 +647,7 @@ fn spawn_posix_internal(
     // instead of blindly closing all possible FDs.
     let dir_fd = unsafe {
         libc::open(
-            b"/proc/self/fd\0".as_ptr() as *const libc::c_char,
+            c"/proc/self/fd".as_ptr(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
         )
     };
@@ -741,7 +743,7 @@ fn spawn_posix_internal(
 
     let envp_ptr = envp.as_ref().map_or_else(
         || unsafe { environ as *const *mut c_char },
-        |e: &arrayvec::ArrayVec<*mut c_char, 64>| e.as_ptr() as *const *mut c_char,
+        |e: &arrayvec::ArrayVec<*mut c_char, 64>| e.as_ptr(),
     );
 
     if let Err(e) = posix_ret(
@@ -761,7 +763,7 @@ fn spawn_posix_internal(
         pipes
             .stdin_w
             .take()
-            .and_then(|fd| if opts.stdin.is_some() { Some(fd) } else { None }),
+            .filter(|_| opts.stdin.is_some()),
         opts.stdin,
         pipes.stdout_r.take(),
         pipes.stderr_r.take(),
@@ -775,7 +777,7 @@ fn spawn_posix_internal(
 fn spawn_fork_internal(
     job_id: u64,
     opts: SpawnOptions,
-) -> Result<(pid_t, DrainState<fn(&[u8]) -> bool>), SysError> {
+) -> Result<(pid_t, SpawnDrain), SysError> {
     let mut pipes = Pipes::new(
         opts.stdin.as_deref(),
         opts.capture_stdout,
@@ -863,7 +865,7 @@ fn spawn_fork_internal(
 
         let envp_ptr = envp.as_ref().map_or_else(
             || unsafe { environ as *const *mut c_char },
-            |e: &arrayvec::ArrayVec<*mut c_char, 64>| e.as_ptr() as *const *mut c_char,
+            |e: &arrayvec::ArrayVec<*mut c_char, 64>| e.as_ptr(),
         );
 
         // unblock signals and reset SIGPIPE
@@ -893,7 +895,7 @@ fn spawn_fork_internal(
         pipes
             .stdin_w
             .take()
-            .and_then(|fd| if opts.stdin.is_some() { Some(fd) } else { None }),
+            .filter(|_| opts.stdin.is_some()),
         opts.stdin,
         pipes.stdout_r.take(),
         pipes.stderr_r.take(),

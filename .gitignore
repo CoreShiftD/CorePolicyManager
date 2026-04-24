@@ -14,3 +14,11 @@ local.properties
 # IDE
 .idea/
 *.iml
+
+# AI context and local notes
+ai_context.md
+.ai.md
+codex/
+chatgpt/
+private/
+

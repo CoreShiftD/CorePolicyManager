@@ -181,7 +181,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     // Capability assignment for addons
     for (_, spec, _) in &addons {
-        capabilities.insert(spec.id, spec.capability.clone());
+        capabilities.insert(spec.id, spec.capability);
     }
 
     let mut ipc = IpcModule::new(ipc_fd, ipc_token);
@@ -376,7 +376,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
             }
 
-            let all_reqs = ipc_intents.into_iter().chain(addon_reqs.into_iter());
+            let all_reqs = ipc_intents.into_iter().chain(addon_reqs);
 
             for req in all_reqs {
                 if crate::core::validation::validate_request(&req, &state).is_ok() {
@@ -570,7 +570,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             }
         }
 
-        if tick_counter % 64 == 0 {
+        if tick_counter.is_multiple_of(64) {
             // Check log verbosity trigger files
             let new_verbosity = if std::path::Path::new(paths::LOG_TRACE_PATH).exists() {
                 crate::core::LogLevel::Trace
@@ -605,7 +605,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         loop {
             let mut made_progress = false;
 
-            while let Some(routed) = scheduler.next() {
+            while let Some(routed) = scheduler.pop_next() {
                 let count = per_source_count
                     .entry(routed.meta.source.clone())
                     .or_insert(0);
@@ -753,7 +753,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             if !made_progress { break; }
         }
 
-        if tick_counter % 640 == 0 {
+        if tick_counter.is_multiple_of(640) {
             let m = &state.metrics;
             let _ = effect_executor.apply(crate::core::Effect::Log {
                 owner: crate::core::CORE_OWNER,
@@ -957,7 +957,7 @@ pub fn run_replay(path: &str) -> u64 {
         loop {
             let mut made_progress = false;
 
-            while let Some(routed) = scheduler.next() {
+            while let Some(routed) = scheduler.pop_next() {
                 let count = per_source_count.entry(routed.meta.source.clone()).or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;

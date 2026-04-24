@@ -38,9 +38,6 @@ impl Module for IoModule {
             }
             Event::IoReady {
                 io,
-                readable: _,
-                writable: _,
-                error: _,
                 ..
             } => {
                 if let Some(job) = state.job_by_io(*io) {

@@ -118,8 +118,8 @@ impl CoreState {
 
     #[inline]
     pub fn remove_job(&mut self, id: u64) -> Option<JobState> {
-        if let Some(h) = self.job_id_map.remove(&id) {
-            if let Some(job) = self.jobs.remove(h.index, h.generation) {
+        if let Some(h) = self.job_id_map.remove(&id)
+            && let Some(job) = self.jobs.remove(h.index, h.generation) {
                 // XOR out job state from hash
                 self.hash ^= mix(id, hash_job(&job));
 
@@ -135,7 +135,6 @@ impl CoreState {
 
                 return Some(job);
             }
-        }
         None
     }
 
@@ -165,8 +164,8 @@ impl CoreState {
     // Additional helpers for indexing mutations
     #[inline]
     pub fn remove_process_index(&mut self, p: ProcessHandle) {
-        if (p.index as usize) < self.process_index.len() {
-            if let Some(h) = self.process_index[p.index as usize] {
+        if (p.index as usize) < self.process_index.len()
+            && let Some(h) = self.process_index[p.index as usize] {
                 // XOR out old value
                 self.hash ^= mix(p.index as u64, h.index as u64);
 
@@ -177,7 +176,6 @@ impl CoreState {
 
                 self.process_index[p.index as usize] = None;
             }
-        }
     }
 
     #[inline]
@@ -204,8 +202,8 @@ impl CoreState {
 
     #[inline]
     pub fn remove_io_index(&mut self, io: IoHandle) {
-        if (io.index as usize) < self.io_index.len() {
-            if let Some(h) = self.io_index[io.index as usize] {
+        if (io.index as usize) < self.io_index.len()
+            && let Some(h) = self.io_index[io.index as usize] {
                 // XOR out old value
                 self.hash ^= mix(io.index as u64, h.index as u64);
 
@@ -216,7 +214,6 @@ impl CoreState {
 
                 self.io_index[io.index as usize] = None;
             }
-        }
     }
 
     #[inline]

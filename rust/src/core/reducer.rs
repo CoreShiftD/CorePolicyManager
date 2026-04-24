@@ -206,11 +206,11 @@ impl Reducer for IoReducer {
             Action::RegisterInterest { io, stream } => {
                 effects.push(crate::core::Effect::WatchStream {
                     io: *io,
-                    stream: stream.clone(),
+                    stream: *stream,
                 });
             }
             Action::RemoveInterest { io, stream } => {
-                effects.push(crate::core::Effect::UnwatchStream { io: *io, stream: stream.clone() });
+                effects.push(crate::core::Effect::UnwatchStream { io: *io, stream: *stream });
             }
             Action::PerformIo { io } => {
                 effects.push(crate::core::Effect::PerformIo { io: *io });
@@ -243,8 +243,7 @@ impl Reducer for TimeoutReducer {
                 id,
                 deadline,
                 kill_grace_ms,
-            } => {
-                if !ts.timeouts.contains_key(id) {
+            } if !ts.timeouts.contains_key(id) => {
                     let entry = crate::core::TimeoutEntry {
                         id: *id,
                         state: crate::core::TimeoutState::WaitingForDeadline,
@@ -258,8 +257,8 @@ impl Reducer for TimeoutReducer {
                     ts.timeouts.insert(*id, entry);
                     ts.hash ^= id.wrapping_mul(0x5BD1E995);
                     ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(st_hash);
-                }
             }
+            Action::TrackTimeout { .. } => {}
             Action::UntrackTimeout { id } => {
                 if let Some(entry) = ts.timeouts.remove(id) {
                     let st_hash = match entry.state {
@@ -274,8 +273,8 @@ impl Reducer for TimeoutReducer {
                 id,
                 state: new_state,
             } => {
-                if let Some(entry) = ts.timeouts.get_mut(id) {
-                    if entry.state != *new_state {
+                if let Some(entry) = ts.timeouts.get_mut(id)
+                    && entry.state != *new_state {
                         let old_hash = match entry.state {
                             crate::core::TimeoutState::WaitingForDeadline => 0,
                             crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
@@ -287,7 +286,6 @@ impl Reducer for TimeoutReducer {
                         ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(old_hash);
                         entry.state = new_state.clone();
                         ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(new_hash);
-                    }
                 }
             }
             _ => {}
@@ -408,14 +406,12 @@ impl Reducer for ResultReducer {
                 }
                 rs.result_order.push_back(*id);
                 rs.hash ^= id.wrapping_mul(0x1234567).wrapping_add(owner as u64);
-                if rs.result_order.len() > 100 {
-                    if let Some(old_id) = rs.result_order.pop_front() {
-                        if let Some(removed) = rs.results.remove(&old_id) {
-                            rs.hash ^= old_id
-                                .wrapping_mul(0x1234567)
-                                .wrapping_add(removed.owner as u64);
-                        }
-                    }
+                if rs.result_order.len() > 100
+                    && let Some(old_id) = rs.result_order.pop_front()
+                    && let Some(removed) = rs.results.remove(&old_id) {
+                        rs.hash ^= old_id
+                            .wrapping_mul(0x1234567)
+                            .wrapping_add(removed.owner as u64);
                 }
             }
             Action::Rejected {
@@ -443,14 +439,12 @@ impl Reducer for ResultReducer {
                 }
                 rs.result_order.push_back(*id);
                 rs.hash ^= id.wrapping_mul(0x1234567).wrapping_add(owner as u64);
-                if rs.result_order.len() > 100 {
-                    if let Some(old_id) = rs.result_order.pop_front() {
-                        if let Some(removed) = rs.results.remove(&old_id) {
-                            rs.hash ^= old_id
-                                .wrapping_mul(0x1234567)
-                                .wrapping_add(removed.owner as u64);
-                        }
-                    }
+                if rs.result_order.len() > 100
+                    && let Some(old_id) = rs.result_order.pop_front()
+                    && let Some(removed) = rs.results.remove(&old_id) {
+                        rs.hash ^= old_id
+                            .wrapping_mul(0x1234567)
+                            .wrapping_add(removed.owner as u64);
                 }
             }
             _ => {}

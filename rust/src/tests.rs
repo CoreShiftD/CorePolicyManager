@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod tests_internal {
     use crate::core::scheduler::Scheduler;
     use crate::core::{Action, ActionMeta, CauseId, RoutedAction, JobRequest, ExecutionState, LogEvent};
     use crate::high_level::identity::Principal;
@@ -23,7 +23,7 @@ mod tests {
         }
 
         let mut count = 0;
-        while let Some(_) = scheduler.next() {
+        while scheduler.pop_next().is_some() {
             count += 1;
         }
 
@@ -149,9 +149,7 @@ mod tests {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;
 
-        let mut config = PreloadConfig::default();
-        config.enabled = true;
-        config.debounce_ms = 100;
+        let config = PreloadConfig { enabled: true, debounce_ms: 100, ..Default::default() };
         let mut addon = PreloadAddon::new(config);
         let state = ExecutionState::new();
 
@@ -189,8 +187,7 @@ mod tests {
         use crate::core::{Event, ExecutionState, SystemService};
         use crate::high_level::addon::Addon;
 
-        let mut config = PreloadConfig::default();
-        config.enabled = true;
+        let config = PreloadConfig { enabled: true, ..Default::default() };
         let mut addon = PreloadAddon::new(config);
         let state = ExecutionState::new();
 
@@ -200,7 +197,7 @@ mod tests {
             kind: SystemService::ResolveIdentity,
             payload: "com.test".to_string().into_bytes(),
         });
-        assert!(reqs.len() >= 1); 
+        assert!(!reqs.is_empty()); 
 
         // Simulate it's now in-flight
         let reqs = addon.on_core_event(&state, &Event::SystemResponse {
@@ -238,9 +235,7 @@ mod tests {
         use crate::core::{Event, ExecutionState, SystemService};
         use crate::high_level::addon::Addon;
 
-        let mut config = PreloadConfig::default();
-        config.enabled = true;
-        config.per_package_failure_backoff_ms = 1000;
+        let config = PreloadConfig { enabled: true, per_package_failure_backoff_ms: 1000, ..Default::default() };
         let mut addon = PreloadAddon::new(config);
         
         let mut state = ExecutionState::new();
@@ -286,8 +281,7 @@ mod tests {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;
 
-        let mut config = PreloadConfig::default();
-        config.enabled = true;
+        let config = PreloadConfig { enabled: true, ..Default::default() };
         let mut addon = PreloadAddon::new(config);
         let state = ExecutionState::new();
 
