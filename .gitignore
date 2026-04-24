@@ -2,7 +2,7 @@
 build/
 app/build/
 ui/build/
-
+target/
 # Gradle
 .gradle/
 !gradle/wrapper/gradle-wrapper.jar
