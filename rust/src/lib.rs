@@ -229,12 +229,39 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         );
     }
 
+    let mode = if config.record_path.is_some() {
+        "record"
+    } else if config.enable_warmup {
+        "preload"
+    } else {
+        "normal"
+    };
+
+    let mut loaded_addons = String::new();
+    for (_, spec, _) in &addons {
+        let name = match spec.id {
+            100 => "NoOp",
+            101 => "Echo",
+            102 => "Preload",
+            _ => "Unknown",
+        };
+        if !loaded_addons.is_empty() {
+            loaded_addons.push_str(", ");
+        }
+        loaded_addons.push_str(&format!("{}({})", name, spec.id));
+    }
+
     let _ = effect_executor.apply(crate::core::Effect::Log {
         owner: crate::core::CORE_OWNER,
         level: crate::core::LogLevel::Info,
         event: crate::core::LogEvent::Generic(
-            "daemon start version=0.1.0 git=a472b4f log_schema=structured_v2".to_string(),
+            format!("daemon start version=0.1.0 git=a472b4f log_schema=structured_v2 mode={} control_dir={}", mode, paths::CONTROL_DIR),
         ),
+    });
+    let _ = effect_executor.apply(crate::core::Effect::Log {
+        owner: crate::core::CORE_OWNER,
+        level: crate::core::LogLevel::Info,
+        event: crate::core::LogEvent::Generic(format!("addons loaded: [{}]", loaded_addons)),
     });
     let _ = effect_executor.apply(crate::core::Effect::Log {
         owner: crate::core::CORE_OWNER,
