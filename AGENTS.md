@@ -21,26 +21,21 @@ Do not optimize for commit count. Optimize for durable engineering quality.
 
 ## Architecture Map
 
-- `rust/src/core`
-  Pure state machine, reducers, scheduler, replay, validation, invariants.
-  Internal split:
-  - `core/types.rs` for actions, events, effects, handles, and routing metadata
-  - `core/state.rs` for execution-state models and views
-  - `core/engine.rs` for dispatcher and reducer wiring
+- **`rust/src/core`**: Pure state machine, reducers, scheduler, replay, validation, invariants.
+  - Internal split: `core/types.rs`, `core/state.rs`, `core/engine.rs`
+- **`rust/src/high_level`**: Android-facing policy semantics, identity, capabilities, feature mapping.
+- **`rust/src/mid_level`**: IPC framing, daemon boundary translation, request/response transport.
+- **`rust/src/low_level`**: **The ONLY layer allowed direct OS/platform-facing API access.** Reactor, syscalls, spawn, drain, IO primitives.
+- **`rust/src/runtime`**: Side effects, structured logging, services, process execution, orchestration.
 
-- `rust/src/high_level`
-  Android-facing policy semantics, identity, capabilities, feature mapping.
+Android app code is a separate frontend. Rust daemon work must not casually alter Android UI behavior.
 
-- `rust/src/mid_level`
-  IPC framing, daemon boundary translation, request/response transport.
+---
 
-- `rust/src/low_level`
-  Reactor, syscalls, spawn, drain, IO primitives, OS interaction.
+## Documentation Map
 
-- `rust/src/runtime`
-  Side effects, structured logging, services, process execution, orchestration.
-
-- Android app code is a separate frontend. Rust daemon work must not casually alter Android UI behavior.
+- **User-Facing Guides**: `README.md`, `docs/quickstart.md`, `docs/daemon-usage.md`
+- **Internal Rust Documentation**: `rust/README.md` and the `rust/docs/` directory (`architecture.md`, `runtime.md`, `ipc.md`, `build.md`, `testing.md`, `android.md`, `logging.md`).
 
 ---
 
@@ -180,3 +175,4 @@ cargo fmt --check
 cargo check
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
+```
