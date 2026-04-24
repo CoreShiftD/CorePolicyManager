@@ -22,20 +22,13 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 ## Workflow Behavior
 
 -   **Triggers**: Workflows are triggered manually (`workflow_dispatch`) and on a scheduled 6-hour cron (`0 */6 * * *`).
+-   **Agentic Editing**: Workflows use the **Gemini CLI** in `auto-edit` mode. Instead of generating text patches, the AI agent directly modifies source files in the checked-out branch.
 -   **Model Selection**: Manual runs allow choosing between `auto`, `flash`, `pro`, and `flash-lite`. Scheduled runs default to `flash`.
-    -   `auto` / `flash`: Uses `gemini-1.5-flash` for fast, cost-effective maintenance.
-    -   `pro`: Uses `gemini-1.5-pro` for deeper reasoning.
-    -   `flash-lite`: Uses `gemini-1.5-flash-8b`.
--   **Fallback Logic**: If `pro` is requested but fails (e.g., quota exceeded), the workflow automatically falls back to `flash` to ensure the audit completes.
--   **Conservative Maintenance**: Gemini is strictly instructed to act as a **low-risk maintenance bot**.
--   **Strict Patch Limits**: Automated patches are gated by the following constraints:
-    -   **Max 3 files** changed.
-    -   **Max 120 total lines** (additions + deletions) changed.
--   **Validation Gating**: Every patch is validated via `git apply --check` and a full build/test suite before being committed.
--   **No Direct Push to Main**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`) for manual review.
--   **Cost Awareness**: Gemini API quota and costs may apply.
-
-## Build Workflows
-
--   **build-debug.yml**: Automatically builds and uploads unsigned **debug APKs** on every push or pull request to `main`. Artifacts are retained for 7 days.
--   **build-release.yml**: Manually or automatically builds **signed release APKs** using secrets from the `ai-audit` or `production` environment.
+-   **Strict Safety Gates**:
+    -   **Max 1 file** changed per pass.
+    -   **Max 50 total lines** changed.
+    -   Changes are restricted to specific allowed source paths.
+    -   Unsafe paths (secrets, binaries, build artifacts) are automatically rejected and reverted.
+-   **Validation Gating**: Every edit is validated via a full build/test suite (`cargo test`, `assembleDebug`, etc.) before being committed.
+-   **Daily Branches**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`) for manual review.
+-   **Artifacts**: Raw AI output and the generated `git-diff.patch` are uploaded as job artifacts for every run, including failures.
