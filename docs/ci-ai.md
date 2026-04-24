@@ -21,27 +21,18 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 
 ## Workflow Behavior
 
--   **Triggers**: Workflows are triggered manually (`workflow_dispatch`) and on a scheduled 6-hour cron (`0 */6 * * *`).
--   **Iterative Sessions**: Each workflow run is a **30-minute AI session**. It performs repeated improvement passes within this budget.
-    -   **Active Phase**: New improvements are attempted for the first **25 minutes**.
-    -   **Cleanup Phase**: Final **5 minutes** are reserved for final validation and pushing accumulated changes.
--   **Philosophy**: Each run attempts focused, high-value improvements. successful passes are committed separately to maintain a clean history.
--   **Model Selection**: Manual runs allow choosing between `auto`, `flash`, `pro`, and `flash-lite`. Scheduled runs default to `flash`.
+-   **Triggers**: Workflows are triggered manually (\`workflow_dispatch\`) and on a scheduled 6-hour cron (\`0 */6 * * *\`).
+-   **Iterative Maintenance Sessions**: Each workflow run is a **30-minute persistent engineering session**. The AI agent directly modifies source files in the checked-out branch, prioritizing **meaningful progress over trivial churn**.
+    -   **Active Phase (25 mins)**: The agent iteratively Inspects, Plans, Edits, Validates, and Commits improvements.
+    -   **Strategy Rotation**: If a specific approach (e.g., correctness) produces no changes, the agent automatically rotates to another category (e.g., tests, clippy, error handling).
+    -   **Recovery Loop**: If validation fails, the error log is fed back to the agent for up to 2 recovery attempts before reverting.
+    -   **Cleanup Phase (5 mins)**: Reserved for final integration checks and pushing accumulated changes.
+-   **Commit Policy**: Every automated commit uses **Signed-off-by** for traceability and contribution provenance.
 -   **Strict Safety Gates**:
     -   **Max 3 files** (or 5 in deep mode) changed per pass.
     -   **Max 180 total lines** (or 300 in deep mode) changed.
     -   Changes are restricted to specific allowed source paths.
     -   Unsafe paths (secrets, binaries, build artifacts) are automatically rejected and reverted.
--   **Validation Gating**: Every pass is validated via its respective test suite before commitment. A final full build check is performed before the session ends.
--   **Daily Branches**: All improvements are committed to isolated **daily branches** (e.g., \`ai/rust-YYYY-MM-DD\`) for manual review.
--   **Artifacts**: Detailed artifacts for every pass (output, patch, status) are retained for 3 days for transparency.
+-   **Artifacts**: A comprehensive \`session-summary.md\` and detailed pass-by-pass artifacts are retained for 3 days.
 
-## Commit Policy
-
-AI agents and automated workflows must use **Signed-off-by** commits for traceability and contribution provenance. This ensures compliance with the Developer Certificate of Origin (DCO).
-
-### Standards
-- Every automated commit uses \`git commit --signoff\`.
-- Agents must include the signoff footer in any git instructions they generate.
-- If git identity is missing, agents will instruct the user to configure \`user.name\` and \`user.email\` before proceeding.
 
