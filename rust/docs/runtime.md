@@ -30,4 +30,4 @@ The daemon operates in a continuous tick loop (`TICK_MS = 16` milliseconds):
 - Logs are strictly routed as `LogEvent` items emitted through the `core::Effect::Log`.
 - Daemon events target `/data/local/tmp/coreshift/core.log`.
 - Addons write to `addons/addon_<ID>.log`.
-nk` silently degrades to writing to `/dev/null` instead of crashing. There is no `stdout` fallback for daemon log events.
+- **Fallback**: As verified in `runtime/logging.rs`, if the log file path cannot be opened (e.g., due to permissions), the `FileSink` emits a warning to `stderr` and silently degrades to writing to `/dev/null` instead of crashing. There is no `stdout` fallback for daemon log events.

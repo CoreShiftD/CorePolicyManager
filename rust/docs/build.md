@@ -28,11 +28,11 @@ This script resolves the target directories, runs `cargo build --release --targe
 
 ## Static vs Dynamic Realities
 
-While packaged as a `.so` file inside `jniLibs` (`libcoreshift.so`) by the build script, it is actually compiled via `cargo build --release` as a standard Rust executable binary. Android's packaging system permits loading raw executables if masqueraded as native shared libraries (due to `extractNativeLibs` packaging behavior), allowing the daemon to be launched out of the app's `lib/` directory via standard `Runtime.getRuntime().exec()` calls from the Java/Kotlin frontend.
+While packaged as a `.so` file inside `jniLibs` (`libcoreshift.so`) by the build script, it is actually compiled via `cargo build --release` as a standard Rust executable binary. Android's packaging system permits loading raw executables if masqueraded as native shared libraries (due to `extractNativeLibs` packaging behavior), which is intended to allow the daemon to be launched dynamically out of the app's `lib/` directory via standard `Runtime.getRuntime().exec()` calls from the Java/Kotlin frontend (planned feature).
 
 ### Deployment Compatibility Notes
 
-When launching the masqueraded `.so` executable via `Runtime.getRuntime().exec()`, consider the following caveats:
+When implementing the launcher to execute the masqueraded `.so` executable via `Runtime.getRuntime().exec()`, the following caveats apply:
 - **Android Version Caveats**: Starting with Android 10 (API 29), executing files directly from the application's home directory (e.g., `getFilesDir()`) is blocked due to W^X enforcement. However, executing from the `nativeLibraryDir` (`/data/app/.../lib/...`) is explicitly supported for packaged `jniLibs`.
 - **SELinux Caveats**: Android's `untrusted_app` SELinux context restricts background processes. The daemon inherits the parent app's SELinux domain unless explicitly launched via a root shell (`su`).
 - **`noexec` Mount Caveats**: The `/data/local/tmp` directory may be mounted with the `noexec` flag on some locked-down stock ROMs, preventing manual CLI execution via `adb shell`. If this occurs, binaries must be executed via `app_process` or from within the app's `nativeLibraryDir`.
