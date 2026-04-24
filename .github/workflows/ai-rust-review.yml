@@ -24,11 +24,6 @@ jobs:
     environment:
       name: ai-audit
 
-    env:
-      SESSION_SECONDS: 1800
-      PASS_SLEEP_SECONDS: 60
-      MAX_NO_CHANGE_PASSES: 3
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,11 +34,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
+
           git fetch origin main
           DAILY_BRANCH="ai/rust-$(date -u +'%Y-%m-%d')"
           echo "DAILY_BRANCH=$DAILY_BRANCH" >> "$GITHUB_ENV"
-          
+
           if git fetch origin "$DAILY_BRANCH"; then
             echo "Branch $DAILY_BRANCH exists. Updating."
             git checkout "$DAILY_BRANCH"
@@ -74,76 +69,42 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;28.0.13004108"
 
-      - name: AI Session Loop
+      - name: Verify Main Formatting
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          cd rust
+          if ! cargo fmt --check; then
+            echo "ERROR: Main branch Rust formatting is invalid. Run cargo fmt on main first."
+            exit 1
+          fi
+
+      - name: Gemini Review
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          START_TIME=$(date +%s)
-          NO_CHANGE_COUNT=0
+          if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
           mkdir -p reports/ai/rust
-          
-          while true; do
-            CURRENT_TIME=$(date +%s)
-            ELAPSED=$((CURRENT_TIME - START_TIME))
-            if [ $ELAPSED -ge $SESSION_SECONDS ]; then
-              echo "Session time limit reached ($ELAPSED seconds). Ending session."
-              break
-            fi
-            
-            REPORT_ID=$(date -u +'%H-%M-%S')
-            REPORT_FILE="reports/ai/rust/REPORT_$REPORT_ID.md"
-            
-            echo "Running Gemini Rust Review Pass ($REPORT_ID)..."
-            
-            if [ -n "$GEMINI_API_KEY" ]; then
-              echo "# Gemini Rust Review Report - $REPORT_ID" > "$REPORT_FILE"
-              echo "Session elapsed: $ELAPSED seconds" >> "$REPORT_FILE"
-              echo "Gemini invocation not fully implemented yet; report-only placeholder." >> "$REPORT_FILE"
-            else
-              echo "ERROR: GEMINI_API_KEY is missing."
-              exit 1
-            fi
-            
-            # Validation
-            echo "Validating Rust core..."
-            cd rust
-            cargo fmt --check
-            cargo check
-            # cargo test (Skipped in loop to save time, run once at end)
-            cd ..
-            
-            # Check for changes
-            git add "$REPORT_FILE"
-            if git diff --staged --quiet; then
-              echo "No changes in this pass."
-              NO_CHANGE_COUNT=$((NO_CHANGE_COUNT + 1))
-            else
-              echo "Pass produced a new report."
-              git commit -m "AI(rust): add scheduled Gemini audit report $REPORT_ID"
-              NO_CHANGE_COUNT=0
-            fi
-            
-            if [ $NO_CHANGE_COUNT -ge $MAX_NO_CHANGE_PASSES ]; then
-              echo "Reached $MAX_NO_CHANGE_PASSES consecutive passes with no changes. Ending session."
-              break
-            fi
-            
-            echo "Sleeping for $PASS_SLEEP_SECONDS seconds..."
-            sleep $PASS_SLEEP_SECONDS
-          done
+          REPORT_ID=$(date -u +'%Y-%m-%d-%H-%M')
+          REPORT_FILE="reports/ai/rust/report-$REPORT_ID.md"
 
-      - name: Final Validation
+          echo "# Gemini Rust Review Report - $REPORT_ID" > "$REPORT_FILE"
+          echo "Gemini invocation not fully implemented yet; report-only placeholder." >> "$REPORT_FILE"
+          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
+
+      - name: Validate (Rust)
         if: env.REBASE_FAILED != 'true'
         run: |
           cd rust
+          cargo fmt --check
+          cargo check
           cargo test
           cargo clippy --all-targets --all-features -- -D warnings
-          
+
           SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           export ANDROID_NDK_HOME="$SDK_ROOT/ndk/28.0.13004108"
           export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          
+
           cd ..
           bash -n scripts/build-rust-android.sh
           ./scripts/build-rust-android.sh
@@ -151,14 +112,16 @@ jobs:
       - name: Handle Conflict
         if: env.REBASE_FAILED == 'true'
         run: |
-          echo "# Rebase Conflict Report" > CONFLICT.md
-          echo "Failed to rebase $DAILY_BRANCH onto origin/main. Manual resolution required." >> CONFLICT.md
-          git add CONFLICT.md
+          mkdir -p reports/ai/rust
+          CONFLICT_FILE="reports/ai/rust/conflict-$(date -u +'%Y-%m-%d-%H-%M').md"
+          echo "# Rebase Conflict Report" > "$CONFLICT_FILE"
+          echo "Failed to rebase $DAILY_BRANCH onto origin/main. Manual resolution required." >> "$CONFLICT_FILE"
+          git add "$CONFLICT_FILE"
           git commit -m "AI(rust): report rebase conflict"
           git push origin "$DAILY_BRANCH"
           exit 0
 
-      - name: Push Daily Branch
+      - name: Commit and Push (Strict Guard)
         if: env.REBASE_FAILED != 'true'
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -166,9 +129,12 @@ jobs:
             echo "ERROR: Direct push to main detected. Aborting."
             exit 1
           fi
-          
-          if [[ "$CURRENT_BRANCH" == ai/rust-* ]]; then
-            git push origin "$CURRENT_BRANCH"
-          else
-            echo "Not on a daily branch. Skipping push."
+
+          git add "$REPORT_FILE"
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            exit 0
           fi
+
+          git commit -m "AI(rust): add scheduled Gemini audit report"
+          git push origin "$CURRENT_BRANCH"

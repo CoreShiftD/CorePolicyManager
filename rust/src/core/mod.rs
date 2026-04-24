@@ -144,10 +144,13 @@ pub enum LogEvent {
         reason: String,
         backoff_ms: u64,
     },
-    
+
     // Legacy/Generic
     Generic(String),
-    Error { id: u64, err: String },
+    Error {
+        id: u64,
+        err: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -379,14 +382,38 @@ pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
         Intent::PackagesChanged => {
             vec![Action::PackagesChanged]
         }
-        Intent::SystemRequest { request_id, kind, payload } => {
-            vec![Action::SystemRequest { request_id, kind, payload }]
+        Intent::SystemRequest {
+            request_id,
+            kind,
+            payload,
+        } => {
+            vec![Action::SystemRequest {
+                request_id,
+                kind,
+                payload,
+            }]
         }
-        Intent::AddonTask { addon_id, key, payload } => {
-            vec![Action::AddonTask { addon_id, key, payload }]
+        Intent::AddonTask {
+            addon_id,
+            key,
+            payload,
+        } => {
+            vec![Action::AddonTask {
+                addon_id,
+                key,
+                payload,
+            }]
         }
-        Intent::AddonLog { addon_id, level, msg } => {
-            vec![Action::AddonLog { addon_id, level, msg }]
+        Intent::AddonLog {
+            addon_id,
+            level,
+            msg,
+        } => {
+            vec![Action::AddonLog {
+                addon_id,
+                level,
+                msg,
+            }]
         }
     }
 }

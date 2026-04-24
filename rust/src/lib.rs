@@ -8,8 +8,8 @@ pub mod mid_level;
 pub mod arena;
 pub mod core;
 pub mod high_level;
-pub mod runtime;
 pub mod paths;
+pub mod runtime;
 
 #[cfg(test)]
 mod tests;
@@ -49,7 +49,9 @@ impl TraceStore {
     pub fn insert(&mut self, id: crate::core::CauseId, parent: Option<crate::core::CauseId>) {
         self.parents.insert(id, parent);
         self.order.push_back(id);
-        if self.order.len() > 10_000 && let Some(old_id) = self.order.pop_front() {
+        if self.order.len() > 10_000
+            && let Some(old_id) = self.order.pop_front()
+        {
             self.parents.remove(&old_id);
         }
     }
@@ -75,8 +77,14 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     // Register signal handlers
     unsafe {
-        libc::signal(libc::SIGTERM, handle_signal as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGINT, handle_signal as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            handle_signal as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            handle_signal as *const () as libc::sighandler_t,
+        );
     }
 
     use crate::core::{Core, ExecutionState};
@@ -160,23 +168,26 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     if config.enable_warmup {
         addons.push((
-            Box::new(PreloadAddon::new(crate::high_level::addons::preload::PreloadConfig::default())),
+            Box::new(PreloadAddon::new(
+                crate::high_level::addons::preload::PreloadConfig::default(),
+            )),
             AddonSpec {
                 id: 102,
-                capability: CapabilityToken::allow_all(), 
+                capability: CapabilityToken::allow_all(),
                 max_actions_per_tick: 100,
             },
             0,
         ));
     }
 
-    let mut effect_executor =
-        crate::runtime::EffectExecutor::new(reactor);
+    let mut effect_executor = crate::runtime::EffectExecutor::new(reactor);
 
     let _ = effect_executor.apply(crate::core::Effect::Log {
         owner: crate::core::CORE_OWNER,
         level: crate::core::LogLevel::Info,
-        event: crate::core::LogEvent::Generic("daemon start version=0.1.0 git=a472b4f log_schema=structured_v2".to_string()),
+        event: crate::core::LogEvent::Generic(
+            "daemon start version=0.1.0 git=a472b4f log_schema=structured_v2".to_string(),
+        ),
     });
 
     // Load log level from system property if possible (placeholder for Android)
@@ -193,7 +204,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut ipc = IpcModule::new(ipc_fd, ipc_token);
 
     let mut inotify_fd_opt = None;
-    if config.enable_warmup && let Ok(fd_obj) = effect_executor.reactor.setup_inotify() {
+    if config.enable_warmup
+        && let Ok(fd_obj) = effect_executor.reactor.setup_inotify()
+    {
         let inotify_fd = fd_obj.raw();
 
         let cgroup_path = std::ffi::CString::new("/dev/cpuset/top-app/cgroup.procs").unwrap();
@@ -232,14 +245,18 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut next_events = Vec::new();
 
     let mut record_file = if let Some(p) = &config.record_path {
-        Some(std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)
-            .map_err(|e| crate::low_level::spawn::SysError::sys(
-                e.raw_os_error().unwrap_or(0),
-                "open record file",
-            ))?)
+        Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .map_err(|e| {
+                    crate::low_level::spawn::SysError::sys(
+                        e.raw_os_error().unwrap_or(0),
+                        "open record file",
+                    )
+                })?,
+        )
     } else {
         None
     };
@@ -258,7 +275,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
         // Update metrics
         state.metrics.active_clients = ipc.clients.len() as u32;
-        
+
         let mut sys_events = Vec::new();
         for _ in 0..ticks {
             sys_events.push(crate::core::Event::TimeAdvanced(TICK_MS));
@@ -282,21 +299,29 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 let _ = effect_executor.apply(crate::core::Effect::Log {
                     owner: crate::core::CORE_OWNER,
                     level: crate::core::LogLevel::Error,
-                    event: crate::core::LogEvent::Error { id: 0, err: format!("reactor wait failed: {}", e) },
+                    event: crate::core::LogEvent::Error {
+                        id: 0,
+                        err: format!("reactor wait failed: {}", e),
+                    },
                 });
-                
+
                 if reactor_failure_count >= 10 {
                     match Reactor::new() {
                         Ok(new_reactor) => {
                             effect_executor.reactor = new_reactor;
-                            let _ = effect_executor.reactor.add_with_token(ipc.fd.as_raw_fd(), ipc_token, true, false);
+                            let _ = effect_executor.reactor.add_with_token(
+                                ipc.fd.as_raw_fd(),
+                                ipc_token,
+                                true,
+                                false,
+                            );
                             ipc.clients.clear();
                             ipc.client_tokens.clear();
                             reactor_failure_count = 0;
                             state.metrics.restart_count += 1;
                         }
                         Err(_) => {
-                             std::thread::sleep(std::time::Duration::from_millis(100));
+                            std::thread::sleep(std::time::Duration::from_millis(100));
                         }
                     }
                 }
@@ -310,8 +335,14 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         state.metrics.queue_depth = queue_before as u32;
 
         for conn in ipc.clients.values() {
-            state.metrics.peak_read_buf_kb = state.metrics.peak_read_buf_kb.max((conn.read_buf.len() / 1024) as u32);
-            state.metrics.peak_write_buf_kb = state.metrics.peak_write_buf_kb.max((conn.write_buf.len() / 1024) as u32);
+            state.metrics.peak_read_buf_kb = state
+                .metrics
+                .peak_read_buf_kb
+                .max((conn.read_buf.len() / 1024) as u32);
+            state.metrics.peak_write_buf_kb = state
+                .metrics
+                .peak_write_buf_kb
+                .max((conn.write_buf.len() / 1024) as u32);
         }
 
         // Phase 1: Collect
@@ -368,7 +399,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
             let mut addon_reqs = Vec::new();
             for (addon, spec, error_count) in &mut addons {
-                if *error_count >= 10 { continue; }
+                if *error_count >= 10 {
+                    continue;
+                }
                 let reqs = addon.on_reactor_event(&state, &rev);
                 let count = std::cmp::min(reqs.len(), spec.max_actions_per_tick as usize);
                 for mut req in reqs.into_iter().take(count) {
@@ -485,7 +518,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             {
                                 for pid_str in cgroup_content.split_whitespace() {
                                     if let Ok(pid) = pid_str.parse::<i32>() {
-                                        sys_events.push(crate::core::Event::ForegroundChanged { pid });
+                                        sys_events
+                                            .push(crate::core::Event::ForegroundChanged { pid });
                                     }
                                 }
                             }
@@ -510,7 +544,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
                     // Feed core events to addons
                     for (addon, spec, error_count) in &mut addons {
-                        if *error_count >= 10 { continue; }
+                        if *error_count >= 10 {
+                            continue;
+                        }
                         let reqs = addon.on_core_event(&state, &ev);
                         for mut req in reqs {
                             let cause = crate::core::CauseId(next_action_id);
@@ -521,17 +557,20 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             }
                             req.cause = cause;
                             req.principal = crate::high_level::identity::Principal::Addon(spec.id);
-                            
+
                             if crate::core::validation::validate_request(&req, &state).is_ok() {
                                 let actions = crate::core::expand_intent(req.intent, state.clock);
                                 for action in actions {
                                     if capabilities.allows(&req.principal, action.kind()) {
-                                        collected_actions.push((action, crate::core::ActionMeta {
-                                            id: req.cause,
-                                            parent: Some(req.cause),
-                                            source: req.principal.clone(),
-                                            reply_to: None,
-                                        }));
+                                        collected_actions.push((
+                                            action,
+                                            crate::core::ActionMeta {
+                                                id: req.cause,
+                                                parent: Some(req.cause),
+                                                source: req.principal.clone(),
+                                                reply_to: None,
+                                            },
+                                        ));
                                     }
                                 }
                             }
@@ -559,7 +598,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             if !collected_actions.is_empty() {
                 let current_actions = std::mem::take(&mut collected_actions);
                 for (action, meta) in current_actions {
-                    if !capabilities.allows(&meta.source, action.kind()) { continue; }
+                    if !capabilities.allows(&meta.source, action.kind()) {
+                        continue;
+                    }
 
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(meta.id));
@@ -570,10 +611,13 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         source: meta.source.clone(),
                         reply_to: meta.reply_to,
                     };
-                    if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                        action,
-                        meta: new_meta,
-                    }, &mut state) {
+                    if let Some(ev) = scheduler.enqueue(
+                        crate::core::RoutedAction {
+                            action,
+                            meta: new_meta,
+                        },
+                        &mut state,
+                    ) {
                         sys_events.push(ev);
                     }
                     next_action_id += 1;
@@ -595,7 +639,10 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 let _ = effect_executor.apply(crate::core::Effect::Log {
                     owner: crate::core::CORE_OWNER,
                     level: crate::core::LogLevel::Info,
-                    event: crate::core::LogEvent::Generic(format!("log verbosity changed level={:?}", new_verbosity)),
+                    event: crate::core::LogEvent::Generic(format!(
+                        "log verbosity changed level={:?}",
+                        new_verbosity
+                    )),
                 });
                 effect_executor.log_router.verbosity = new_verbosity;
             }
@@ -622,7 +669,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     .or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;
-                    continue; 
+                    continue;
                 }
                 *count += 1;
 
@@ -631,7 +678,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
                 if let crate::core::Action::HandleAddonFailure { addon_id, .. } = routed.action {
                     for (_, spec, error_count) in &mut addons {
-                        if spec.id == addon_id { *error_count += 1; }
+                        if spec.id == addon_id {
+                            *error_count += 1;
+                        }
                     }
                 }
 
@@ -641,7 +690,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     crate::core::Action::AddonTask { payload, .. } => payload.len(),
                     _ => 0,
                 };
-                
+
                 let log_id = match &routed.action {
                     crate::core::Action::Submit { id, .. } => Some(*id),
                     crate::core::Action::SystemRequest { request_id, .. } => Some(*request_id),
@@ -701,15 +750,18 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 for action in new_actions {
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(routed.meta.id));
-                    if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                        action,
-                        meta: crate::core::ActionMeta {
-                            id: next_id,
-                            parent: Some(routed.meta.id),
-                            source: routed.meta.source.clone(),
-                            reply_to: routed.meta.reply_to,
+                    if let Some(ev) = scheduler.enqueue(
+                        crate::core::RoutedAction {
+                            action,
+                            meta: crate::core::ActionMeta {
+                                id: next_id,
+                                parent: Some(routed.meta.id),
+                                source: routed.meta.source.clone(),
+                                reply_to: routed.meta.reply_to,
+                            },
                         },
-                    }, &mut state) {
+                        &mut state,
+                    ) {
                         sys_events.push(ev);
                     }
                     next_action_id += 1;
@@ -723,18 +775,25 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         let current_events = std::mem::take(&mut sys_events);
                         for ev in current_events {
                             if let Some(f) = &mut record_file {
-                                let _ = bincode::serialize_into(f, &crate::core::replay::ReplayInput::Event(ev.clone()));
+                                let _ = bincode::serialize_into(
+                                    f,
+                                    &crate::core::replay::ReplayInput::Event(ev.clone()),
+                                );
                             }
                             let sys_actions = core.dispatcher.dispatch_event(&state, &ev);
                             for action in sys_actions {
                                 let cause = crate::core::CauseId(next_action_id);
                                 next_action_id += 1;
                                 trace_store.insert(cause, None);
-                                collected_actions.push((action, crate::core::ActionMeta {
-                                        id: cause, parent: None,
+                                collected_actions.push((
+                                    action,
+                                    crate::core::ActionMeta {
+                                        id: cause,
+                                        parent: None,
                                         source: crate::high_level::identity::Principal::System,
                                         reply_to: None,
-                                }));
+                                    },
+                                ));
                             }
                         }
                     }
@@ -742,18 +801,25 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     if !collected_actions.is_empty() {
                         let current_actions = std::mem::take(&mut collected_actions);
                         for (action, meta) in current_actions {
-                            if !capabilities.allows(&meta.source, action.kind()) { continue; }
+                            if !capabilities.allows(&meta.source, action.kind()) {
+                                continue;
+                            }
                             let next_id = crate::core::CauseId(next_action_id);
                             next_action_id += 1;
                             trace_store.insert(next_id, Some(meta.id));
 
-                            if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                                action,
-                                meta: crate::core::ActionMeta {
-                                    id: next_id, parent: Some(meta.id),
-                                    source: meta.source.clone(), reply_to: meta.reply_to,
+                            if let Some(ev) = scheduler.enqueue(
+                                crate::core::RoutedAction {
+                                    action,
+                                    meta: crate::core::ActionMeta {
+                                        id: next_id,
+                                        parent: Some(meta.id),
+                                        source: meta.source.clone(),
+                                        reply_to: meta.reply_to,
+                                    },
                                 },
-                            }, &mut state) {
+                                &mut state,
+                            ) {
                                 sys_events.push(ev);
                             }
                         }
@@ -761,7 +827,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
             }
 
-            if !made_progress { break; }
+            if !made_progress {
+                break;
+            }
         }
 
         if tick_counter.is_multiple_of(640) {
@@ -783,7 +851,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         next_events.clear();
 
         let tick_duration_us = t0.elapsed().as_micros() as u64;
-        state.metrics.avg_tick_duration_us = (state.metrics.avg_tick_duration_us * 7 + tick_duration_us as u32) / 8;
+        state.metrics.avg_tick_duration_us =
+            (state.metrics.avg_tick_duration_us * 7 + tick_duration_us as u32) / 8;
 
         let _ = effect_executor.apply(crate::core::Effect::Log {
             owner: crate::core::CORE_OWNER,
@@ -910,15 +979,18 @@ pub fn run_replay(path: &str) -> u64 {
             for action in actions {
                 let next_id = crate::core::CauseId(next_action_id);
                 trace_store.insert(next_id, None);
-                if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                    action,
-                    meta: crate::core::ActionMeta {
-                        id: next_id,
-                        parent: None,
-                        source: req.principal.clone(),
-                        reply_to: req.client_id,
+                if let Some(ev) = scheduler.enqueue(
+                    crate::core::RoutedAction {
+                        action,
+                        meta: crate::core::ActionMeta {
+                            id: next_id,
+                            parent: None,
+                            source: req.principal.clone(),
+                            reply_to: req.client_id,
+                        },
                     },
-                }, &mut state) {
+                    &mut state,
+                ) {
                     tick_events.push(ev);
                 }
                 next_action_id += 1;
@@ -942,15 +1014,18 @@ pub fn run_replay(path: &str) -> u64 {
                 for action in current_actions {
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, None);
-                    if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                        action,
-                        meta: crate::core::ActionMeta {
-                            id: next_id,
-                            parent: None,
-                            source: crate::high_level::identity::Principal::System,
-                            reply_to: None,
+                    if let Some(ev) = scheduler.enqueue(
+                        crate::core::RoutedAction {
+                            action,
+                            meta: crate::core::ActionMeta {
+                                id: next_id,
+                                parent: None,
+                                source: crate::high_level::identity::Principal::System,
+                                reply_to: None,
+                            },
                         },
-                    }, &mut state) {
+                        &mut state,
+                    ) {
                         tick_events.push(ev);
                     }
                     next_action_id += 1;
@@ -969,10 +1044,12 @@ pub fn run_replay(path: &str) -> u64 {
             let mut made_progress = false;
 
             while let Some(routed) = scheduler.pop_next() {
-                let count = per_source_count.entry(routed.meta.source.clone()).or_insert(0);
+                let count = per_source_count
+                    .entry(routed.meta.source.clone())
+                    .or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;
-                    continue; 
+                    continue;
                 }
                 *count += 1;
                 tick_actions_processed += 1;
@@ -997,15 +1074,18 @@ pub fn run_replay(path: &str) -> u64 {
                 for action in new_actions {
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(routed.meta.id));
-                    if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                        action,
-                        meta: crate::core::ActionMeta {
-                            id: next_id,
-                            parent: Some(routed.meta.id),
-                            source: routed.meta.source.clone(),
-                            reply_to: routed.meta.reply_to,
+                    if let Some(ev) = scheduler.enqueue(
+                        crate::core::RoutedAction {
+                            action,
+                            meta: crate::core::ActionMeta {
+                                id: next_id,
+                                parent: Some(routed.meta.id),
+                                source: routed.meta.source.clone(),
+                                reply_to: routed.meta.reply_to,
+                            },
                         },
-                    }, &mut state) {
+                        &mut state,
+                    ) {
                         tick_events.push(ev);
                     }
                     next_action_id += 1;
@@ -1030,15 +1110,18 @@ pub fn run_replay(path: &str) -> u64 {
                         for action in current_actions {
                             let next_id = crate::core::CauseId(next_action_id);
                             trace_store.insert(next_id, None);
-                            if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
-                                action,
-                                meta: crate::core::ActionMeta {
-                                    id: next_id,
-                                    parent: None,
-                                    source: crate::high_level::identity::Principal::System,
-                                    reply_to: None,
+                            if let Some(ev) = scheduler.enqueue(
+                                crate::core::RoutedAction {
+                                    action,
+                                    meta: crate::core::ActionMeta {
+                                        id: next_id,
+                                        parent: None,
+                                        source: crate::high_level::identity::Principal::System,
+                                        reply_to: None,
+                                    },
                                 },
-                            }, &mut state) {
+                                &mut state,
+                            ) {
                                 tick_events.push(ev);
                             }
                             next_action_id += 1;
@@ -1047,15 +1130,29 @@ pub fn run_replay(path: &str) -> u64 {
                 }
             }
 
-            if !made_progress { break; }
+            if !made_progress {
+                break;
+            }
         }
 
         if let Some(expected) = expected_hash {
             let actual = state.hash;
-            assert_eq!(actual, expected.hash, "Determinism violation: state hash diverged at tick {}", tick_idx);
+            assert_eq!(
+                actual, expected.hash,
+                "Determinism violation: state hash diverged at tick {}",
+                tick_idx
+            );
             if expected.actions_processed > 0 || expected.dropped_actions > 0 {
-                assert_eq!(tick_actions_processed, expected.actions_processed, "Determinism violation: actions processed diverged at tick {}", tick_idx);
-                assert_eq!(tick_dropped_actions, expected.dropped_actions, "Determinism violation: dropped actions diverged at tick {}", tick_idx);
+                assert_eq!(
+                    tick_actions_processed, expected.actions_processed,
+                    "Determinism violation: actions processed diverged at tick {}",
+                    tick_idx
+                );
+                assert_eq!(
+                    tick_dropped_actions, expected.dropped_actions,
+                    "Determinism violation: dropped actions diverged at tick {}",
+                    tick_idx
+                );
             }
             tick_idx += 1;
         }

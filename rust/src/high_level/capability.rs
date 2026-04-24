@@ -56,7 +56,11 @@ impl CapabilityRegistry {
         self.map.insert(uid, token);
     }
 
-    pub fn allows(&self, principal: &crate::high_level::identity::Principal, kind: crate::core::ActionKind) -> bool {
+    pub fn allows(
+        &self,
+        principal: &crate::high_level::identity::Principal,
+        kind: crate::core::ActionKind,
+    ) -> bool {
         let uid = match principal {
             crate::high_level::identity::Principal::System => 0,
             crate::high_level::identity::Principal::User(u) => *u,

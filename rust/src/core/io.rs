@@ -36,10 +36,7 @@ impl Module for IoModule {
                     stream: IoStream::Stdin,
                 });
             }
-            Event::IoReady {
-                io,
-                ..
-            } => {
+            Event::IoReady { io, .. } => {
                 if let Some(job) = state.job_by_io(*io) {
                     actions.push(Action::SetJobIoState {
                         id: job.id,

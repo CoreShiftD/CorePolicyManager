@@ -39,21 +39,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Sanitize Inputs
+        run: |
+          FILENAME="${{ github.event.inputs.workflow_filename }}"
+          if [[ ! "$FILENAME" =~ ^[a-z0-9_-]+$ ]]; then
+            echo "ERROR: Invalid workflow_filename. Use only a-z, 0-9, _ and -."
+            exit 1
+          fi
+
       - name: Create Factory Branch from Fresh Main
         run: |
           git fetch origin main
           git checkout main
           git reset --hard origin/main
-          
+
           BRANCH_NAME="ai/workflow-factory-${{ github.run_id }}"
           git checkout -b "$BRANCH_NAME"
-          
+
           echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
           echo "Target Branch: $BRANCH_NAME"
 
       - name: Generate Workflow File
         run: |
-          cat <<EOF > .github/workflows/${{ github.event.inputs.workflow_filename }}.yml
+          WORKFLOW_PATH=".github/workflows/${{ github.event.inputs.workflow_filename }}.yml"
+          echo "WORKFLOW_PATH=$WORKFLOW_PATH" >> "$GITHUB_ENV"
+
+          cat <<EOF > "$WORKFLOW_PATH"
           name: ${{ github.event.inputs.workflow_name }}
           on:
             workflow_dispatch:
@@ -82,8 +93,12 @@ jobs:
                     GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
                   run: |
                     if [ -z "\$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
-                    echo "Reviewing scope: ${{ github.event.inputs.scope_description }}"
-                    echo "Prompt: ${{ github.event.inputs.ai_prompt }}"
+                    mkdir -p reports/ai/generated
+                    REPORT_FILE="reports/ai/generated/\${{ github.event.inputs.workflow_filename }}-\$(date -u +'%Y-%m-%d-%H-%M').md"
+                    echo "# Gemini Review Pass" > "\$REPORT_FILE"
+                    echo "Reviewing scope: ${{ github.event.inputs.scope_description }}" >> "\$REPORT_FILE"
+                    echo "Prompt: ${{ github.event.inputs.ai_prompt }}" >> "\$REPORT_FILE"
+                    echo "REPORT_FILE=\$REPORT_FILE" >> "\$GITHUB_ENV"
                 - name: Validation
                   run: |
                     ${{ github.event.inputs.validation_commands }}
@@ -96,16 +111,18 @@ jobs:
                     fi
                     git config user.name "github-actions[bot]"
                     git config user.email "github-actions[bot]@users.noreply.github.com"
-                    git add .
-                    git commit -m "AI review pass (Gemini only)"
-                    git push origin "\$CURRENT_BRANCH"
+                    git add "\$REPORT_FILE"
+                    if git diff --staged --quiet; then
+                      echo "No report to commit."
+                    else
+                      git commit -m "AI: add generated review report"
+                      git push origin "\$CURRENT_BRANCH"
+                    fi
           EOF
 
       - name: Commit and Push (Strict Guard)
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Attempting to push branch: $CURRENT_BRANCH"
-          
           if [ "$CURRENT_BRANCH" == "main" ]; then
             echo "ERROR: Direct push to main detected. Aborting."
             exit 1
@@ -113,6 +130,6 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/${{ github.event.inputs.workflow_filename }}.yml
-          git commit -m "AI(workflows): create requested AI workflow (Gemini only)"
+          git add "$WORKFLOW_PATH"
+          git commit -m "AI(workflows): create requested AI workflow"
           git push origin "$CURRENT_BRANCH"

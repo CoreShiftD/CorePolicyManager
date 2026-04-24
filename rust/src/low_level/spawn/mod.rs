@@ -534,10 +534,7 @@ pub fn spawn(opts: SpawnOptions) -> Result<Output, SysError> {
     )
 }
 
-fn spawn_posix_internal(
-    job_id: u64,
-    opts: SpawnOptions,
-) -> Result<(pid_t, SpawnDrain), SysError> {
+fn spawn_posix_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, SpawnDrain), SysError> {
     let mut pipes = Pipes::new(
         opts.stdin.as_deref(),
         opts.capture_stdout,
@@ -760,10 +757,7 @@ fn spawn_posix_internal(
 
     let drain = crate::low_level::io::DrainState::new(
         job_id,
-        pipes
-            .stdin_w
-            .take()
-            .filter(|_| opts.stdin.is_some()),
+        pipes.stdin_w.take().filter(|_| opts.stdin.is_some()),
         opts.stdin,
         pipes.stdout_r.take(),
         pipes.stderr_r.take(),
@@ -774,10 +768,7 @@ fn spawn_posix_internal(
     Ok((pid, drain))
 }
 
-fn spawn_fork_internal(
-    job_id: u64,
-    opts: SpawnOptions,
-) -> Result<(pid_t, SpawnDrain), SysError> {
+fn spawn_fork_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, SpawnDrain), SysError> {
     let mut pipes = Pipes::new(
         opts.stdin.as_deref(),
         opts.capture_stdout,
@@ -892,10 +883,7 @@ fn spawn_fork_internal(
 
     let drain = crate::low_level::io::DrainState::new(
         job_id,
-        pipes
-            .stdin_w
-            .take()
-            .filter(|_| opts.stdin.is_some()),
+        pipes.stdin_w.take().filter(|_| opts.stdin.is_some()),
         opts.stdin,
         pipes.stdout_r.take(),
         pipes.stderr_r.take(),

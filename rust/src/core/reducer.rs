@@ -45,25 +45,50 @@ impl Reducer for JobReducer {
     fn apply(&self, ctx: &mut ReducerCtx, action: &Action, effects: &mut Vec<Effect>) {
         let core = &mut ctx.core;
         match action {
-            Action::Submit { id, owner, job: job_req } => {
+            Action::Submit {
+                id,
+                owner,
+                job: job_req,
+            } => {
                 let policy = if job_req.command.first().map(|s| s.as_str()) == Some("dumpsys") {
-                    crate::core::ExecPolicy { timeout_ms: Some(3000), kill_grace_ms: 500, cancel: crate::core::CancelPolicy::Kill }
+                    crate::core::ExecPolicy {
+                        timeout_ms: Some(3000),
+                        kill_grace_ms: 500,
+                        cancel: crate::core::CancelPolicy::Kill,
+                    }
                 } else {
-                    crate::core::ExecPolicy { timeout_ms: Some(1000), kill_grace_ms: 300, cancel: crate::core::CancelPolicy::Kill }
+                    crate::core::ExecPolicy {
+                        timeout_ms: Some(1000),
+                        kill_grace_ms: 300,
+                        cancel: crate::core::CancelPolicy::Kill,
+                    }
                 };
                 let exec = crate::core::ExecSpec {
-                    argv: job_req.command.clone(), stdin: None, capture_stdout: true, capture_stderr: true, max_output: 1024 * 1024,
+                    argv: job_req.command.clone(),
+                    stdin: None,
+                    capture_stdout: true,
+                    capture_stderr: true,
+                    max_output: 1024 * 1024,
                 };
 
                 core.insert_job(*id, *owner, exec, policy);
             }
-            Action::SetLifecycle { id, state: lifecycle_state } => {
+            Action::SetLifecycle {
+                id,
+                state: lifecycle_state,
+            } => {
                 if let Some(h) = core.job_handle(*id) {
                     let old_job = core.job(h).clone();
                     if old_job.lifecycle != *lifecycle_state {
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).lifecycle = *lifecycle_state;
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                 }
             }
@@ -72,9 +97,15 @@ impl Reducer for JobReducer {
                 if let Some(h) = core.job_handle(*id) {
                     let old_job = core.job(h).clone();
                     if old_job.lifecycle != JobLifecycle::Finished {
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).lifecycle = JobLifecycle::Finished;
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                 }
             }
@@ -85,9 +116,15 @@ impl Reducer for JobReducer {
                 if let Some(h) = core.job_handle(*id) {
                     let old_job = core.job(h).clone();
                     if old_job.process != Some(*process) {
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).process = Some(*process);
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                     if let Some(old) = core.runtime(h).process {
                         core.remove_process_index(old);
@@ -100,9 +137,15 @@ impl Reducer for JobReducer {
                 if let Some(h) = core.job_handle(*id) {
                     let old_job = core.job(h).clone();
                     if old_job.io != Some(*io) {
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).io = Some(*io);
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                     if let Some(old) = core.runtime(h).io {
                         core.remove_io_index(old);
@@ -115,9 +158,15 @@ impl Reducer for JobReducer {
                 if let Some(h) = core.job_handle(*id) {
                     let old_job = core.job(h).clone();
                     if old_job.io_state != *state {
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).io_state = *state;
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                 }
             }
@@ -125,9 +174,15 @@ impl Reducer for JobReducer {
                 if let Some(h) = core.job_handle(*id) {
                     let old_job = core.job(h).clone();
                     if !old_job.timed_out {
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).timed_out = true;
-                        core.hash ^= crate::core::core_state::mix(*id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            *id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                 }
             }
@@ -137,11 +192,18 @@ impl Reducer for JobReducer {
             Action::StartProcess { id } => {
                 if let Some(h) = core.job_handle(*id) {
                     let job = core.job(h);
-                    effects.push(crate::core::Effect::StartProcess { id: *id, exec: job.exec.clone(), policy: job.policy.clone() });
+                    effects.push(crate::core::Effect::StartProcess {
+                        id: *id,
+                        exec: job.exec.clone(),
+                        policy: job.policy.clone(),
+                    });
                 }
             }
             Action::SignalProcess { process, signal } => {
-                effects.push(crate::core::Effect::KillProcess { process: *process, signal: *signal });
+                effects.push(crate::core::Effect::KillProcess {
+                    process: *process,
+                    signal: *signal,
+                });
             }
             Action::HandleProcessFailure { process, err } => {
                 if let Some(h) = core.job_by_process(*process) {
@@ -149,14 +211,23 @@ impl Reducer for JobReducer {
                     effects.push(crate::core::Effect::Log {
                         owner: core.job(h).owner,
                         level: crate::core::LogLevel::Error,
-                        event: crate::core::LogEvent::Error { id, err: err.clone() },
+                        event: crate::core::LogEvent::Error {
+                            id,
+                            err: err.clone(),
+                        },
                     });
 
                     let old_job = core.job(h).clone();
                     if old_job.process.is_some() {
-                        core.hash ^= crate::core::core_state::mix(id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         core.job_mut(h).process = None;
-                        core.hash ^= crate::core::core_state::mix(id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                 }
             }
@@ -166,16 +237,25 @@ impl Reducer for JobReducer {
                     effects.push(crate::core::Effect::Log {
                         owner: core.job(h).owner,
                         level: crate::core::LogLevel::Error,
-                        event: crate::core::LogEvent::Error { id, err: reason.clone() },
+                        event: crate::core::LogEvent::Error {
+                            id,
+                            err: reason.clone(),
+                        },
                     });
 
                     let old_job = core.job(h).clone();
                     if old_job.io.is_some() || old_job.io_state != JobIoState::Closed {
-                        core.hash ^= crate::core::core_state::mix(id, crate::core::core_state::hash_job(&old_job));
+                        core.hash ^= crate::core::core_state::mix(
+                            id,
+                            crate::core::core_state::hash_job(&old_job),
+                        );
                         let job_mut = core.job_mut(h);
                         job_mut.io = None;
                         job_mut.io_state = JobIoState::Closed;
-                        core.hash ^= crate::core::core_state::mix(id, crate::core::core_state::hash_job(core.job(h)));
+                        core.hash ^= crate::core::core_state::mix(
+                            id,
+                            crate::core::core_state::hash_job(core.job(h)),
+                        );
                     }
                 }
             }
@@ -210,7 +290,10 @@ impl Reducer for IoReducer {
                 });
             }
             Action::RemoveInterest { io, stream } => {
-                effects.push(crate::core::Effect::UnwatchStream { io: *io, stream: *stream });
+                effects.push(crate::core::Effect::UnwatchStream {
+                    io: *io,
+                    stream: *stream,
+                });
             }
             Action::PerformIo { io } => {
                 effects.push(crate::core::Effect::PerformIo { io: *io });
@@ -244,19 +327,19 @@ impl Reducer for TimeoutReducer {
                 deadline,
                 kill_grace_ms,
             } if !ts.timeouts.contains_key(id) => {
-                    let entry = crate::core::TimeoutEntry {
-                        id: *id,
-                        state: crate::core::TimeoutState::WaitingForDeadline,
-                        deadline: *deadline,
-                        kill_grace_ms: *kill_grace_ms,
-                    };
-                    let st_hash = match entry.state {
-                        crate::core::TimeoutState::WaitingForDeadline => 0,
-                        crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
-                    };
-                    ts.timeouts.insert(*id, entry);
-                    ts.hash ^= id.wrapping_mul(0x5BD1E995);
-                    ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(st_hash);
+                let entry = crate::core::TimeoutEntry {
+                    id: *id,
+                    state: crate::core::TimeoutState::WaitingForDeadline,
+                    deadline: *deadline,
+                    kill_grace_ms: *kill_grace_ms,
+                };
+                let st_hash = match entry.state {
+                    crate::core::TimeoutState::WaitingForDeadline => 0,
+                    crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
+                };
+                ts.timeouts.insert(*id, entry);
+                ts.hash ^= id.wrapping_mul(0x5BD1E995);
+                ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(st_hash);
             }
             Action::TrackTimeout { .. } => {}
             Action::UntrackTimeout { id } => {
@@ -274,18 +357,19 @@ impl Reducer for TimeoutReducer {
                 state: new_state,
             } => {
                 if let Some(entry) = ts.timeouts.get_mut(id)
-                    && entry.state != *new_state {
-                        let old_hash = match entry.state {
-                            crate::core::TimeoutState::WaitingForDeadline => 0,
-                            crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
-                        };
-                        let new_hash = match new_state {
-                            crate::core::TimeoutState::WaitingForDeadline => 0,
-                            crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
-                        };
-                        ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(old_hash);
-                        entry.state = new_state.clone();
-                        ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(new_hash);
+                    && entry.state != *new_state
+                {
+                    let old_hash = match entry.state {
+                        crate::core::TimeoutState::WaitingForDeadline => 0,
+                        crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
+                    };
+                    let new_hash = match new_state {
+                        crate::core::TimeoutState::WaitingForDeadline => 0,
+                        crate::core::TimeoutState::WaitingForKillGrace(_) => 1,
+                    };
+                    ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(old_hash);
+                    entry.state = new_state.clone();
+                    ts.hash ^= id.wrapping_mul(0x5BD1E995).wrapping_add(new_hash);
                 }
             }
             _ => {}
@@ -314,23 +398,58 @@ impl Reducer for AddonReducer {
 
     fn apply(&self, _ctx: &mut ReducerCtx, action: &Action, effects: &mut Vec<Effect>) {
         match action {
-            Action::AddonTask { addon_id, key, payload } => {
-                effects.push(Effect::AddonTask { addon_id: *addon_id, key: key.clone(), payload: payload.clone() });
+            Action::AddonTask {
+                addon_id,
+                key,
+                payload,
+            } => {
+                effects.push(Effect::AddonTask {
+                    addon_id: *addon_id,
+                    key: key.clone(),
+                    payload: payload.clone(),
+                });
             }
-            Action::AddonLog { addon_id, level, msg } => {
-                effects.push(Effect::AddonLog { addon_id: *addon_id, level: *level, msg: msg.clone() });
+            Action::AddonLog {
+                addon_id,
+                level,
+                msg,
+            } => {
+                effects.push(Effect::AddonLog {
+                    addon_id: *addon_id,
+                    level: *level,
+                    msg: msg.clone(),
+                });
             }
-            Action::AddonEvent { addon_id: _, key: _ } => {
+            Action::AddonEvent {
+                addon_id: _,
+                key: _,
+            } => {
                 // Generic notify, no effect yet
             }
-            Action::EmitLog { owner, level, event } => {
-                effects.push(Effect::Log { owner: *owner, level: *level, event: event.clone() });
+            Action::EmitLog {
+                owner,
+                level,
+                event,
+            } => {
+                effects.push(Effect::Log {
+                    owner: *owner,
+                    level: *level,
+                    event: event.clone(),
+                });
             }
-            Action::SystemRequest { request_id, kind, payload } => {
-                effects.push(Effect::SystemRequest { request_id: *request_id, kind: *kind, payload: payload.clone() });
+            Action::SystemRequest {
+                request_id,
+                kind,
+                payload,
+            } => {
+                effects.push(Effect::SystemRequest {
+                    request_id: *request_id,
+                    kind: *kind,
+                    payload: payload.clone(),
+                });
             }
             Action::HandleAddonFailure { addon_id, key, err } => {
-                 effects.push(Effect::Log {
+                effects.push(Effect::Log {
                     owner: *addon_id,
                     level: crate::core::LogLevel::Error,
                     event: crate::core::LogEvent::Error {
@@ -339,8 +458,12 @@ impl Reducer for AddonReducer {
                     },
                 });
             }
-            Action::HandleSystemFailure { request_id, kind, err } => {
-                 effects.push(Effect::Log {
+            Action::HandleSystemFailure {
+                request_id,
+                kind,
+                err,
+            } => {
+                effects.push(Effect::Log {
                     owner: crate::core::CORE_OWNER,
                     level: crate::core::LogLevel::Error,
                     event: crate::core::LogEvent::Error {
@@ -408,10 +531,11 @@ impl Reducer for ResultReducer {
                 rs.hash ^= id.wrapping_mul(0x1234567).wrapping_add(owner as u64);
                 if rs.result_order.len() > 100
                     && let Some(old_id) = rs.result_order.pop_front()
-                    && let Some(removed) = rs.results.remove(&old_id) {
-                        rs.hash ^= old_id
-                            .wrapping_mul(0x1234567)
-                            .wrapping_add(removed.owner as u64);
+                    && let Some(removed) = rs.results.remove(&old_id)
+                {
+                    rs.hash ^= old_id
+                        .wrapping_mul(0x1234567)
+                        .wrapping_add(removed.owner as u64);
                 }
             }
             Action::Rejected {
@@ -441,10 +565,11 @@ impl Reducer for ResultReducer {
                 rs.hash ^= id.wrapping_mul(0x1234567).wrapping_add(owner as u64);
                 if rs.result_order.len() > 100
                     && let Some(old_id) = rs.result_order.pop_front()
-                    && let Some(removed) = rs.results.remove(&old_id) {
-                        rs.hash ^= old_id
-                            .wrapping_mul(0x1234567)
-                            .wrapping_add(removed.owner as u64);
+                    && let Some(removed) = rs.results.remove(&old_id)
+                {
+                    rs.hash ^= old_id
+                        .wrapping_mul(0x1234567)
+                        .wrapping_add(removed.owner as u64);
                 }
             }
             _ => {}

@@ -58,10 +58,11 @@ impl Module for ProcessModule {
             Event::Tick => {
                 // Poll all running processes
                 for entry in state.timeouts() {
-                     if let Some(job) = state.job(entry.id)
-                         && let Some(process) = job.process {
-                             actions.push(Action::PollProcess { process });
-                     }
+                    if let Some(job) = state.job(entry.id)
+                        && let Some(process) = job.process
+                    {
+                        actions.push(Action::PollProcess { process });
+                    }
                 }
             }
             Event::ProcessSpawnFailed { id, err } => {

@@ -1,7 +1,7 @@
+use crate::core::Event;
+use crate::core::state_view::StateView;
 use crate::high_level::capability::CapabilityToken;
 use crate::low_level::reactor::Event as ReactorEvent;
-use crate::core::state_view::StateView;
-use crate::core::Event;
 
 pub struct AddonSpec {
     pub id: u32,
@@ -10,10 +10,18 @@ pub struct AddonSpec {
 }
 
 pub trait Addon {
-    fn on_reactor_event(&mut self, _state: &dyn StateView, _event: &ReactorEvent) -> Vec<crate::high_level::identity::Request> {
+    fn on_reactor_event(
+        &mut self,
+        _state: &dyn StateView,
+        _event: &ReactorEvent,
+    ) -> Vec<crate::high_level::identity::Request> {
         Vec::new()
     }
-    fn on_core_event(&mut self, _state: &dyn StateView, _event: &Event) -> Vec<crate::high_level::identity::Request> {
+    fn on_core_event(
+        &mut self,
+        _state: &dyn StateView,
+        _event: &Event,
+    ) -> Vec<crate::high_level::identity::Request> {
         Vec::new()
     }
 }

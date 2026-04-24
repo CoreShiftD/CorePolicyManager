@@ -81,24 +81,25 @@ impl Module for ResultModule {
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         if let Event::ProcessExited { process, status } = event
-            && let Some(job) = state.job_by_process(*process) {
-                // For now, assume process exits without explicit buffered IO completion.
-                // A proper design will receive IoDataReceived or the drain contents from runtime.
-                // We simply synthesize empty stdout/stderr if the drain parts aren't forwarded.
-                let result = crate::core::ExecResult {
-                    status: *status,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    timed_out: job.timed_out,
-                };
-                let was_submitted = job.lifecycle == crate::core::JobLifecycle::Submitted;
-                actions.push(Action::Finished {
-                    id: job.id,
-                    owner: job.owner,
-                    was_submitted,
-                    result: Ok(result),
-                });
-            }
+            && let Some(job) = state.job_by_process(*process)
+        {
+            // For now, assume process exits without explicit buffered IO completion.
+            // A proper design will receive IoDataReceived or the drain contents from runtime.
+            // We simply synthesize empty stdout/stderr if the drain parts aren't forwarded.
+            let result = crate::core::ExecResult {
+                status: *status,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                timed_out: job.timed_out,
+            };
+            let was_submitted = job.lifecycle == crate::core::JobLifecycle::Submitted;
+            actions.push(Action::Finished {
+                id: job.id,
+                owner: job.owner,
+                was_submitted,
+                result: Ok(result),
+            });
+        }
         actions
     }
 }

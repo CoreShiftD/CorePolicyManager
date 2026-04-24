@@ -1,7 +1,6 @@
 use crate::core::Intent;
 
-#[derive(Clone, Debug)]
-#[derive(PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Principal {
     System,
     User(u32),

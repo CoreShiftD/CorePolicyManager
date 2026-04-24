@@ -1,5 +1,5 @@
-use crate::high_level::identity::Request;
 use crate::core::Intent;
+use crate::high_level::identity::Request;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ErrorCode {

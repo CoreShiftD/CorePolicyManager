@@ -44,7 +44,7 @@ pub struct IpcModule {
 }
 
 impl IpcModule {
-    pub fn new(fd: Fd,  token: Token) -> Self {
+    pub fn new(fd: Fd, token: Token) -> Self {
         Self {
             fd,
             server_token: Some(token),
@@ -108,7 +108,7 @@ impl IpcModule {
             if let Ok(client_fd_obj) = Fd::new(client_fd, "accept4") {
                 let uid = match self.verify_peer_credentials(client_fd) {
                     Ok(u) => u,
-                    Err(_) => continue, 
+                    Err(_) => continue,
                 };
 
                 let token = match reactor.add(&client_fd_obj, true, true) {
@@ -137,7 +137,11 @@ impl IpcModule {
         }
     }
 
-    pub fn handle_event(&mut self, reactor: &mut crate::low_level::reactor::Reactor, event: &Event) -> Vec<WireMsg> {
+    pub fn handle_event(
+        &mut self,
+        reactor: &mut crate::low_level::reactor::Reactor,
+        event: &Event,
+    ) -> Vec<WireMsg> {
         if Some(event.token) == self.server_token && event.readable {
             self.accept_clients(reactor);
             return Vec::new();
@@ -155,7 +159,9 @@ impl IpcModule {
 
         let mut should_disconnect = false;
 
-        if event.readable && let Some(conn) = self.clients.get_mut(&client_id) {
+        if event.readable
+            && let Some(conn) = self.clients.get_mut(&client_id)
+        {
             let mut buf = [0u8; 4096];
             loop {
                 match conn.fd.read(buf.as_mut_ptr(), buf.len()) {
@@ -210,9 +216,7 @@ impl IpcModule {
                                 if !payload.is_empty() {
                                     let req_type = payload[0];
                                     let req = match req_type {
-                                        1 => {
-                                            serde_json::from_slice::<Command>(&payload[1..]).ok()
-                                        }
+                                        1 => serde_json::from_slice::<Command>(&payload[1..]).ok(),
                                         2 => {
                                             if payload.len() == 9 {
                                                 let mut id_buf = [0u8; 8];
@@ -237,7 +241,11 @@ impl IpcModule {
                                     };
 
                                     if let Some(cmd) = req {
-                                        return vec![WireMsg { client_id, command: cmd, uid: conn.uid }];
+                                        return vec![WireMsg {
+                                            client_id,
+                                            command: cmd,
+                                            uid: conn.uid,
+                                        }];
                                     } else {
                                         should_disconnect = true;
                                         break;
@@ -255,7 +263,10 @@ impl IpcModule {
             }
         }
 
-        if event.writable && !should_disconnect && let Some(conn) = self.clients.get_mut(&client_id) {
+        if event.writable
+            && !should_disconnect
+            && let Some(conn) = self.clients.get_mut(&client_id)
+        {
             while !conn.write_buf.is_empty() {
                 match conn.fd.write(conn.write_buf.as_ptr(), conn.write_buf.len()) {
                     Ok(0) => {

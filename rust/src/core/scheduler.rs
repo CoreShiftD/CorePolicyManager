@@ -32,7 +32,11 @@ impl Scheduler {
         }
     }
 
-    pub fn enqueue(&mut self, action: RoutedAction, state: &mut crate::core::ExecutionState) -> Option<Event> {
+    pub fn enqueue(
+        &mut self,
+        action: RoutedAction,
+        state: &mut crate::core::ExecutionState,
+    ) -> Option<Event> {
         let kind = action.action.kind();
         let kind_idx = kind as usize;
 
@@ -58,7 +62,7 @@ impl Scheduler {
             } else if !self.normal_queue.is_empty() && action_prio >= Priority::Normal {
                 evicted = self.normal_queue.pop_front();
             } else if !self.critical_queue.is_empty() && action_prio >= Priority::Critical {
-                 evicted = self.critical_queue.pop_front();
+                evicted = self.critical_queue.pop_front();
             }
 
             if let Some(ev) = evicted {
@@ -117,7 +121,7 @@ impl Scheduler {
                     return Some(routed);
                 }
             }
-            
+
             self.rr_index = (self.rr_index + 1) % schedule.len();
             self.rr_count = 0;
 
