@@ -76,37 +76,55 @@ pub struct ExecContext {
 }
 
 impl ExecContext {
-    pub fn new(argv: Vec<String>, env: Option<Vec<String>>, cwd: Option<String>) -> Self {
-        let mut c_argv: Vec<CString> = argv
-            .into_iter()
-            .filter_map(|s| CString::new(s).ok())
-            .collect();
-
-        if c_argv.is_empty() {
-            c_argv.push(CString::new("/bin/false").unwrap());
+    pub fn new(
+        argv: Vec<String>,
+        env: Option<Vec<String>>,
+        cwd: Option<String>,
+    ) -> Result<Self, crate::low_level::spawn::SysError> {
+        if argv.is_empty() {
+            return Err(crate::low_level::spawn::SysError::sys(
+                libc::EINVAL,
+                "exec argv empty",
+            ));
         }
 
+        let c_argv: Vec<CString> = argv
+            .into_iter()
+            .map(|s| {
+                CString::new(s).map_err(|_| {
+                    crate::low_level::spawn::SysError::sys(libc::EINVAL, "exec argv contains nul")
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
         let c_envp = match env {
-            Some(vars) => {
-                let e_vars: Vec<CString> = vars
-                    .into_iter()
-                    .filter_map(|s| CString::new(s).ok())
-                    .collect();
-                Some(e_vars)
-            }
+            Some(vars) => Some(
+                vars.into_iter()
+                    .map(|s| {
+                        CString::new(s).map_err(|_| {
+                            crate::low_level::spawn::SysError::sys(
+                                libc::EINVAL,
+                                "exec env contains nul",
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             None => None,
         };
 
         let c_cwd = match cwd {
-            Some(c) => CString::new(c).ok(),
+            Some(c) => Some(CString::new(c).map_err(|_| {
+                crate::low_level::spawn::SysError::sys(libc::EINVAL, "exec cwd contains nul")
+            })?),
             None => None,
         };
 
-        Self {
+        Ok(Self {
             argv: ExecArgv::Dynamic(c_argv),
             envp: c_envp,
             cwd: c_cwd,
-        }
+        })
     }
 
     pub fn get_argv_ptrs(&self) -> ArrayVec<*mut c_char, 64> {

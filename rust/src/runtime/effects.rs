@@ -180,7 +180,15 @@ impl EffectExecutor {
                 vec![]
             }
             Effect::StartProcess { id, exec, policy } => {
-                let ctx = ExecContext::new(exec.argv, None, None);
+                let ctx = match ExecContext::new(exec.argv, None, None) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        return vec![Event::ProcessSpawnFailed {
+                            id,
+                            err: format!("invalid_exec_context: {}", e),
+                        }];
+                    }
+                };
                 let stdin_buf = exec.stdin.map(|v| v.into_boxed_slice());
 
                 let is_group = false;
