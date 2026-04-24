@@ -1,7 +1,0 @@
-<resources>
-    <style name="Theme.CorePolicyManager" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/background_light</item>
-        <item name="android:windowContentTransitions">false</item>
-        <item name="android:windowDisablePreview">true</item>
-    </style>
-</resources>
