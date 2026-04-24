@@ -428,6 +428,23 @@ mod tests_internal {
     }
 
     #[test]
+    fn exec_context_rejects_empty_or_invalid_arguments() {
+        let empty = crate::low_level::sys::ExecContext::new(Vec::new(), None, None);
+        assert!(empty.is_err());
+
+        let invalid_argv =
+            crate::low_level::sys::ExecContext::new(vec!["bad\0argv".to_string()], None, None);
+        assert!(invalid_argv.is_err());
+
+        let invalid_env = crate::low_level::sys::ExecContext::new(
+            vec!["/system/bin/true".to_string()],
+            Some(vec!["BAD\0ENV=value".to_string()]),
+            None,
+        );
+        assert!(invalid_env.is_err());
+    }
+
+    #[test]
     fn test_ipc_oversized_packet() {
         use crate::low_level::reactor::{Fd, Reactor, Token};
         use crate::mid_level::ipc::{IpcModule, ReadState};
