@@ -52,3 +52,11 @@ The final packaged payloads are located at:
 
 ## CI Configuration
 The CI environment automatically installs the required Rust targets and uses the repo-local `rust/target` directory for deterministic builds.
+
+## Release Build Optimization
+
+The Android application is configured for production-ready packaging:
+- **Minification (R8)**: Enabled for release builds to reduce code size.
+- **Resource Shrinking**: Enabled to remove unused resources.
+- **ABI Filtering**: Restricted to `arm64-v8a` and `armeabi-v7a` to match the Rust daemon targets.
+- **Packaging Options**: Native libraries are packaged uncompressed (`useLegacyPackaging = false`) for improved performance on supported Android versions.

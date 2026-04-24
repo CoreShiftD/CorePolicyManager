@@ -118,7 +118,7 @@ jobs:
           chmod +x ./gradlew
           ./gradlew :app:assembleRelease --stacktrace --no-daemon
 
-      - name: Verify release signing
+      - name: Verify release signing and ABIs
         if: ${{ env.RELEASE_SIGNED == 'true' }}
         run: |
           APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
@@ -126,7 +126,34 @@ jobs:
             echo "No APK found to verify."
             exit 1
           fi
+          
+          echo "Verifying signing..."
           $ANDROID_HOME/build-tools/36.0.0/apksigner verify --verbose --print-certs "$APK"
+          
+          echo "Verifying ABIs..."
+          UNSUPPORTED_ABIS=$(unzip -l "$APK" | grep "lib/" | grep -vE "lib/(arm64-v8a|armeabi-v7a)/" || true)
+          if [ -n "$UNSUPPORTED_ABIS" ]; then
+            echo "ERROR: Unsupported ABIs found in APK:"
+            echo "$UNSUPPORTED_ABIS"
+            exit 1
+          fi
+          echo "ABI verification passed: Only arm64-v8a and armeabi-v7a detected."
+
+      - name: Build Size Report
+        run: |
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          echo "### Release APK Size Report" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- |" >> $GITHUB_STEP_SUMMARY
+          
+          APK_SIZE=$(du -h "$APK" | cut -f1)
+          echo "| Total APK | $APK_SIZE |" >> $GITHUB_STEP_SUMMARY
+          
+          # Native payload sizes
+          echo "#### Native Payloads" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          unzip -l "$APK" | grep "lib/" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Collect release APKs and set tag
         run: |
