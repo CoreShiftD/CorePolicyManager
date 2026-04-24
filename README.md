@@ -94,5 +94,7 @@ Current testing is concentrated on the following areas:
 ## Safety Notice
 CoreShift performs direct system calls and file I/O that may affect device stability. If the system detects repetitive failures, it is designed to enter a safe "Auto-Disabled" state to protect the host device.
 
+**AI Workflows**: GitHub Actions labeled with "AI" are automated review and report generators. They create isolated branches for manual inspection and **never** push directly to the `main` branch.
+
 ## License
 Private / In Development. All rights reserved.

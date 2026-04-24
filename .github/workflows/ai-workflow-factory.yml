@@ -31,17 +31,22 @@ jobs:
   create-workflow:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch origin/main
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
-      - name: Create Factory Branch
+      - name: Create Factory Branch from Fresh Main
         run: |
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          
           BRANCH_NAME="ai/workflow-factory-${{ github.run_id }}"
           git checkout -b "$BRANCH_NAME"
+          
           echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
+          echo "Target Branch: $BRANCH_NAME"
 
       - name: Generate Workflow File
         run: |
@@ -55,11 +60,18 @@ jobs:
             review:
               runs-on: ubuntu-latest
               steps:
-                - uses: actions/checkout@v4
-                - name: Setup Environment
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    fetch-depth: 0
+                - name: Create Review Branch from Fresh Main
                   run: |
-                    # Placeholder for dynamic toolchain setup
-                    echo "Setting up environment for: ${{ github.event.inputs.workflow_name }}"
+                    git fetch origin main
+                    git checkout main
+                    git reset --hard origin/main
+                    BRANCH_NAME="${{ github.event.inputs.branch_prefix }}\${{ github.run_id }}"
+                    git checkout -b "\$BRANCH_NAME"
+                    echo "BRANCH_NAME=\$BRANCH_NAME" >> "\$GITHUB_ENV"
                 - name: AI Review Step
                   run: |
                     echo "Reviewing scope: ${{ github.event.inputs.scope_description }}"
@@ -67,12 +79,32 @@ jobs:
                 - name: Validation
                   run: |
                     ${{ github.event.inputs.validation_commands }}
+                - name: Commit and Push (Strict Guard)
+                  run: |
+                    CURRENT_BRANCH=\$(git rev-parse --abbrev-ref HEAD)
+                    if [ "\$CURRENT_BRANCH" == "main" ]; then
+                      echo "ERROR: Direct push to main detected. Aborting."
+                      exit 1
+                    fi
+                    git config user.name "github-actions[bot]"
+                    git config user.email "github-actions[bot]@users.noreply.github.com"
+                    git add .
+                    git commit -m "AI review pass"
+                    git push origin "\$CURRENT_BRANCH"
           EOF
 
-      - name: Commit and Push
+      - name: Commit and Push (Strict Guard)
         run: |
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Attempting to push branch: $CURRENT_BRANCH"
+          
+          if [ "$CURRENT_BRANCH" == "main" ]; then
+            echo "ERROR: Direct push to main detected. Aborting."
+            exit 1
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/${{ github.event.inputs.workflow_filename }}.yml
           git commit -m "AI(workflows): create requested AI workflow"
-          git push origin "${{ env.BRANCH_NAME }}"
+          git push origin "$CURRENT_BRANCH"
