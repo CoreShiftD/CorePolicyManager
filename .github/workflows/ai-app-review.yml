@@ -88,6 +88,15 @@ jobs:
           echo "Placeholder: Real Gemini review output would go here." >> "$REPORT_FILE"
           echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
 
+      - name: Verify No Source Changes
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          if ! git diff --exit-code -- app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties; then
+            echo "ERROR: Unintended source changes detected in report-only workflow."
+            git diff
+            exit 1
+          fi
+
       - name: Validate (App)
         if: env.REBASE_FAILED != 'true'
         run: |
@@ -102,7 +111,7 @@ jobs:
           echo "Failed to rebase $DAILY_BRANCH onto origin/main. Manual resolution required." >> CONFLICT.md
           git add CONFLICT.md
           git commit -m "AI(app): report rebase conflict"
-          git push origin "$DAILY_BRANCH" --force
+          git push origin "$DAILY_BRANCH"
           exit 0
 
       - name: Commit and Push (Strict Guard)
@@ -114,7 +123,7 @@ jobs:
             exit 1
           fi
           
-          git add .
+          git add "$REPORT_FILE"
           if git diff --staged --quiet; then
             echo "No changes to commit."
             exit 0

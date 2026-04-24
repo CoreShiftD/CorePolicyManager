@@ -66,14 +66,6 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;28.0.13004108"
 
-      - name: Collect Rust Scope
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          find rust/ -maxdepth 3 -not -path '*/.*' > scope.txt
-          echo "scripts/build-rust-android.sh" >> scope.txt
-          echo "docs/android-build.md" >> scope.txt
-          echo "docs/runtime-notes.md" >> scope.txt
-
       - name: Gemini Review
         if: env.REBASE_FAILED != 'true'
         env:
@@ -85,6 +77,16 @@ jobs:
           echo "# Gemini Rust Review Report - $(date -u)" > "$REPORT_FILE"
           echo "Daemon stability pass requested: ${{ github.event.inputs.reason }}" >> "$REPORT_FILE"
           echo "Placeholder: Real Gemini review output would go here." >> "$REPORT_FILE"
+          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
+
+      - name: Verify No Source Changes
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          if ! git diff --exit-code -- rust/ scripts/ docs/ README.md; then
+            echo "ERROR: Unintended source changes detected in report-only workflow."
+            git diff
+            exit 1
+          fi
 
       - name: Validate (Rust)
         if: env.REBASE_FAILED != 'true'
@@ -110,19 +112,21 @@ jobs:
           echo "Failed to rebase $DAILY_BRANCH onto origin/main. Manual resolution required." >> CONFLICT.md
           git add CONFLICT.md
           git commit -m "AI(rust): report rebase conflict"
-          git push origin "$DAILY_BRANCH" --force
+          git push origin "$DAILY_BRANCH"
           exit 0
 
       - name: Commit and Push (Strict Guard)
         if: env.REBASE_FAILED != 'true'
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Attempting to push branch: $CURRENT_BRANCH"
+          
           if [ "$CURRENT_BRANCH" == "main" ]; then
             echo "ERROR: Direct push to main detected. Aborting."
             exit 1
           fi
 
-          git add .
+          git add "$REPORT_FILE"
           if git diff --staged --quiet; then
             echo "No changes to commit."
             exit 0
