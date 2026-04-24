@@ -288,52 +288,146 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut ipc = IpcModule::new(ipc_fd, ipc_token);
 
     let mut inotify_fd_opt = None;
-    if config.enable_warmup
-        && let Ok(fd_obj) = effect_executor.reactor.setup_inotify()
-    {
-        let inotify_fd = fd_obj.raw();
+    if config.enable_warmup {
+        let _ = effect_executor.apply(crate::core::Effect::Log {
+            owner: 102,
+            level: crate::core::LogLevel::Info,
+            event: crate::core::LogEvent::Generic("preload initialized".to_string()),
+        });
 
-        let cgroup_path = std::ffi::CString::new("/dev/cpuset/top-app/cgroup.procs");
-        let pkg_xml_path = std::ffi::CString::new("/data/system/packages.xml");
-        let pkg_list_path = std::ffi::CString::new("/data/system/packages.list");
+        let enable_path = std::path::Path::new(crate::paths::ENABLE_PRELOAD_PATH);
+        if enable_path.exists() {
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: 102,
+                level: crate::core::LogLevel::Info,
+                event: crate::core::LogEvent::Generic(format!(
+                    "enable_preload present: {}",
+                    crate::paths::ENABLE_PRELOAD_PATH
+                )),
+            });
+        } else {
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: 102,
+                level: crate::core::LogLevel::Warn,
+                event: crate::core::LogEvent::Generic(format!(
+                    "enable_preload missing: {}",
+                    crate::paths::ENABLE_PRELOAD_PATH
+                )),
+            });
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: 102,
+                level: crate::core::LogLevel::Warn,
+                event: crate::core::LogEvent::Generic(
+                    "skipped reason when disabled: waiting for override file".to_string(),
+                ),
+            });
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: crate::core::CORE_OWNER,
+                level: crate::core::LogLevel::Warn,
+                event: crate::core::LogEvent::Generic(
+                    "addon 102 is loaded but inactive (missing enable_preload)".to_string(),
+                ),
+            });
+        }
 
-        match (cgroup_path, pkg_xml_path, pkg_list_path) {
-            (Ok(cgroup_path), Ok(pkg_xml_path), Ok(pkg_list_path)) => {
-                let wd_cgroup = unsafe {
-                    libc::inotify_add_watch(
-                        inotify_fd,
-                        cgroup_path.as_ptr(),
-                        libc::IN_CLOSE_WRITE | libc::IN_MODIFY,
-                    )
-                };
+        if let Ok(fd_obj) = effect_executor.reactor.setup_inotify() {
+            let inotify_fd = fd_obj.raw();
 
-                let wd_pkg_xml = unsafe {
-                    libc::inotify_add_watch(
-                        inotify_fd,
-                        pkg_xml_path.as_ptr(),
-                        libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
-                    )
-                };
+            let cgroup_path = std::ffi::CString::new("/dev/cpuset/top-app/cgroup.procs");
+            let pkg_xml_path = std::ffi::CString::new("/data/system/packages.xml");
+            let pkg_list_path = std::ffi::CString::new("/data/system/packages.list");
 
-                let wd_pkg_list = unsafe {
-                    libc::inotify_add_watch(
-                        inotify_fd,
-                        pkg_list_path.as_ptr(),
-                        libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
-                    )
-                };
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: 102,
+                level: crate::core::LogLevel::Info,
+                event: crate::core::LogEvent::Generic(
+                    "foreground source path: /dev/cpuset/top-app/cgroup.procs".to_string(),
+                ),
+            });
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: 102,
+                level: crate::core::LogLevel::Info,
+                event: crate::core::LogEvent::Generic(
+                    "packages source path: /data/system/packages.xml, /data/system/packages.list"
+                        .to_string(),
+                ),
+            });
 
-                inotify_fd_opt = Some((fd_obj, wd_cgroup, wd_pkg_xml, wd_pkg_list));
+            match (cgroup_path, pkg_xml_path, pkg_list_path) {
+                (Ok(cgroup_path), Ok(pkg_xml_path), Ok(pkg_list_path)) => {
+                    let wd_cgroup = unsafe {
+                        libc::inotify_add_watch(
+                            inotify_fd,
+                            cgroup_path.as_ptr(),
+                            libc::IN_CLOSE_WRITE | libc::IN_MODIFY,
+                        )
+                    };
+
+                    let wd_pkg_xml = unsafe {
+                        libc::inotify_add_watch(
+                            inotify_fd,
+                            pkg_xml_path.as_ptr(),
+                            libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
+                        )
+                    };
+
+                    let wd_pkg_list = unsafe {
+                        libc::inotify_add_watch(
+                            inotify_fd,
+                            pkg_list_path.as_ptr(),
+                            libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
+                        )
+                    };
+
+                    if wd_cgroup >= 0 && wd_pkg_xml >= 0 && wd_pkg_list >= 0 {
+                        let _ = effect_executor.apply(crate::core::Effect::Log {
+                            owner: 102,
+                            level: crate::core::LogLevel::Info,
+                            event: crate::core::LogEvent::Generic(
+                                "watched paths registered".to_string(),
+                            ),
+                        });
+                        let _ = effect_executor.apply(crate::core::Effect::Log {
+                            owner: 102,
+                            level: crate::core::LogLevel::Info,
+                            event: crate::core::LogEvent::Generic(
+                                "waiting_for_foreground_event".to_string(),
+                            ),
+                        });
+                        inotify_fd_opt = Some((fd_obj, wd_cgroup, wd_pkg_xml, wd_pkg_list));
+                    } else {
+                        let _ = effect_executor.apply(crate::core::Effect::Log {
+                            owner: 102,
+                            level: crate::core::LogLevel::Warn,
+                            event: crate::core::LogEvent::Generic(
+                                "watched paths unavailable: inotify_add_watch failed".to_string(),
+                            ),
+                        });
+                    }
+                }
+                _ => {
+                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                        owner: 102,
+                        level: crate::core::LogLevel::Warn,
+                        event: crate::core::LogEvent::Generic(
+                            "watched paths unavailable: invalid CString path".to_string(),
+                        ),
+                    });
+                }
             }
-            _ => {
-                crate::runtime::log_runtime_event(
-                    crate::core::CORE_OWNER,
-                    crate::core::LogLevel::Warn,
-                    crate::core::LogEvent::Generic(
-                        "failed to build inotify watch paths".to_string(),
-                    ),
-                );
-            }
+        } else {
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: 102,
+                level: crate::core::LogLevel::Warn,
+                event: crate::core::LogEvent::Generic(
+                    "watched paths unavailable: setup_inotify failed".to_string(),
+                ),
+            });
+            crate::runtime::log_runtime_event(
+                crate::core::CORE_OWNER,
+                crate::core::LogLevel::Warn,
+                crate::core::LogEvent::Generic("failed to build inotify watch paths".to_string()),
+            );
         }
     }
 
