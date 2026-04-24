@@ -266,7 +266,7 @@ impl Addon for PreloadAddon {
                                 addon_id: 102,
                                 level: LogLevel::Info,
                                 msg: format!(
-                                    "preload start package={} paths={}",
+                                    "preload warmup started: package={} paths={}",
                                     package_name,
                                     paths.len()
                                 ),
@@ -310,8 +310,8 @@ impl Addon for PreloadAddon {
                     addon_id: 102,
                     level: LogLevel::Warn,
                     msg: format!(
-                        "preload fail package={} reason={} err={} total_fails={}",
-                        package, key, err, self.total_failures
+                        "preload failed: reason={} package={} err={} total_fails={}",
+                        key, package, err, self.total_failures
                     ),
                 }));
             }

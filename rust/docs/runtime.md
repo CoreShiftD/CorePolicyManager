@@ -8,7 +8,7 @@ Tracing the initialization in `run_daemon`:
 1. **Directory Creation**: Ensures `/data/local/tmp/coreshift` (and `control`, `addons`) exist using `paths::ensure_dirs()`.
 2. **PID Management**: Writes the current process ID to `/data/local/tmp/coreshift/coreshift.pid`.
 3. **Reactor Bind**: Binds a non-blocking `AF_UNIX` socket to `/data/local/tmp/coreshift/coreshift.sock` and adds it to the asynchronous `Reactor` multiplexer.
-4. **Addon Loading**: Instantiates modules. Currently: `NoOpAddon` (100), `EchoAddon` (101), and optionally `PreloadAddon` (102) if started with the `preload` command.
+4. **Addon Loading**: Instantiates modules. Currently: `NoOpAddon` (100), `EchoAddon` (101), and optionally `PreloadAddon` (102) if started with the `preload` command. Starting with `preload` automatically writes the `enable_preload` control file if it is missing.
 5. **Initial Logging**: Emits the daemon start event.
    - Source log: `"daemon start version=0.1.0 git=a472b4f log_schema=structured_v2"`.
 6. **Inotify Setup**: If preload is enabled, watches `/dev/cpuset/top-app/cgroup.procs`, `/data/system/packages.xml`, and `/data/system/packages.list`.
