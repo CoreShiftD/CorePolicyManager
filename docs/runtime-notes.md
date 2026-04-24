@@ -56,7 +56,8 @@ Pure reducer, scheduler, and state-machine logic must stay in `core`.
 
 - Arena generation `0` is reserved as invalid, so reused slots continue to reject stale handles after wrap.
 - Runtime cleanup paths should convert failure into explicit events or structured logs instead of panicking.
-- Verification helpers in `core::verify` are intended for invariant checking and test/debug workflows; daemon release paths should prefer recoverable failures.
+- Periodic `core::verify` drift checks in daemon mode now log invariant failures through structured logging instead of panicking the process.
+- Verification helpers are still useful for invariant checking and tests, but daemon release paths should prefer recoverable failures.
 
 ## Target Architectures
 - **arm64-v8a**: `lib/arm64-v8a/libcoreshift.so`

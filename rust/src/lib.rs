@@ -687,7 +687,16 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 effect_executor.log_router.verbosity = new_verbosity;
             }
 
-            crate::core::verify::verify_global(&state);
+            if let Err(err) = crate::core::verify::verify_global(&state) {
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Error,
+                    event: crate::core::LogEvent::Generic(format!(
+                        "state verification failed err={}",
+                        err
+                    )),
+                });
+            }
         }
 
         // Phase 4: Resolve
