@@ -14,9 +14,9 @@ The project is split into two halves:
 1. **CorePolicyManager (App)**: A high-level Android application frontend providing configuration and user interfaces.
 2. **CoreShift (Daemon)**: A high-performance native backend written in Rust. It serves as the system's execution engine, monitoring environment changes, spawning tasks, and dispatching modular addons (like process preloading) to adjust system behavior in real time.
 
-## Deployment Model
+## Deployment Model (Planned)
 
-The Android app extracts the CoreShift daemon from its `jniLibs` folder and launches it as an isolated process on the host device. Communication between the frontend App and the daemon occurs over a secure UNIX domain socket (`coreshift.sock`).
+The intended deployment model is for the Android app to extract the CoreShift daemon from its `jniLibs` folder and launch it dynamically as an isolated process. Communication between the frontend App and the daemon will occur over a secure UNIX domain socket (`coreshift.sock`). Currently, the daemon must be launched manually via an `adb shell`.
 
 ## Documentation
 
