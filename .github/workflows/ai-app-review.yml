@@ -77,7 +77,6 @@ jobs:
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
           
-          # 1. Collect context
           {
             find app/ core/ feature/ gradle/ -type f -not -path '*/.*' -not -name "*.so" -maxdepth 4
             echo "build.gradle.kts"
@@ -93,8 +92,7 @@ jobs:
             fi
           done > full_context.txt
 
-          # 2. Call Gemini
-          PROMPT_PREFIX="You are a senior software engineer. Review the following files and provide small, safe, reviewable improvements (lint fixes, formatting, better error handling, documentation). Return ONLY a unified diff patch that can be applied with 'git apply'. Do not include markdown code blocks. Do not include any explanation or other text. Scope: Android App and build system."
+          PROMPT_PREFIX="You are running as a conservative maintenance bot. Return ONLY a unified diff patch. Make at most one small improvement. Limit changes to 3 files and 120 changed lines total. Prefer formatting, lint fixes, docs alignment, small tests, and obvious maintainability cleanup. Do not redesign architecture. Do not add dependencies. Do not touch secrets or generated artifacts. If no safe patch exists, return exactly: NO_PATCH"
           
           jq -n --arg prefix "$PROMPT_PREFIX" --rawfile context full_context.txt \
             '{contents: [{parts: [{text: ($prefix + "\n\nFiles:\n" + $context)}]}]}' > payload.json
@@ -103,17 +101,31 @@ jobs:
             -d @payload.json \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$GEMINI_API_KEY" > response.json
 
-          # 3. Extract and Clean Patch
-          jq -r '.candidates[0].content.parts[0].text' response.json | sed '/^```/d' > gemini.patch
-
-          if [ ! -s gemini.patch ] || ! grep -q "^diff --git" gemini.patch; then
-            echo "PATCH_PRODUCED=false" >> "$GITHUB_ENV"
+          RAW_RESPONSE=$(jq -r '.candidates[0].content.parts[0].text' response.json)
+          
+          if [ "$RAW_RESPONSE" == "NO_PATCH" ]; then
+            echo "PATCH_PRODUCED=none" >> "$GITHUB_ENV"
           else
-            if git apply --check gemini.patch; then
-              git apply gemini.patch
-              echo "PATCH_PRODUCED=true" >> "$GITHUB_ENV"
+            echo "$RAW_RESPONSE" | sed '/^```/d' > gemini.patch
+            if [ ! -s gemini.patch ] || ! grep -q "^diff --git" gemini.patch; then
+              echo "PATCH_PRODUCED=false" >> "$GITHUB_ENV"
             else
-              echo "PATCH_PRODUCED=invalid" >> "$GITHUB_ENV"
+              if git apply --check gemini.patch; then
+                git apply gemini.patch
+                
+                FILES_CHANGED=$(git diff --name-only | wc -l)
+                LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}')
+                
+                if [ "$FILES_CHANGED" -gt 3 ] || [ "$LINES_CHANGED" -gt 120 ]; then
+                  echo "ERROR: Patch exceeded limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
+                  git checkout .
+                  echo "PATCH_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
+                else
+                  echo "PATCH_PRODUCED=true" >> "$GITHUB_ENV"
+                fi
+              else
+                echo "PATCH_PRODUCED=invalid" >> "$GITHUB_ENV"
+              fi
             fi
           fi
 
@@ -139,7 +151,8 @@ jobs:
             git status --short
             
             if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
-              echo "ERROR: Unsafe file changes detected. Aborting commit."
+              echo "ERROR: Unsafe file changes detected. Reverting."
+              git checkout .
               exit 1
             fi
             
@@ -149,9 +162,9 @@ jobs:
             fi
           else
             mkdir -p reports/ai/app
-            REPORT_FILE="reports/ai/app/no-patch-$(date -u +'%Y-%m-%d-%H-%M').md"
-            echo "# Gemini Audit - No Patch" > "$REPORT_FILE"
-            echo "Status: $PATCH_PRODUCED" >> "$REPORT_FILE"
+            REPORT_FILE="reports/ai/app/audit-$(date -u +'%Y-%m-%d-%H-%M').md"
+            echo "# Gemini Audit - No Patch Applied" > "$REPORT_FILE"
+            echo "Reason: $PATCH_PRODUCED" >> "$REPORT_FILE"
             git add "$REPORT_FILE"
             git commit -m "AI(app): record Gemini no-op audit"
           fi
