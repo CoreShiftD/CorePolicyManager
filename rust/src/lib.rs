@@ -573,6 +573,17 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             signal: crate::core::ControlSignal::GracefulStop,
                         })
                     }
+                    crate::high_level::api::Command::PreloadStatus => {
+                        let mut status_str = "Preload Addon not loaded".to_string();
+                        for (addon, spec, _) in &mut addons {
+                            if spec.id == 102 {
+                                status_str = addon.get_status();
+                                break;
+                            }
+                        }
+                        ipc.send_preload_status(client_id, status_str);
+                        None
+                    }
                 };
 
                 if let Some(mut intent) = intent_opt {

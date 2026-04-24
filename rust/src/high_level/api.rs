@@ -14,6 +14,7 @@ pub enum Command {
     Dumpsys { service: String, args: Vec<String> },
     GetResult { id: u64 },
     Cancel { id: u64 },
+    PreloadStatus,
 }
 
 use crate::high_level::android::ExecConfig;
@@ -69,7 +70,9 @@ impl Command {
                     },
                 )
             }
-            Command::GetResult { .. } | Command::Cancel { .. } => unreachable!(),
+            Command::GetResult { .. } | Command::Cancel { .. } | Command::PreloadStatus => {
+                unreachable!()
+            }
         }
     }
 }
