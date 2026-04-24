@@ -97,6 +97,7 @@ jobs:
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_CLI_TRUST_WORKSPACE: "true"
           INPUT_MODEL: ${{ github.event.inputs.model || 'auto' }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
@@ -113,6 +114,7 @@ jobs:
           gemini \
             --model "$MODEL_NAME" \
             --approval-mode=auto_edit \
+            --skip-trust \
             --prompt "$PROMPT" > gemini_output.txt 2>&1 || (cat gemini_output.txt && exit 1)
 
       - name: Inspect Diff and Safety
