@@ -196,6 +196,33 @@ mod tests_internal {
     }
 
     #[test]
+    fn verify_global_reports_drift_without_panicking() {
+        let mut state = ExecutionState::new();
+        state.core.insert_job(
+            9,
+            7,
+            crate::core::ExecSpec {
+                argv: vec!["true".to_string()],
+                stdin: None,
+                capture_stdout: false,
+                capture_stderr: false,
+                max_output: 0,
+            },
+            crate::core::ExecPolicy {
+                timeout_ms: None,
+                kill_grace_ms: 0,
+                cancel: crate::core::CancelPolicy::None,
+            },
+        );
+
+        let handle = state.core.job_handle(9).expect("job handle must exist");
+        state.core.runtime[handle.index as usize] = None;
+
+        let err = crate::core::verify::verify_global(&state).expect_err("drift must be reported");
+        assert!(err.contains("job missing runtime mapping"));
+    }
+
+    #[test]
     fn test_preload_addon_debouncing() {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;

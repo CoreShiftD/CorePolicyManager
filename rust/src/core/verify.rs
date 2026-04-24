@@ -4,7 +4,12 @@
 
 use crate::core::ExecutionState;
 
-pub fn verify_global(state: &ExecutionState) {
+/// Verify cross-index invariants without panicking the daemon.
+///
+/// The runtime uses this as a periodic drift detector. Failures should surface
+/// as explicit errors so long-lived sessions can log and continue rather than
+/// crashing on invariant-check infrastructure.
+pub fn verify_global(state: &ExecutionState) -> Result<(), String> {
     let core = &state.core;
     let _timeout = &state.timeout;
     let _result = &state.result;
@@ -18,31 +23,48 @@ pub fn verify_global(state: &ExecutionState) {
         let job = core
             .jobs
             .get(handle.index, handle.generation)
-            .expect("dangling job_id_map entry");
-        assert_eq!(*u64_id, job.id);
+            .ok_or_else(|| format!("dangling job_id_map entry id={}", u64_id))?;
+        if *u64_id != job.id {
+            return Err(format!(
+                "job id mismatch map_id={} stored_id={}",
+                u64_id, job.id
+            ));
+        }
 
         let rt = core
             .runtime
             .get(handle.index as usize)
-            .expect("missing runtime vector entry")
+            .ok_or_else(|| format!("missing runtime vector entry index={}", handle.index))?
             .as_ref()
-            .expect("job missing runtime mapping");
+            .ok_or_else(|| format!("job missing runtime mapping index={}", handle.index))?;
 
-        assert!(
-            job.process == rt.process,
-            "job process handle mismatch with runtime"
-        );
-        assert!(job.io == rt.io, "job io handle mismatch with runtime");
+        if job.process != rt.process {
+            return Err(format!(
+                "job process handle mismatch id={} job={:?} runtime={:?}",
+                job.id, job.process, rt.process
+            ));
+        }
+        if job.io != rt.io {
+            return Err(format!(
+                "job io handle mismatch id={} job={:?} runtime={:?}",
+                job.id, job.io, rt.io
+            ));
+        }
 
         if let Some(p) = rt.process {
             actual_process_count += 1;
             let p_handle = core
                 .process_index
                 .get(p.index as usize)
-                .expect("missing process vector entry")
+                .ok_or_else(|| format!("missing process vector entry index={}", p.index))?
                 .as_ref()
-                .expect("process index dangling");
-            assert_eq!(*p_handle, *handle, "process index mismatch");
+                .ok_or_else(|| format!("process index dangling index={}", p.index))?;
+            if *p_handle != *handle {
+                return Err(format!(
+                    "process index mismatch process_index={} expected_job_index={} actual_job_index={}",
+                    p.index, handle.index, p_handle.index
+                ));
+            }
         }
 
         if let Some(io) = rt.io {
@@ -50,16 +72,30 @@ pub fn verify_global(state: &ExecutionState) {
             let io_handle = core
                 .io_index
                 .get(io.index as usize)
-                .expect("missing io vector entry")
+                .ok_or_else(|| format!("missing io vector entry index={}", io.index))?
                 .as_ref()
-                .expect("io index dangling");
-            assert_eq!(*io_handle, *handle, "io index mismatch");
+                .ok_or_else(|| format!("io index dangling index={}", io.index))?;
+            if *io_handle != *handle {
+                return Err(format!(
+                    "io index mismatch io_index={} expected_job_index={} actual_job_index={}",
+                    io.index, handle.index, io_handle.index
+                ));
+            }
         }
     }
 
-    assert_eq!(
-        core.process_count, actual_process_count,
-        "process count drift"
-    );
-    assert_eq!(core.io_count, actual_io_count, "io count drift");
+    if core.process_count != actual_process_count {
+        return Err(format!(
+            "process count drift expected={} actual={}",
+            core.process_count, actual_process_count
+        ));
+    }
+    if core.io_count != actual_io_count {
+        return Err(format!(
+            "io count drift expected={} actual={}",
+            core.io_count, actual_io_count
+        ));
+    }
+
+    Ok(())
 }
