@@ -20,6 +20,10 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # Secrets should be stored in GitHub Environment: ai-audit
+    # This allows approval rules / restricted access / secret isolation
+    environment:
+      name: ai-audit
     steps:
       - name: Checkout
         uses: actions/checkout@v4
