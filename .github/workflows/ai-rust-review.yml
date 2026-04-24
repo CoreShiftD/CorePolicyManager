@@ -93,6 +93,15 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;28.0.13004108"
 
+      - name: Verify Main Formatting
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          cd rust
+          if ! cargo fmt --check; then
+            echo "ERROR: Main branch Rust formatting is invalid. Run cargo fmt on main first."
+            exit 1
+          fi
+
       - name: Gemini Agentic Edit
         if: env.REBASE_FAILED != 'true'
         env:
