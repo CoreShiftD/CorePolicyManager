@@ -21,7 +21,6 @@ jobs:
   review:
     timeout-minutes: 35
     runs-on: ubuntu-latest
-    # Secrets should be stored in GitHub Environment: ai-audit
     environment:
       name: ai-audit
 
@@ -86,23 +85,48 @@ jobs:
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
           
-          # Collect files in scope
-          find rust/ -type f -not -path '*/.*' > scope_files.txt
-          echo "scripts/build-rust-android.sh" >> scope_files.txt
-          echo "docs/android-build.md" >> scope_files.txt
-          echo "docs/runtime-notes.md" >> scope_files.txt
+          # 1. Collect context
+          {
+            find rust/ -type f -not -path '*/.*' -not -name "*.so" -not -name "*.lock" -maxdepth 4
+            echo "scripts/build-rust-android.sh"
+            echo "docs/android-build.md"
+            echo "docs/runtime-notes.md"
+            echo "README.md"
+            echo ".gitignore"
+          } | while read -r f; do
+            if [ -f "$f" ]; then
+              echo "--- FILE: $f ---"
+              cat "$f"
+              echo ""
+            fi
+          done > full_context.txt
+
+          # 2. Call Gemini
+          PROMPT_PREFIX="You are a senior software engineer. Review the following files and provide small, safe, reviewable improvements (lint fixes, formatting, better error handling, documentation). Return ONLY a unified diff patch that can be applied with 'git apply'. Do not include markdown code blocks. Do not include any explanation or other text. Scope: Rust CoreShift Daemon and related docs."
           
-          mkdir -p reports/ai/rust
-          REPORT_ID=$(date -u +'%Y-%m-%d-%H-%M')
-          REPORT_FILE="reports/ai/rust/report-$REPORT_ID.md"
-          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
-          
-          echo "# Gemini Rust Improvement Pass - $REPORT_ID" > "$REPORT_FILE"
-          echo "Instruction: Make small, safe, reviewable improvements. Prefer formatting, lint fixes, tests, docs alignment, and maintainability. Do not redesign architecture." >> "$REPORT_FILE"
-          echo "Gemini API invoked. Optimized CoreShift modules for better error handling and idiomatic patterns." >> "$REPORT_FILE"
+          jq -n --arg prefix "$PROMPT_PREFIX" --rawfile context full_context.txt \
+            '{contents: [{parts: [{text: ($prefix + "\n\nFiles:\n" + $context)}]}]}' > payload.json
+
+          curl -s -X POST -H 'Content-Type: application/json' \
+            -d @payload.json \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$GEMINI_API_KEY" > response.json
+
+          # 3. Extract and Clean Patch
+          jq -r '.candidates[0].content.parts[0].text' response.json | sed '/^```/d' > gemini.patch
+
+          if [ ! -s gemini.patch ] || ! grep -q "^diff --git" gemini.patch; then
+            echo "PATCH_PRODUCED=false" >> "$GITHUB_ENV"
+          else
+            if git apply --check gemini.patch; then
+              git apply gemini.patch
+              echo "PATCH_PRODUCED=true" >> "$GITHUB_ENV"
+            else
+              echo "PATCH_PRODUCED=invalid" >> "$GITHUB_ENV"
+            fi
+          fi
 
       - name: Validate (Rust)
-        if: env.REBASE_FAILED != 'true'
+        if: env.REBASE_FAILED != 'true' && env.PATCH_PRODUCED == 'true'
         run: |
           cd rust
           cargo fmt
@@ -122,29 +146,32 @@ jobs:
       - name: Cleanup Build Artifacts
         if: env.REBASE_FAILED != 'true'
         run: |
-          # Ensure generated binaries in jniLibs are not committed
           git restore --staged app/src/main/jniLibs || true
           git restore app/src/main/jniLibs || true
-          rm -f scope_files.txt
+          rm -f full_context.txt payload.json response.json gemini.patch
 
       - name: Inspect and Commit
         if: env.REBASE_FAILED != 'true'
         run: |
-          git status --short
-          
-          # Guard against unsafe paths
-          if git status --short | grep -vE "^(M|A| ) reports/ai/" | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
-            echo "ERROR: Unsafe file changes detected outside allowed scope. Aborting commit."
-            exit 1
-          fi
-          
-          # Explicitly stage allowed paths only
-          git add rust/ scripts/ docs/ README.md .gitignore "${{ env.REPORT_FILE }}"
-          
-          if git diff --staged --quiet; then
-            echo "No valid changes to commit."
+          if [ "$PATCH_PRODUCED" == "true" ]; then
+            git status --short
+            
+            if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
+              echo "ERROR: Unsafe file changes detected. Aborting commit."
+              exit 1
+            fi
+            
+            git add rust/ scripts/ docs/ README.md .gitignore
+            if ! git diff --staged --quiet; then
+              git commit -m "AI(rust): apply Gemini patch"
+            fi
           else
-            git commit -m "AI(rust): apply Gemini Rust improvement pass"
+            mkdir -p reports/ai/rust
+            REPORT_FILE="reports/ai/rust/no-patch-$(date -u +'%Y-%m-%d-%H-%M').md"
+            echo "# Gemini Audit - No Patch" > "$REPORT_FILE"
+            echo "Status: $PATCH_PRODUCED" >> "$REPORT_FILE"
+            git add "$REPORT_FILE"
+            git commit -m "AI(rust): record Gemini no-op audit"
           fi
 
       - name: Handle Conflict
@@ -153,7 +180,7 @@ jobs:
           mkdir -p reports/ai/rust
           CONFLICT_FILE="reports/ai/rust/conflict-$(date -u +'%Y-%m-%d-%H-%M').md"
           echo "# Rebase Conflict Report" > "$CONFLICT_FILE"
-          echo "Failed to rebase $DAILY_BRANCH onto origin/main. Manual resolution required." >> "$CONFLICT_FILE"
+          echo "Failed to rebase $DAILY_BRANCH onto origin/main." >> "$CONFLICT_FILE"
           git add "$CONFLICT_FILE"
           git commit -m "AI(rust): report rebase conflict"
           git push origin "$DAILY_BRANCH"
@@ -164,12 +191,9 @@ jobs:
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           if [ "$CURRENT_BRANCH" == "main" ]; then
-            echo "ERROR: Direct push to main detected. Aborting."
+            echo "ERROR: Direct push to main detected."
             exit 1
           fi
-          
           if [[ "$CURRENT_BRANCH" == ai/rust-* ]]; then
             git push origin "$CURRENT_BRANCH"
-          else
-            echo "Not on a daily branch. Skipping push."
           fi
