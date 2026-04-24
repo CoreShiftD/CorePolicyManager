@@ -173,6 +173,12 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut effect_executor =
         crate::runtime::EffectExecutor::new(reactor);
 
+    let _ = effect_executor.apply(crate::core::Effect::Log {
+        owner: crate::core::CORE_OWNER,
+        level: crate::core::LogLevel::Info,
+        event: crate::core::LogEvent::Generic("daemon start version=0.1.0 git=a472b4f log_schema=structured_v2".to_string()),
+    });
+
     // Load log level from system property if possible (placeholder for Android)
     // effect_executor.log_router.verbosity = LogLevel::Info;
 
@@ -225,22 +231,27 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut pending_events = Vec::new();
     let mut next_events = Vec::new();
 
-    let mut record_file = config.record_path.map(|p| {
-        std::fs::OpenOptions::new()
+    let mut record_file = if let Some(p) = &config.record_path {
+        Some(std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(p)
-            .expect("Failed to open record file")
-    });
+            .map_err(|e| crate::low_level::spawn::SysError::sys(
+                e.raw_os_error().unwrap_or(0),
+                "open record file",
+            ))?)
+    } else {
+        None
+    };
 
     let mut last_tick_time = std::time::Instant::now();
     let mut tick_counter = 0u64;
     let mut reactor_failure_count = 0;
 
     while RUNNING.load(Ordering::SeqCst) {
-        let tick_start_time = std::time::Instant::now();
+        let t0 = std::time::Instant::now();
         tick_counter += 1;
-        let elapsed = tick_start_time.duration_since(last_tick_time).as_millis() as u64;
+        let elapsed = t0.duration_since(last_tick_time).as_millis() as u64;
 
         const TICK_MS: u64 = 16;
         let ticks = elapsed / TICK_MS;
@@ -771,7 +782,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         std::mem::swap(&mut pending_events, &mut next_events);
         next_events.clear();
 
-        let tick_duration_us = tick_start_time.elapsed().as_micros() as u64;
+        let tick_duration_us = t0.elapsed().as_micros() as u64;
         state.metrics.avg_tick_duration_us = (state.metrics.avg_tick_duration_us * 7 + tick_duration_us as u32) / 8;
 
         let _ = effect_executor.apply(crate::core::Effect::Log {

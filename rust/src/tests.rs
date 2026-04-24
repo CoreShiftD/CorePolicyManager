@@ -293,4 +293,36 @@ mod tests_internal {
         assert!(addon.package_map.is_empty());
         assert!(addon.dedup_cache.is_empty());
     }
+
+    #[test]
+    fn log_schema_no_legacy_messages() {
+        // This test ensures that we don't have literal legacy log strings in our source code
+        // We split the strings to avoid finding them in this test file itself.
+        let forbidden = [
+            format!("{}_{}", "tick", "start"),
+            format!("{}_{}", "tick", "end"),
+            format!("{}_{}", "action", "dispatched")
+        ];
+        
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        
+        fn check_dir(dir: &std::path::Path, forbidden: &[String]) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_dir() {
+                    check_dir(&path, forbidden);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let content = std::fs::read_to_string(&path).unwrap();
+                    for f in forbidden {
+                        if content.contains(f) {
+                            panic!("Found legacy log string '{}' in {:?}", f, path);
+                        }
+                    }
+                }
+            }
+        }
+        
+        check_dir(&src_dir, &forbidden);
+    }
 }

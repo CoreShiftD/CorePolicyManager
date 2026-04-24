@@ -7,17 +7,16 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUST_ROOT="$PROJECT_ROOT/rust"
 JNI_LIBS_ROOT="$PROJECT_ROOT/app/src/main/jniLibs"
 
-# Set deterministic target directory
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$RUST_ROOT/target}"
-echo "Using CARGO_TARGET_DIR: $CARGO_TARGET_DIR"
-
 # Ensure Rust targets are installed
 echo "Ensuring Rust targets are available..."
 rustup target add aarch64-linux-android armv7-linux-androideabi
 
-# Build binaries
+# Resolve actual target directory from cargo
 cd "$RUST_ROOT"
+CARGO_TARGET_DIR=$(cargo metadata --format-version 1 | grep -o '"target_directory":"[^"]*"' | head -n 1 | cut -d'"' -f4)
+echo "Resolved CARGO_TARGET_DIR: $CARGO_TARGET_DIR"
 
+# Build binaries
 echo "Building for aarch64-linux-android..."
 cargo build --release --target aarch64-linux-android -j 1
 
@@ -47,7 +46,6 @@ mkdir -p "$JNI_LIBS_ROOT/arm64-v8a"
 mkdir -p "$JNI_LIBS_ROOT/armeabi-v7a"
 
 # Copy and rename binaries
-# These are executable payloads packaged with .so extension to force Android PM extraction.
 echo "Copying executable payloads to jniLibs..."
 cp "$BINARY_ARM64" "$JNI_LIBS_ROOT/arm64-v8a/libcoreshift.so"
 cp "$BINARY_ARMV7" "$JNI_LIBS_ROOT/armeabi-v7a/libcoreshift.so"
