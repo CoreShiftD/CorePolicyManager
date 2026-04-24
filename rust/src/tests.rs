@@ -112,8 +112,8 @@ mod tests_internal {
 
         drop(file);
 
-        let hash1 = run_replay(path);
-        let hash2 = run_replay(path);
+        let hash1 = run_replay(path).expect("replay file should open");
+        let hash2 = run_replay(path).expect("replay file should open");
         assert_eq!(hash1, hash2);
 
         let _ = std::fs::remove_file(path);

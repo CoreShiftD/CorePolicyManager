@@ -935,7 +935,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     Ok(())
 }
 
-pub fn run_replay(path: &str) -> u64 {
+pub fn run_replay(path: &str) -> Result<u64, crate::low_level::spawn::SysError> {
     use crate::core::replay::ReplayInput;
     use crate::core::{Core, ExecutionState};
     use std::fs::File;
@@ -947,7 +947,9 @@ pub fn run_replay(path: &str) -> u64 {
     let mut trace_store = TraceStore::new();
     let mut next_action_id = 1u64;
 
-    let file = File::open(path).expect("Failed to open replay file");
+    let file = File::open(path).map_err(|e| {
+        crate::low_level::spawn::SysError::sys(e.raw_os_error().unwrap_or(0), "open replay file")
+    })?;
     let mut reader = BufReader::new(file);
 
     let mut inputs = Vec::new();
@@ -1218,5 +1220,5 @@ pub fn run_replay(path: &str) -> u64 {
         crate::core::LogLevel::Info,
         crate::core::LogEvent::Generic("replay finished deterministically".to_string()),
     );
-    state.hash
+    Ok(state.hash)
 }

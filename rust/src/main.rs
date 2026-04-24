@@ -69,10 +69,9 @@ fn run_command(command: Command) -> Result<(), String> {
             record_path: Some(path),
         })
         .map_err(|e| format!("{:?}", e)),
-        Command::Replay(path) => {
-            CoreShift::run_replay(&path);
-            Ok(())
-        }
+        Command::Replay(path) => CoreShift::run_replay(&path)
+            .map(|_| ())
+            .map_err(|e| format!("{:?}", e)),
     }
 }
 
