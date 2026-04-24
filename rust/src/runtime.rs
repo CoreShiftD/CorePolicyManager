@@ -110,6 +110,99 @@ pub struct EffectExecutor {
     pub log_router: LogRouter,
 }
 
+fn format_log_event(event: &LogEvent) -> String {
+    match event {
+        LogEvent::TickSummary {
+            processed,
+            dropped,
+            queue_before,
+            queue_after,
+            elapsed_us,
+        } => {
+            format!(
+                "tick processed={} dropped={} queue_before={} queue_after={} elapsed_ms={}",
+                processed,
+                dropped,
+                queue_before,
+                queue_after,
+                elapsed_us / 1000
+            )
+        }
+        LogEvent::ActionDispatch {
+            kind,
+            id,
+            addon_id,
+            key,
+            service,
+            payload_len,
+        } => {
+            let mut parts = vec![format!("action={:?}", kind)];
+            if let Some(i) = id {
+                parts.push(format!("id={}", i));
+            }
+            if let Some(a) = addon_id {
+                parts.push(format!("addon_id={}", a));
+            }
+            if let Some(k) = key {
+                parts.push(format!("key={}", k));
+            }
+            if let Some(s) = service {
+                parts.push(format!("service={:?}", s));
+            }
+            if *payload_len > 0 {
+                parts.push(format!("payload_len={}", payload_len));
+            }
+            parts.join(" ")
+        }
+        LogEvent::PreloadForeground { pid, package } => {
+            format!("preload foreground pid={} package={}", pid, package)
+        }
+        LogEvent::PreloadSkip {
+            package,
+            reason,
+            remaining_ms,
+        } => {
+            let mut s = format!("preload skip package={} reason={}", package, reason);
+            if let Some(r) = remaining_ms {
+                s.push_str(&format!(" remaining_ms={}", r));
+            }
+            s
+        }
+        LogEvent::PreloadStart { package, paths } => {
+            format!("preload start package={} paths={}", package, paths)
+        }
+        LogEvent::PreloadDone {
+            package,
+            paths,
+            bytes,
+            duration_ms,
+        } => {
+            format!(
+                "preload done package={} paths={} bytes={} duration_ms={}",
+                package, paths, bytes, duration_ms
+            )
+        }
+        LogEvent::PreloadFail {
+            package,
+            reason,
+            backoff_ms,
+        } => {
+            format!(
+                "preload fail package={} reason={} backoff_ms={}",
+                package, reason, backoff_ms
+            )
+        }
+        LogEvent::Generic(s) => s.clone(),
+        LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
+    }
+}
+
+pub fn log_runtime_event(owner: u32, level: LogLevel, event: LogEvent) {
+    let mut log_router = LogRouter::new();
+    let msg = format_log_event(&event);
+    log_router.write(owner, level, msg);
+}
+
 impl EffectExecutor {
     pub fn new(reactor: Reactor) -> Self {
         Self {
@@ -145,93 +238,6 @@ impl EffectExecutor {
         Ok(sys_events)
     }
 
-    fn format_log_event(&self, event: &LogEvent) -> String {
-        match event {
-            LogEvent::TickSummary {
-                processed,
-                dropped,
-                queue_before,
-                queue_after,
-                elapsed_us,
-            } => {
-                format!(
-                    "tick processed={} dropped={} queue_before={} queue_after={} elapsed_ms={}",
-                    processed,
-                    dropped,
-                    queue_before,
-                    queue_after,
-                    elapsed_us / 1000
-                )
-            }
-            LogEvent::ActionDispatch {
-                kind,
-                id,
-                addon_id,
-                key,
-                service,
-                payload_len,
-            } => {
-                let mut parts = vec![format!("action={:?}", kind)];
-                if let Some(i) = id {
-                    parts.push(format!("id={}", i));
-                }
-                if let Some(a) = addon_id {
-                    parts.push(format!("addon_id={}", a));
-                }
-                if let Some(k) = key {
-                    parts.push(format!("key={}", k));
-                }
-                if let Some(s) = service {
-                    parts.push(format!("service={:?}", s));
-                }
-                if *payload_len > 0 {
-                    parts.push(format!("payload_len={}", payload_len));
-                }
-                parts.join(" ")
-            }
-            LogEvent::PreloadForeground { pid, package } => {
-                format!("preload foreground pid={} package={}", pid, package)
-            }
-            LogEvent::PreloadSkip {
-                package,
-                reason,
-                remaining_ms,
-            } => {
-                let mut s = format!("preload skip package={} reason={}", package, reason);
-                if let Some(r) = remaining_ms {
-                    s.push_str(&format!(" remaining_ms={}", r));
-                }
-                s
-            }
-            LogEvent::PreloadStart { package, paths } => {
-                format!("preload start package={} paths={}", package, paths)
-            }
-            LogEvent::PreloadDone {
-                package,
-                paths,
-                bytes,
-                duration_ms,
-            } => {
-                format!(
-                    "preload done package={} paths={} bytes={} duration_ms={}",
-                    package, paths, bytes, duration_ms
-                )
-            }
-            LogEvent::PreloadFail {
-                package,
-                reason,
-                backoff_ms,
-            } => {
-                format!(
-                    "preload fail package={} reason={} backoff_ms={}",
-                    package, reason, backoff_ms
-                )
-            }
-            LogEvent::Generic(s) => s.clone(),
-            LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
-        }
-    }
-
     pub fn apply(&mut self, effect: Effect) -> Vec<Event> {
         match effect {
             Effect::Log {
@@ -239,7 +245,7 @@ impl EffectExecutor {
                 level,
                 event,
             } => {
-                let msg = self.format_log_event(&event);
+                let msg = format_log_event(&event);
                 self.log_router.write(owner, level, msg);
                 vec![]
             }

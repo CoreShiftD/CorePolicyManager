@@ -112,12 +112,32 @@ impl IpcModule {
             if let Ok(client_fd_obj) = Fd::new(client_fd, "accept4") {
                 let uid = match self.verify_peer_credentials(client_fd) {
                     Ok(u) => u,
-                    Err(_) => continue,
+                    Err(e) => {
+                        crate::runtime::log_runtime_event(
+                            crate::core::CORE_OWNER,
+                            crate::core::LogLevel::Warn,
+                            crate::core::LogEvent::Generic(format!(
+                                "ipc verify peer credentials failed err={:?}",
+                                e
+                            )),
+                        );
+                        continue;
+                    }
                 };
 
                 let token = match reactor.add(&client_fd_obj, true, true) {
                     Ok(t) => t,
-                    Err(_) => continue,
+                    Err(e) => {
+                        crate::runtime::log_runtime_event(
+                            crate::core::CORE_OWNER,
+                            crate::core::LogLevel::Warn,
+                            crate::core::LogEvent::Generic(format!(
+                                "ipc add client to reactor failed err={:?}",
+                                e
+                            )),
+                        );
+                        continue;
+                    }
                 };
 
                 let client_id = self.next_client_id;

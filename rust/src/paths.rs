@@ -8,6 +8,7 @@ pub const ADDONS_DIR: &str = "/data/local/tmp/coreshift/addons";
 
 pub const SOCKET_PATH: &str = "/data/local/tmp/coreshift/coreshift.sock";
 pub const CORE_LOG_PATH: &str = "/data/local/tmp/coreshift/core.log";
+pub const PID_PATH: &str = "/data/local/tmp/coreshift/coreshift.pid";
 
 pub const ENABLE_PRELOAD_PATH: &str = "/data/local/tmp/coreshift/control/enable_preload";
 pub const LOG_DEBUG_PATH: &str = "/data/local/tmp/coreshift/control/log_debug";
