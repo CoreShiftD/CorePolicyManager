@@ -21,6 +21,16 @@ fn log_cli(level: CoreShift::core::LogLevel, message: impl Into<String>) {
     );
 }
 
+fn print_help() {
+    println!("CoreShift Daemon");
+    println!("Usage: coreshift [command] [args]");
+    println!("Commands:");
+    println!("  preload        Run with warmup enabled");
+    println!("  record <file>  Run and record input to file");
+    println!("  replay <file>  Replay recorded session");
+    println!("  help           Show this help");
+}
+
 fn parse_command(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
     match args.next().as_deref() {
         None => Ok(Command::Daemon),
@@ -46,10 +56,7 @@ fn run_command(command: Command) -> Result<(), String> {
         })
         .map_err(|e| format!("{:?}", e)),
         Command::Help => {
-            log_cli(
-                CoreShift::core::LogLevel::Info,
-                "help requested usage='coreshift [command] [args]' commands='preload, record <file>, replay <file>, help'",
-            );
+            print_help();
             Ok(())
         }
         Command::Preload => CoreShift::run_daemon(DaemonConfig {
