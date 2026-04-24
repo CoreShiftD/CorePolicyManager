@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.android.library)
 }
 android {
-    namespace = "com.corepolicy.manager.core.data"
+    namespace = "com.corepolicy.manager.core.network"
     compileSdk =
         libs.versions.compileSdk
             .get()
@@ -15,10 +15,7 @@ android {
     }
 }
 dependencies {
-    implementation(project(":core:database"))
-    implementation(project(":core:network"))
     implementation(project(":core:model"))
     implementation(project(":core:common"))
     implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.core)
 }

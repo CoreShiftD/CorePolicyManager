@@ -5,7 +5,7 @@ plugins {
     alias(libs.plugins.ksp)
 }
 android {
-    namespace = "com.corepolicy.manager.feature.settings"
+    namespace = "com.corepolicy.manager.feature.home"
     compileSdk =
         libs.versions.compileSdk
             .get()

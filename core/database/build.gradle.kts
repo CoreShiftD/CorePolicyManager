@@ -1,8 +1,9 @@
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.ksp)
 }
 android {
-    namespace = "com.corepolicy.manager.core.data"
+    namespace = "com.corepolicy.manager.core.database"
     compileSdk =
         libs.versions.compileSdk
             .get()
@@ -15,10 +16,9 @@ android {
     }
 }
 dependencies {
-    implementation(project(":core:database"))
-    implementation(project(":core:network"))
     implementation(project(":core:model"))
     implementation(project(":core:common"))
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
 }

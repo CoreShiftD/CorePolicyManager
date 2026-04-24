@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.corepolicy.manager.core.designsystem"
+    namespace = "com.corepolicy.manager.core.common"
     compileSdk =
         libs.versions.compileSdk
             .get()
