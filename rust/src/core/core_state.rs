@@ -290,4 +290,29 @@ impl CoreState {
         // XOR in new value
         self.hash ^= mix(io.index as u64, h.index as u64);
     }
+
+    #[cfg(debug_assertions)]
+    pub fn recompute_hash_full(&self) -> u64 {
+        let mut hash = 0;
+
+        for (_, _, job) in self.jobs.iter() {
+            hash ^= mix(job.id, hash_job(job));
+        }
+
+        for (index, handle) in self.process_index.iter().enumerate() {
+            if let Some(handle) = handle {
+                hash ^= mix(index as u64, handle.index as u64);
+            }
+        }
+        hash ^= mix(PROCESS_COUNT_KEY, self.process_count as u64);
+
+        for (index, handle) in self.io_index.iter().enumerate() {
+            if let Some(handle) = handle {
+                hash ^= mix(index as u64, handle.index as u64);
+            }
+        }
+        hash ^= mix(IO_COUNT_KEY, self.io_count as u64);
+
+        hash
+    }
 }
