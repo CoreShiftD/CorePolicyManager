@@ -2,6 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Core job storage and cross-index bookkeeping.
+//!
+//! Invariants:
+//! - `job_id_map`, `jobs`, and `runtime` must agree for every live job handle.
+//! - `process_index` and `io_index` are derived indexes back into `jobs`.
+//! - `hash` is updated incrementally so replay and verification can detect drift.
+//!
+//! Ownership model:
+//! - the arena owns authoritative `JobState` storage
+//! - `runtime` mirrors per-job transient handles that must exist for every live
+//!   job slot
+//! - index maps are acceleration structures and must be kept in sync on every
+//!   reducer mutation
+//!
+//! Failure semantics:
+//! - stale handles are state drift and should be rejected explicitly at the
+//!   caller boundary where possible
+//! - incremental hash maintenance is part of the invariant surface, not a cache
+//!   that can be repaired later without replay drift
+
 use crate::arena::Arena;
 use crate::core::{IoHandle, JobHandle, JobRuntime, JobState, ProcessHandle};
 use std::collections::HashMap;
@@ -91,6 +111,8 @@ impl CoreState {
 
     #[inline]
     pub fn runtime(&self, h: JobHandle) -> &JobRuntime {
+        // Runtime state is allocated in parallel with the job arena and is
+        // indexed by the same slot index. A missing entry indicates state drift.
         debug_assert!(
             (h.index as usize) < self.runtime.len(),
             "Runtime missing for job"
@@ -100,6 +122,8 @@ impl CoreState {
 
     #[inline]
     pub fn runtime_mut(&mut self, h: JobHandle) -> &mut JobRuntime {
+        // See `runtime()`: callers are expected to hold only validated job
+        // handles when mutating runtime state.
         debug_assert!(
             (h.index as usize) < self.runtime.len(),
             "Runtime missing for job (mut)"
@@ -186,6 +210,8 @@ impl CoreState {
         if self.runtime.len() <= index as usize {
             self.runtime.resize(index as usize + 1, None);
         }
+        // Every job slot must have a paired runtime slot, even before a process
+        // or IO handle has been assigned.
         self.runtime[index as usize] = Some(JobRuntime {
             process: None,
             io: None,

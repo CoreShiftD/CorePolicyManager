@@ -2,6 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Generational arena for stable handle-based storage.
+//!
+//! The arena reserves generation `0` as invalid and bumps generations on remove
+//! so stale handles stop matching reused slots. Generation wrap is handled
+//! without panicking to avoid taking down long-lived daemon sessions after many
+//! reuse cycles.
+//!
+//! Invariants:
+//! - a live handle is valid only when both the slot index and generation match
+//! - free-list reuse preserves the slot index but changes the generation
+//! - callers must treat missing entries as normal stale-handle results rather
+//!   than assuming allocation order implies validity
+
 enum Slot<T> {
     Occupied {
         generation: u32,

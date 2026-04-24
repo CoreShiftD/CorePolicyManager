@@ -2,6 +2,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Runtime-side effect executor.
+//!
+//! This module is the boundary where pure `core::Effect` values become real IO,
+//! process control, system-service requests, and structured log writes.
+//!
+//! Design notes:
+//! - pure state-machine logic stays out of this module
+//! - invalid exec context construction is reported as `ProcessSpawnFailed`
+//! - watch/unwatch failures are converted into runtime events instead of panics
+//! - addon warmup side effects stay here because they perform blocking syscalls
+//! - log writes, process control, and Android-facing services share this module
+//!   only at the side-effect boundary; policy decisions belong in higher layers
+
 use super::control::{apply_control_signal, exit_status_code};
 use super::logging::{LogRouter, format_log_event};
 use super::system_services::handle_system_request;
@@ -87,6 +100,9 @@ impl EffectExecutor {
     }
 
     pub fn apply(&mut self, effect: Effect) -> Vec<Event> {
+        // The executor always converts effect failures into explicit events or
+        // structured logs so the daemon loop can react without implicit stdout
+        // or panic-based control flow.
         match effect {
             Effect::Log {
                 owner,
@@ -180,6 +196,8 @@ impl EffectExecutor {
                 vec![]
             }
             Effect::StartProcess { id, exec, policy } => {
+                // Reject malformed argv/env/cwd before touching any spawn
+                // backend so invalid requests are observable and deterministic.
                 let ctx = match ExecContext::new(exec.argv, None, None) {
                     Ok(ctx) => ctx,
                     Err(e) => {

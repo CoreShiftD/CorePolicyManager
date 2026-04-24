@@ -10,25 +10,28 @@ Android policy and performance management platform powered by **CoreShift**.
 
 CorePolicyManager is a comprehensive Android management platform designed to optimize system performance and enforce operational policies. The project consists of a high-level Android application (frontend) and **CoreShift**, a high-performance native daemon (backend) written in Rust.
 
-CoreShift acts as the system's execution engine, monitoring environmental changes and dispatching modular "addons" to adjust system behavior in real-time.
+CoreShift acts as the system's execution engine, monitoring environmental changes and dispatching modular addons to adjust system behavior in real time.
 
 ## Architecture
 
-The system follows a decoupled, asynchronous architecture:
+CoreShift is organized around explicit layer boundaries:
 
-- **Frontend**: Jetpack Compose-based Android application.
-- **Backend (CoreShift)**: Native Rust daemon using a deterministic state-machine core.
-- **IPC**: Communication via Unix Domain Sockets with bounded packet sizes and security verification.
-- **Lifecycle**: Packaged as an executable ELF PIE payload within the Android APK and extracted to internal storage at runtime.
+- **`core`**: Pure state machine, reducers, scheduler, replay, and validation.
+- **`high_level`**: Addon semantics, Android command mapping, identity, and capability rules.
+- **`mid_level`**: IPC framing and request/response translation at the daemon boundary.
+- **`low_level`**: Reactor, spawn, syscalls, and IO primitives.
+- **`runtime`**: Side effects, structured logging, process execution, and system-service handling.
+
+The Android app remains a separate frontend surface and should not be changed when making Rust-only daemon fixes.
 
 ## CoreShift Engine
 
-The CoreShift engine is the kernel of the platform, providing:
+The CoreShift daemon provides:
 
 - **System Observability**: High-frequency monitoring of foreground PIDs and package modifications.
 - **Deterministic Scheduler**: A priority-aware queue system that manages work budgets and prevents background task starvation.
 - **Capability-Based Security**: Strict enforcement of action permissions for internal modules and IPC clients.
-- **Structured Logging**: Key-value paired telemetry for core metrics and addon decisions.
+- **Structured Logging**: Runtime output for daemon mode goes through `LogLevel`, `LogEvent`, and the runtime log router rather than ad-hoc stdout/stderr.
 
 ## Current Feature: Preload Addon
 
@@ -58,6 +61,21 @@ CoreShift is controlled through the Android shell via trigger files located in t
 - **Core Engine**: `/data/local/tmp/coreshift/core.log`
 - **Preload Addon**: `/data/local/tmp/coreshift/addons/addon_102.log`
 
+## CLI Behavior
+
+- `coreshift help`, `coreshift --help`, and `coreshift -h` print human-readable help to stdout.
+- Daemon-mode lifecycle output and runtime diagnostics are written through structured logging to the runtime log path.
+- Invalid CLI usage is treated as an error path and is logged through the runtime logger.
+- `record <file>` and `replay <file>` remain shell-facing commands; replay is not daemon mode and should not be treated as a long-lived service launch.
+
+## IPC and Spawn Safety
+
+- IPC requests use bounded packet sizes and verified peer credentials.
+- IPC responses are queued only if `current_write_buffer + framed_response <= MAX_WRITE_BUF`.
+- When a client would overflow the response queue, the daemon logs the condition and drops the client instead of silently discarding replies.
+- Process spawn requests reject empty argv and any argv/env/cwd value containing interior NUL bytes. Invalid exec requests surface as spawn failures; they are not silently filtered and are not rewritten to `/bin/false`.
+- Generational arena slots reserve generation `0` as invalid and recover from wrap without panicking so long-lived daemon sessions do not crash after repeated slot reuse.
+
 ## Build Instructions
 
 ### Prerequisites
@@ -75,6 +93,28 @@ Use the unified build script to compile the native engine and package it for the
 ```
 
 The resulting binaries are packaged as `libcoreshift.so` executable payloads within the `jniLibs` directory.
+
+## Validation
+
+Recommended Rust validation commands:
+
+```bash
+cd rust
+cargo fmt --check
+cargo check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+In constrained sandbox environments where Cargo reports `error: jobs may not be 0`, rerun with `-j 1`:
+
+```bash
+cd rust
+cargo fmt --check
+cargo check -j 1
+cargo test -j 1
+cargo clippy -j 1 --all-targets --all-features -- -D warnings
+```
 
 ## Testing Focus
 
@@ -100,4 +140,3 @@ CoreShift performs direct system calls and file I/O that may affect device stabi
 This project is licensed under the Mozilla Public License, v. 2.0. See the [LICENSE](LICENSE) file for the full license text.
 
 Private / In Development. All rights reserved.
-

@@ -2,6 +2,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Unix-domain IPC boundary for CoreShift.
+//!
+//! Failure semantics:
+//! - peer credentials are verified before a client is admitted
+//! - oversized reads disconnect the client
+//! - malformed packets disconnect the client
+//! - oversized response queues log and drop the client explicitly instead of
+//!   silently discarding replies
+//! - backpressure is enforced before appending framed replies so one slow client
+//!   cannot grow unbounded buffered output
+//!
+//! This layer is intentionally narrow: it frames messages and maps them to
+//! high-level API commands, but does not own daemon policy logic.
+
 use crate::core::ExecOutcome;
 use crate::low_level::reactor::Fd;
 use crate::low_level::reactor::{Event, Token};
@@ -24,6 +38,10 @@ pub enum ReadState {
 }
 
 pub struct Conn {
+    /// Buffered response bytes waiting for the client socket to become writable.
+    /// The buffer must stay below `MAX_WRITE_BUF`, including frame headers.
+    /// If a response would exceed that limit, the connection is dropped
+    /// deliberately so the daemon does not silently lose ordering or data.
     pub fd: Fd,
     pub token: Token,
     pub read_buf: Vec<u8>,
@@ -391,6 +409,8 @@ impl IpcModule {
             WireResponse::CancelOk => vec![3u8],
             WireResponse::Error => vec![4u8],
         };
+        // Bound the entire framed response up front so we never partially append
+        // a reply that would exceed the per-client write budget.
         let frame_len = payload.len() + std::mem::size_of::<u32>();
         let next_len = conn.write_buf.len().saturating_add(frame_len);
         if next_len > MAX_WRITE_BUF {
@@ -410,6 +430,9 @@ impl IpcModule {
     }
 
     fn drop_client(&mut self, client_id: u32, reason: &str) {
+        // This path is used for explicit policy-driven drops such as response
+        // queue overflow; reactor/event-path disconnects still flow through
+        // `disconnect`.
         if let Some(conn) = self.clients.remove(&client_id) {
             crate::runtime::log_runtime_event(
                 crate::core::CORE_OWNER,

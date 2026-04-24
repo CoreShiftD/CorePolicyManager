@@ -2,6 +2,20 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Low-level execution context and signal helpers.
+//!
+//! `ExecContext` owns the exact C-compatible argv/env/cwd values that are later
+//! passed into spawn backends. Validation happens here so higher layers cannot
+//! silently drop malformed strings or rely on hidden fallbacks.
+//!
+//! Ownership and failure semantics:
+//! - owned `CString` storage outlives the transient pointer arrays passed to
+//!   `execve`-style backends
+//! - validation failures are normal input errors and should be surfaced as
+//!   spawn failures rather than repaired in place
+//! - pointer helpers intentionally cap the pointer array size to keep stack
+//!   usage bounded while preserving null termination
+
 use crate::low_level::spawn::{SysError, syscall_ret};
 use libc::sigset_t;
 
@@ -76,6 +90,14 @@ pub struct ExecContext {
 }
 
 impl ExecContext {
+    /// Build a validated execution context for process spawn.
+    ///
+    /// Rejections are explicit:
+    /// - empty argv is invalid
+    /// - interior NUL bytes in argv/env/cwd are invalid
+    ///
+    /// Higher layers should surface this as a normal spawn failure rather than
+    /// attempting to repair or silently drop invalid inputs.
     pub fn new(
         argv: Vec<String>,
         env: Option<Vec<String>>,
@@ -131,6 +153,8 @@ impl ExecContext {
         let mut ptrs = ArrayVec::new();
         match &self.argv {
             ExecArgv::Dynamic(v) => {
+                // The pointed-to CString storage is owned by self; only the
+                // pointer array is transient.
                 for s in v {
                     if ptrs.try_push(s.as_ptr() as *mut c_char).is_err() {
                         break;
@@ -146,6 +170,9 @@ impl ExecContext {
     }
 
     pub fn get_envp_ptrs(&self) -> Option<ArrayVec<*mut c_char, 64>> {
+        // We intentionally truncate to keep the stack-allocated pointer array
+        // bounded; the owned CString storage remains valid for the lifetime of
+        // the context.
         self.envp.as_ref().map(|envp| {
             let mut ptrs = ArrayVec::new();
             for s in envp {
