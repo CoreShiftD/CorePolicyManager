@@ -27,6 +27,20 @@ jobs:
           git checkout -b "$BRANCH_NAME"
           echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: aarch64-linux-android, armv7-linux-androideabi
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;28.0.13004108"
+
       - name: Collect Rust Scope
         run: |
           find rust/ -maxdepth 3 -not -path '*/.*' > scope.txt
@@ -59,10 +73,19 @@ jobs:
       - name: Validate (Rust)
         run: |
           cd rust
-          cargo fmt --check || true
+          cargo fmt --check
           cargo check
           cargo test
-          bash -n ../scripts/build-rust-android.sh
+          cargo clippy --all-targets --all-features -- -D warnings
+          
+          # Setup NDK environment for Android build validation
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          export ANDROID_NDK_HOME="$SDK_ROOT/ndk/28.0.13004108"
+          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          
+          cd ..
+          bash -n scripts/build-rust-android.sh
+          ./scripts/build-rust-android.sh
 
       - name: Commit and Push
         run: |
