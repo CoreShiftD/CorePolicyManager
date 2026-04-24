@@ -266,34 +266,48 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     {
         let inotify_fd = fd_obj.raw();
 
-        let cgroup_path = std::ffi::CString::new("/dev/cpuset/top-app/cgroup.procs").unwrap();
-        let _wd_cgroup = unsafe {
-            libc::inotify_add_watch(
-                inotify_fd,
-                cgroup_path.as_ptr(),
-                libc::IN_CLOSE_WRITE | libc::IN_MODIFY,
-            )
-        };
+        let cgroup_path = std::ffi::CString::new("/dev/cpuset/top-app/cgroup.procs");
+        let pkg_xml_path = std::ffi::CString::new("/data/system/packages.xml");
+        let pkg_list_path = std::ffi::CString::new("/data/system/packages.list");
 
-        let pkg_xml_path = std::ffi::CString::new("/data/system/packages.xml").unwrap();
-        let _wd_pkg_xml = unsafe {
-            libc::inotify_add_watch(
-                inotify_fd,
-                pkg_xml_path.as_ptr(),
-                libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
-            )
-        };
+        match (cgroup_path, pkg_xml_path, pkg_list_path) {
+            (Ok(cgroup_path), Ok(pkg_xml_path), Ok(pkg_list_path)) => {
+                let wd_cgroup = unsafe {
+                    libc::inotify_add_watch(
+                        inotify_fd,
+                        cgroup_path.as_ptr(),
+                        libc::IN_CLOSE_WRITE | libc::IN_MODIFY,
+                    )
+                };
 
-        let pkg_list_path = std::ffi::CString::new("/data/system/packages.list").unwrap();
-        let _wd_pkg_list = unsafe {
-            libc::inotify_add_watch(
-                inotify_fd,
-                pkg_list_path.as_ptr(),
-                libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
-            )
-        };
+                let wd_pkg_xml = unsafe {
+                    libc::inotify_add_watch(
+                        inotify_fd,
+                        pkg_xml_path.as_ptr(),
+                        libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
+                    )
+                };
 
-        inotify_fd_opt = Some((fd_obj, _wd_cgroup, _wd_pkg_xml, _wd_pkg_list));
+                let wd_pkg_list = unsafe {
+                    libc::inotify_add_watch(
+                        inotify_fd,
+                        pkg_list_path.as_ptr(),
+                        libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
+                    )
+                };
+
+                inotify_fd_opt = Some((fd_obj, wd_cgroup, wd_pkg_xml, wd_pkg_list));
+            }
+            _ => {
+                crate::runtime::log_runtime_event(
+                    crate::core::CORE_OWNER,
+                    crate::core::LogLevel::Warn,
+                    crate::core::LogEvent::Generic(
+                        "failed to build inotify watch paths".to_string(),
+                    ),
+                );
+            }
+        }
     }
 
     let mut next_action_id = 1u64;
