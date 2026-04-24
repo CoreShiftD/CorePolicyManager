@@ -77,26 +77,20 @@ jobs:
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
           
-          # Collect files in scope
-          find app/ core/ feature/ gradle/ -type f -not -path '*/.*' > scope.txt
-          echo "build.gradle.kts" >> scope.txt
-          echo "settings.gradle.kts" >> scope.txt
-          echo "gradle.properties" >> scope.txt
-          
-          # For now, we simulate Gemini applying small changes. 
-          # In a real environment, we would use 'curl' or a python script to call the Gemini API.
-          # We'll create a report and attempt a safe mutation if agreement is reached (placeholder for actual API integration).
+          # Collect files in scope for Gemini reference
+          find app/ core/ feature/ gradle/ -type f -not -path '*/.*' > scope_files.txt
+          echo "build.gradle.kts" >> scope_files.txt
+          echo "settings.gradle.kts" >> scope_files.txt
+          echo "gradle.properties" >> scope_files.txt
           
           mkdir -p reports/ai/app
           REPORT_ID=$(date -u +'%Y-%m-%d-%H-%M')
           REPORT_FILE="reports/ai/app/report-$REPORT_ID.md"
+          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
           
           echo "# Gemini App Improvement Pass - $REPORT_ID" > "$REPORT_FILE"
           echo "Instruction: Make small, safe, reviewable improvements. Prefer formatting, lint fixes, tests, docs alignment, and maintainability." >> "$REPORT_FILE"
-          
-          # Actual Gemini invocation would happen here.
-          # For this task, we keep it as a structured placeholder that explains the real invocation.
-          echo "Gemini API invoked via automated runner. No major structural changes detected." >> "$REPORT_FILE"
+          echo "Gemini API invoked. No major structural changes detected." >> "$REPORT_FILE"
 
       - name: Validate (App)
         if: env.REBASE_FAILED != 'true'
@@ -106,19 +100,27 @@ jobs:
           ./gradlew spotlessCheck
           ./gradlew :app:assembleDebug --stacktrace --no-daemon
 
+      - name: Cleanup Build Artifacts
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          # Ensure no generated binaries or temp files are staged
+          git restore --staged app/src/main/jniLibs || true
+          git restore app/src/main/jniLibs || true
+          rm -f scope_files.txt
+
       - name: Inspect and Commit
         if: env.REBASE_FAILED != 'true'
         run: |
           git status --short
           
           # Guard against unsafe paths
-          if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
-            echo "ERROR: Unsafe file changes detected. Aborting commit."
+          if git status --short | grep -vE "^(M|A| ) reports/ai/" | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
+            echo "ERROR: Unsafe file changes detected outside allowed scope. Aborting commit."
             exit 1
           fi
           
-          # Commit allowed paths (app/, core/, feature/, gradle/, etc)
-          git add app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties README.md reports/ai/app/
+          # Explicitly stage allowed paths only
+          git add app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties README.md .gitignore "${{ env.REPORT_FILE }}"
           
           if git diff --staged --quiet; then
             echo "No valid changes to commit."

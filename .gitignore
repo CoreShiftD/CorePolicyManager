@@ -22,3 +22,7 @@ codex/
 chatgpt/
 private/
 
+# Build artifacts
+app/src/main/jniLibs/**/*.so
+
+

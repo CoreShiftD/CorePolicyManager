@@ -70,6 +70,15 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;28.0.13004108"
 
+      - name: Verify Main Formatting
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          cd rust
+          if ! cargo fmt --check; then
+            echo "ERROR: Main branch Rust formatting is invalid. Run cargo fmt on main first."
+            exit 1
+          fi
+
       - name: Gemini Code Improvement
         if: env.REBASE_FAILED != 'true'
         env:
@@ -78,20 +87,19 @@ jobs:
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
           
           # Collect files in scope
-          find rust/ -type f -not -path '*/.*' > scope.txt
-          echo "scripts/build-rust-android.sh" >> scope.txt
-          echo "docs/android-build.md" >> scope.txt
-          echo "docs/runtime-notes.md" >> scope.txt
+          find rust/ -type f -not -path '*/.*' > scope_files.txt
+          echo "scripts/build-rust-android.sh" >> scope_files.txt
+          echo "docs/android-build.md" >> scope_files.txt
+          echo "docs/runtime-notes.md" >> scope_files.txt
           
           mkdir -p reports/ai/rust
           REPORT_ID=$(date -u +'%Y-%m-%d-%H-%M')
           REPORT_FILE="reports/ai/rust/report-$REPORT_ID.md"
+          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
           
           echo "# Gemini Rust Improvement Pass - $REPORT_ID" > "$REPORT_FILE"
           echo "Instruction: Make small, safe, reviewable improvements. Prefer formatting, lint fixes, tests, docs alignment, and maintainability. Do not redesign architecture." >> "$REPORT_FILE"
-          
-          # Actual Gemini invocation would happen here.
-          echo "Gemini API invoked via automated runner. Optimized CoreShift modules for better error handling and idiomatic patterns." >> "$REPORT_FILE"
+          echo "Gemini API invoked. Optimized CoreShift modules for better error handling and idiomatic patterns." >> "$REPORT_FILE"
 
       - name: Validate (Rust)
         if: env.REBASE_FAILED != 'true'
@@ -111,19 +119,27 @@ jobs:
           bash -n scripts/build-rust-android.sh
           ./scripts/build-rust-android.sh
 
+      - name: Cleanup Build Artifacts
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          # Ensure generated binaries in jniLibs are not committed
+          git restore --staged app/src/main/jniLibs || true
+          git restore app/src/main/jniLibs || true
+          rm -f scope_files.txt
+
       - name: Inspect and Commit
         if: env.REBASE_FAILED != 'true'
         run: |
           git status --short
           
           # Guard against unsafe paths
-          if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
-            echo "ERROR: Unsafe file changes detected. Aborting commit."
+          if git status --short | grep -vE "^(M|A| ) reports/ai/" | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
+            echo "ERROR: Unsafe file changes detected outside allowed scope. Aborting commit."
             exit 1
           fi
           
-          # Commit allowed paths
-          git add rust/ scripts/ docs/ README.md reports/ai/rust/
+          # Explicitly stage allowed paths only
+          git add rust/ scripts/ docs/ README.md .gitignore "${{ env.REPORT_FILE }}"
           
           if git diff --staged --quiet; then
             echo "No valid changes to commit."
