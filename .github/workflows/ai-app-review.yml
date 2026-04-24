@@ -7,6 +7,12 @@ on:
         description: 'Reason for review (optional)'
         required: false
         default: 'General quality pass'
+  schedule:
+    - cron: "0 * * * *"
+
+concurrency:
+  group: ai-app-review-daily
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -20,19 +26,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create Review Branch from Fresh Main
+      - name: Resolve Daily Branch
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           git fetch origin main
-          git checkout main
-          git reset --hard origin/main
+          DAILY_BRANCH="ai/app-$(date -u +'%Y-%m-%d')"
+          echo "DAILY_BRANCH=$DAILY_BRANCH" >> "$GITHUB_ENV"
           
-          BRANCH_NAME="ai/app-${{ github.run_id }}"
-          git checkout -b "$BRANCH_NAME"
-          
-          echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
-          echo "Target Branch: $BRANCH_NAME"
+          if git fetch origin "$DAILY_BRANCH"; then
+            echo "Branch $DAILY_BRANCH exists. Updating."
+            git checkout "$DAILY_BRANCH"
+            if ! git rebase origin/main; then
+              echo "Rebase conflict detected. Aborting."
+              git rebase --abort
+              echo "REBASE_FAILED=true" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "Branch $DAILY_BRANCH does not exist. Creating."
+            git checkout -b "$DAILY_BRANCH" origin/main
+          fi
 
       - name: Setup Java 25
+        if: env.REBASE_FAILED != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -40,14 +57,17 @@ jobs:
           cache: gradle
 
       - name: Setup Android SDK
+        if: env.REBASE_FAILED != 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install SDK components
+        if: env.REBASE_FAILED != 'true'
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Collect App Scope
+        if: env.REBASE_FAILED != 'true'
         run: |
           find app/ core/ feature/ gradle/ -maxdepth 3 -not -path '*/.*' > scope.txt
           echo "build.gradle.kts" >> scope.txt
@@ -55,6 +75,7 @@ jobs:
           echo "gradle.properties" >> scope.txt
 
       - name: Codex Review
+        if: env.REBASE_FAILED != 'true'
         env:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
         run: |
@@ -62,6 +83,7 @@ jobs:
           echo '{"proposal": "App quality review placeholder from Codex"}' > codex_proposal.json
 
       - name: Gemini Review
+        if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -69,33 +91,47 @@ jobs:
           echo '{"proposal": "App quality review placeholder from Gemini"}' > gemini_proposal.json
 
       - name: Determine Agreement
+        if: env.REBASE_FAILED != 'true'
         run: |
-          echo "# AI Review Report (Dual-Agent Agreement)" > REPORT.md
-          echo "## Codex Opinion" >> REPORT.md
-          cat codex_proposal.json >> REPORT.md
-          echo "## Gemini Opinion" >> REPORT.md
-          cat gemini_proposal.json >> REPORT.md
-          echo "## Agreement Status" >> REPORT.md
-          echo "Manual review required. No automatic source mutations allowed." >> REPORT.md
+          REPORT_FILE="REPORT_$(date -u +'%H-%M').md"
+          echo "# AI Review Report (Dual-Agent Agreement) - $(date -u)" > "$REPORT_FILE"
+          echo "## Codex Opinion" >> "$REPORT_FILE"
+          cat codex_proposal.json >> "$REPORT_FILE"
+          echo "## Gemini Opinion" >> "$REPORT_FILE"
+          cat gemini_proposal.json >> "$REPORT_FILE"
+          echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
 
       - name: Validate (App)
+        if: env.REBASE_FAILED != 'true'
         run: |
           chmod +x gradlew
           ./gradlew spotlessCheck
           ./gradlew :app:assembleDebug --stacktrace --no-daemon
 
+      - name: Handle Conflict
+        if: env.REBASE_FAILED == 'true'
+        run: |
+          echo "# Rebase Conflict Report" > CONFLICT.md
+          echo "Failed to rebase $DAILY_BRANCH onto origin/main. Manual resolution required." >> CONFLICT.md
+          git add CONFLICT.md
+          git commit -m "AI(app): report rebase conflict"
+          git push origin "$DAILY_BRANCH" --force
+          exit 0
+
       - name: Commit and Push (Strict Guard)
+        if: env.REBASE_FAILED != 'true'
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Attempting to push branch: $CURRENT_BRANCH"
-          
           if [ "$CURRENT_BRANCH" == "main" ]; then
             echo "ERROR: Direct push to main detected. Aborting."
             exit 1
           fi
           
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add REPORT.md
-          git commit -m "AI(app): apply dual-agent agreed improvement pass"
+          git add .
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          
+          git commit -m "AI(app): hourly agreed improvement pass"
           git push origin "$CURRENT_BRANCH"
