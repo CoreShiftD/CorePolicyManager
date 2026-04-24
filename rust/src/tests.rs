@@ -393,4 +393,117 @@ mod tests_internal {
 
         check_dir(&src_dir, &forbidden);
     }
+
+    #[test]
+    fn production_source_has_no_ad_hoc_output_macros() {
+        let forbidden = [
+            concat!("print", "ln!"),
+            concat!("eprint", "ln!"),
+            concat!("db", "g!"),
+        ];
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let tests_rs = src_dir.join("tests.rs");
+
+        fn check_dir(dir: &std::path::Path, tests_rs: &std::path::Path, forbidden: &[&str]) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.is_dir() {
+                    check_dir(&path, tests_rs, forbidden);
+                } else if path.extension().is_some_and(|e| e == "rs") && path != *tests_rs {
+                    let content = std::fs::read_to_string(&path).unwrap();
+                    for token in forbidden {
+                        assert!(
+                            !content.contains(token),
+                            "Found forbidden output macro '{}' in {:?}",
+                            token,
+                            path
+                        );
+                    }
+                }
+            }
+        }
+
+        check_dir(&src_dir, &tests_rs, &forbidden);
+    }
+
+    #[test]
+    fn test_ipc_oversized_packet() {
+        use crate::low_level::reactor::{Fd, Reactor, Token};
+        use crate::mid_level::ipc::{IpcModule, ReadState};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (server_sock, _client_sock) = UnixStream::pair().unwrap();
+        let mut reactor = Reactor::new().unwrap();
+        let server_fd = Fd::new(server_sock.into_raw_fd(), "test").unwrap();
+        let mut ipc = IpcModule::new(server_fd, Token(1));
+
+        let (s2, mut c2) = UnixStream::pair().unwrap();
+        s2.set_nonblocking(true).unwrap();
+        c2.set_nonblocking(true).unwrap();
+        let token = Token(2);
+        let client_id = 1;
+        ipc.clients.insert(
+            client_id,
+            crate::mid_level::ipc::Conn {
+                fd: Fd::new(s2.into_raw_fd(), "test").unwrap(),
+                token,
+                read_buf: vec![],
+                write_buf: vec![],
+                state: ReadState::Header { needed: 4 },
+                uid: 1000,
+            },
+        );
+        ipc.client_tokens.insert(token, client_id);
+
+        // Write a huge length in header (exceeding MAX_PACKET_SIZE)
+        use std::io::Write;
+        let mut huge_len = [0u8; 4];
+        let len = (128 * 1024 + 1) as u32; // MAX_PACKET_SIZE + 1
+        huge_len.copy_from_slice(&len.to_le_bytes());
+        c2.write_all(&huge_len).unwrap();
+
+        let event = crate::low_level::reactor::Event {
+            token,
+            readable: true,
+            writable: false,
+            error: false,
+        };
+        let msgs = ipc.handle_event(&mut reactor, &event);
+
+        assert!(msgs.is_empty());
+        assert!(ipc.clients.is_empty()); // Should have disconnected
+    }
+
+    #[test]
+    fn test_ipc_multiple_clients() {
+        use crate::low_level::reactor::{Fd, Token};
+        use crate::mid_level::ipc::{IpcModule, ReadState};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (server_sock, _) = UnixStream::pair().unwrap();
+        let server_fd = Fd::new(server_sock.into_raw_fd(), "test").unwrap();
+        let mut ipc = IpcModule::new(server_fd, Token(1));
+
+        for i in 2..10 {
+            let (s, _) = UnixStream::pair().unwrap();
+            let token = Token(i as u64);
+            ipc.clients.insert(
+                i as u32,
+                crate::mid_level::ipc::Conn {
+                    fd: Fd::new(s.into_raw_fd(), "test").unwrap(),
+                    token,
+                    read_buf: vec![],
+                    write_buf: vec![],
+                    state: ReadState::Header { needed: 4 },
+                    uid: 1000 + i as u32,
+                },
+            );
+            ipc.client_tokens.insert(token, i as u32);
+        }
+
+        assert_eq!(ipc.clients.len(), 8);
+    }
 }
