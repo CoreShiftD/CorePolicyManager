@@ -97,4 +97,7 @@ CoreShift performs direct system calls and file I/O that may affect device stabi
 **AI Workflows**: GitHub Actions labeled with "AI" are automated review and report generators. They create isolated branches for manual inspection and **never** push directly to the `main` branch. Detailed setup and configuration can be found in [docs/ci-ai.md](docs/ci-ai.md).
 
 ## License
+This project is licensed under the Mozilla Public License, v. 2.0. See the [LICENSE](LICENSE) file for the full license text.
+
 Private / In Development. All rights reserved.
+
