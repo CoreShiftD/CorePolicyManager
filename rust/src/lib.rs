@@ -7,12 +7,18 @@
 #[macro_use]
 pub mod low_level;
 
+/// `mid_level` handles IPC and other boundary protocols between the runtime
+/// and external clients.
 pub mod mid_level;
 
 pub mod arena;
+/// `core` is the pure state machine and reducer/scheduler layer.
 pub mod core;
+/// `high_level` contains addon semantics and policy-level behaviors.
 pub mod high_level;
 pub mod paths;
+/// `runtime` owns side effects, Android/system services, logging, and process
+/// execution.
 pub mod runtime;
 
 #[cfg(test)]

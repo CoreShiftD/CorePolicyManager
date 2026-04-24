@@ -2,6 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! `high_level` contains addon semantics and policy-level orchestration.
+
 pub mod addon;
 pub mod addons;
 pub mod android;
