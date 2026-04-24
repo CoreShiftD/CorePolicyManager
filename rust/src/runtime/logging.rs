@@ -6,7 +6,7 @@ use crate::core::{LogEvent, LogLevel};
 use std::collections::HashMap;
 
 pub struct FileSink {
-    file: std::fs::File,
+    file: Option<std::fs::File>,
 }
 
 impl FileSink {
@@ -16,13 +16,16 @@ impl FileSink {
             .create(true)
             .append(true)
             .open(path)
-            .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
+            .ok()
+            .or_else(|| OpenOptions::new().write(true).open("/dev/null").ok());
         Self { file }
     }
 
     pub fn write(&mut self, level: LogLevel, msg: String) {
         use std::io::Write;
-        let _ = writeln!(self.file, "[{:?}] {}", level, msg);
+        if let Some(file) = &mut self.file {
+            let _ = writeln!(file, "[{:?}] {}", level, msg);
+        }
     }
 }
 
