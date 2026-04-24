@@ -1020,22 +1020,24 @@ fn wait_loop(
                     .as_ref()
                     .is_some_and(|s| s.token == fd_token)
                 {
-                    let slot = drain.stdout_slot.take();
-                    reactor.del(&slot.unwrap().fd);
+                    if let Some(slot) = drain.stdout_slot.take() {
+                        reactor.del(&slot.fd);
+                    }
                 } else if drain
                     .stderr_slot
                     .as_ref()
                     .is_some_and(|s| s.token == fd_token)
                 {
-                    let slot = drain.stderr_slot.take();
-                    reactor.del(&slot.unwrap().fd);
+                    if let Some(slot) = drain.stderr_slot.take() {
+                        reactor.del(&slot.fd);
+                    }
                 } else if drain
                     .stdin_slot
                     .as_ref()
                     .is_some_and(|s| s.token == fd_token)
+                    && let Some(slot) = drain.stdin_slot.take()
                 {
-                    let slot = drain.stdin_slot.take();
-                    reactor.del(&slot.unwrap().fd);
+                    reactor.del(&slot.fd);
                     drain.writer.buf = None;
                 }
                 continue;
