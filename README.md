@@ -17,6 +17,7 @@ CoreShift acts as the system's execution engine, monitoring environmental change
 CoreShift is organized around explicit layer boundaries:
 
 - **`core`**: Pure state machine, reducers, scheduler, replay, and validation.
+  Internally, `core` is split into focused `types`, `state`, and `engine` modules so protocol definitions, state storage, and reducer wiring stay independently maintainable.
 - **`high_level`**: Addon semantics, Android command mapping, identity, and capability rules.
 - **`mid_level`**: IPC framing and request/response translation at the daemon boundary.
 - **`low_level`**: Reactor, spawn, syscalls, and IO primitives.
@@ -72,6 +73,7 @@ CoreShift is controlled through the Android shell via trigger files located in t
 ## IPC and Spawn Safety
 
 - IPC requests use bounded packet sizes and verified peer credentials.
+- IPC framing tolerates partial nonblocking reads and writes without panicking or corrupting queued responses.
 - IPC responses are queued only if `current_write_buffer + framed_response <= MAX_WRITE_BUF`.
 - When a client would overflow the response queue, the daemon logs the condition and drops the client instead of silently discarding replies.
 - Process spawn requests reject empty argv and any argv/env/cwd value containing interior NUL bytes. Invalid exec requests surface as spawn failures; they are not silently filtered and are not rewritten to `/bin/false`.

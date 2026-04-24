@@ -33,6 +33,7 @@ Because modern Android versions restrict the execution of binaries directly from
 - `runtime/control.rs`: signal mapping, exit status translation, and process-control helpers.
 - `runtime/effects.rs`: side-effect execution for `core::Effect` values.
 - `runtime/system_services.rs`: Android and system-facing service requests.
+- `core/types.rs`, `core/state.rs`, and `core/engine.rs`: pure-core protocol definitions, state storage, and dispatcher wiring are kept separate so runtime changes do not sprawl into one monolithic module.
 
 Pure reducer, scheduler, and state-machine logic must stay in `core`.
 
@@ -40,6 +41,7 @@ Pure reducer, scheduler, and state-machine logic must stay in `core`.
 
 - IPC clients are authenticated with `SO_PEERCRED`.
 - Requests are bounded by `MAX_PACKET_SIZE` and `MAX_READ_BUF`.
+- Framing tolerates partial header/body delivery and partial nonblocking writes.
 - Response frames are bounded by `MAX_WRITE_BUF` as a whole frame, not just the existing queue length.
 - If queueing a response would exceed the write buffer limit, the daemon logs the overflow and disconnects that client explicitly.
 - Disconnects are intentional backpressure, not silent lossy delivery. Once a client crosses the queue limit it must reconnect and retry.
@@ -57,6 +59,7 @@ Pure reducer, scheduler, and state-machine logic must stay in `core`.
 
 - Arena generation `0` is reserved as invalid, so reused slots continue to reject stale handles after wrap.
 - Runtime cleanup paths should convert failure into explicit events or structured logs instead of panicking.
+- The daemon loop bounds `epoll_wait` by the next 16 ms tick deadline so periodic work is not hidden behind a longer or infinite wait.
 - Periodic `core::verify` drift checks in daemon mode now log invariant failures through structured logging instead of panicking the process.
 - Verification helpers are still useful for invariant checking and tests, but daemon release paths should prefer recoverable failures.
 
