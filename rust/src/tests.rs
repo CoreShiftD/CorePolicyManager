@@ -250,6 +250,16 @@ mod tests_internal {
     }
 
     #[test]
+    fn reactor_timeout_honors_tick_deadline() {
+        assert_eq!(crate::compute_reactor_timeout_ms(-1, 0), 16);
+        assert_eq!(crate::compute_reactor_timeout_ms(-1, 15), 1);
+        assert_eq!(crate::compute_reactor_timeout_ms(-1, 16), 0);
+        assert_eq!(crate::compute_reactor_timeout_ms(50, 0), 16);
+        assert_eq!(crate::compute_reactor_timeout_ms(5, 0), 5);
+        assert_eq!(crate::compute_reactor_timeout_ms(0, 0), 0);
+    }
+
+    #[test]
     fn test_preload_addon_debouncing() {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;
