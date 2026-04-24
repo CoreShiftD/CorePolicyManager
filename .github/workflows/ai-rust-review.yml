@@ -7,6 +7,16 @@ on:
         description: 'Reason for review (optional)'
         required: false
         default: 'Manual daemon stability pass'
+      model:
+        description: 'Gemini model to use'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - flash
+          - pro
+          - flash-lite
   schedule:
     - cron: "0 */6 * * *"
 
@@ -82,8 +92,17 @@ jobs:
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_MODEL: ${{ github.event.inputs.model || 'auto' }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
+          
+          # Resolve requested model
+          case "$INPUT_MODEL" in
+            pro) MODEL_NAME="gemini-1.5-pro" ;;
+            flash-lite) MODEL_NAME="gemini-1.5-flash-8b" ;;
+            *) MODEL_NAME="gemini-1.5-flash" ;;
+          esac
+          echo "RESOLVED_MODEL=$MODEL_NAME" >> "$GITHUB_ENV"
           
           {
             find rust/ -type f -not -path '*/.*' -not -name "*.so" -not -name "*.lock" -maxdepth 4
@@ -105,13 +124,25 @@ jobs:
           jq -n --arg prefix "$PROMPT_PREFIX" --rawfile context full_context.txt \
             '{contents: [{parts: [{text: ($prefix + "\n\nFiles:\n" + $context)}]}]}' > payload.json
 
+          # Attempt call with fallback
+          echo "Calling Gemini with model: $MODEL_NAME"
           curl -s -X POST -H 'Content-Type: application/json' \
             -d @payload.json \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$GEMINI_API_KEY" > response.json
+            "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent?key=$GEMINI_API_KEY" > response.json
 
-          RAW_RESPONSE=$(jq -r '.candidates[0].content.parts[0].text' response.json)
+          # Check for quota/error if Pro was requested
+          if [ "$MODEL_NAME" == "gemini-1.5-pro" ] && jq -e '.error' response.json > /dev/null; then
+            echo "Pro quota exceeded or error detected. Falling back to Flash."
+            MODEL_NAME="gemini-1.5-flash"
+            echo "RESOLVED_MODEL=$MODEL_NAME (fallback)" >> "$GITHUB_ENV"
+            curl -s -X POST -H 'Content-Type: application/json' \
+              -d @payload.json \
+              "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent?key=$GEMINI_API_KEY" > response.json
+          fi
+
+          RAW_RESPONSE=$(jq -r '.candidates[0].content.parts[0].text // empty' response.json)
           
-          if [ "$RAW_RESPONSE" == "NO_PATCH" ]; then
+          if [ -z "$RAW_RESPONSE" ] || [ "$RAW_RESPONSE" == "NO_PATCH" ]; then
             echo "PATCH_PRODUCED=none" >> "$GITHUB_ENV"
           else
             echo "$RAW_RESPONSE" | sed '/^```/d' > gemini.patch
@@ -122,7 +153,7 @@ jobs:
                 git apply gemini.patch
                 
                 FILES_CHANGED=$(git diff --name-only | wc -l)
-                LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}')
+                LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
                 
                 if [ "$FILES_CHANGED" -gt 3 ] || [ "$LINES_CHANGED" -gt 120 ]; then
                   echo "ERROR: Patch exceeded limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
@@ -176,15 +207,16 @@ jobs:
             
             git add rust/ scripts/ docs/ README.md .gitignore
             if ! git diff --staged --quiet; then
-              git commit -m "AI(rust): apply Gemini patch"
+              git commit -m "AI(rust): apply Gemini patch (model=${{ env.RESOLVED_MODEL }})"
             fi
           else
             mkdir -p reports/ai/rust
             REPORT_FILE="reports/ai/rust/audit-$(date -u +'%Y-%m-%d-%H-%M').md"
             echo "# Gemini Audit - No Patch Applied" > "$REPORT_FILE"
+            echo "Model: ${{ env.RESOLVED_MODEL }}" >> "$REPORT_FILE"
             echo "Reason: $PATCH_PRODUCED" >> "$REPORT_FILE"
             git add "$REPORT_FILE"
-            git commit -m "AI(rust): record Gemini no-op audit"
+            git commit -m "AI(rust): record Gemini no-op audit (model=${{ env.RESOLVED_MODEL }})"
           fi
 
       - name: Handle Conflict

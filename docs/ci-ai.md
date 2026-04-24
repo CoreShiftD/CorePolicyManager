@@ -21,13 +21,16 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 
 ## Workflow Behavior
 
--   **Conservative Maintenance**: Gemini 1.5 Flash is used as a **low-risk maintenance bot**. It is not authorized to perform deep architectural refactors.
+-   **Triggers**: Workflows are triggered manually (`workflow_dispatch`) and on a scheduled 6-hour cron (`0 */6 * * *`).
+-   **Model Selection**: Manual runs allow choosing between `auto`, `flash`, `pro`, and `flash-lite`. Scheduled runs default to `flash`.
+    -   `auto` / `flash`: Uses `gemini-1.5-flash` for fast, cost-effective maintenance.
+    -   `pro`: Uses `gemini-1.5-pro` for deeper reasoning.
+    -   `flash-lite`: Uses `gemini-1.5-flash-8b`.
+-   **Fallback Logic**: If `pro` is requested but fails (e.g., quota exceeded), the workflow automatically falls back to `flash` to ensure the audit completes.
+-   **Conservative Maintenance**: Gemini is strictly instructed to act as a **low-risk maintenance bot**.
 -   **Strict Patch Limits**: Automated patches are gated by the following constraints:
     -   **Max 3 files** changed.
     -   **Max 120 total lines** (additions + deletions) changed.
-    -   No new dependencies or module restructuring.
--   **Patch Protocol**: The model is instructed to return ONLY a unified diff patch. If no safe maintenance improvement is found, it returns `NO_PATCH`.
--   **Validation Gating**: Every patch is validated via `git apply --check` and a full build/test suite (`cargo test`, `assembleDebug`, etc.) before being committed.
--   **Audit Trail**: If no patch is applied or validation fails, a report is committed to the daily branch explaining the outcome.
--   **No Direct Push to Main**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`) for manual review and merging.
--   **Cost Awareness**: Workflows run every 6 hours and manually to control Gemini API quota usage.
+-   **Validation Gating**: Every patch is validated via `git apply --check` and a full build/test suite before being committed.
+-   **No Direct Push to Main**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`) for manual review.
+-   **Cost Awareness**: Gemini API quota and costs may apply.
