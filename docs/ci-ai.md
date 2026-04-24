@@ -23,7 +23,7 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 
 -   **Triggers**: Workflows are triggered manually (`workflow_dispatch`) and on a scheduled 6-hour cron (`0 */6 * * *`).
 -   **Agentic Editing**: Workflows use the **Gemini CLI** in `auto-edit` mode. The AI agent directly modifies source files in the checked-out branch, prioritizing **meaningful progress over trivial churn**.
--   **Philosophy**: Each run attempts one focused, high-value, low-risk improvement that increases quality, reliability, performance, maintainability, or developer experience. Trivial cosmetic edits are discouraged.
+-   **Philosophy**: Each run attempts one focused, high-value, low-risk improvement that increases quality, reliability, performance, maintainability, or developer experience. Trivial cosmetic edits (whitespace, imports only) are discouraged.
 -   **Model Selection**: Manual runs allow choosing between `auto`, `flash`, `pro`, and `flash-lite`. Scheduled runs default to `flash`.
 -   **Strict Safety Gates**:
     -   **Max 3 files** changed per pass.
