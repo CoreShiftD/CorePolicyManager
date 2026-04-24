@@ -34,3 +34,8 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 -   **Validation Gating**: Every patch is validated via `git apply --check` and a full build/test suite before being committed.
 -   **No Direct Push to Main**: All improvements are committed to isolated **daily branches** (e.g., `ai/rust-YYYY-MM-DD`) for manual review.
 -   **Cost Awareness**: Gemini API quota and costs may apply.
+
+## Build Workflows
+
+-   **build-debug.yml**: Automatically builds and uploads unsigned **debug APKs** on every push or pull request to `main`. Artifacts are retained for 7 days.
+-   **build-release.yml**: Manually or automatically builds **signed release APKs** using secrets from the `ai-audit` or `production` environment.
