@@ -21,6 +21,10 @@ on:
           - flash
           - pro
           - flash-lite
+      deep_mode:
+        description: 'Increase file/line limits for this session'
+        type: boolean
+        default: false
   schedule:
     - cron: "0 */6 * * *"
 
@@ -37,6 +41,13 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ai-audit
+
+    env:
+      SESSION_SECONDS: 1800
+      IMPROVE_UNTIL_SECONDS: 1500
+      PASS_SLEEP_SECONDS: 10
+      MAX_FAILED_PASSES: 3
+      MAX_NO_CHANGE_PASSES: 3
 
     steps:
       - name: Checkout
@@ -101,146 +112,113 @@ jobs:
           INPUT_MODEL: ${{ github.event.inputs.model || 'auto' }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
-          gemini --version
-          
           echo "Fetching available models..."
           curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY" > models_raw.json
-          
-          if jq -e '.error' models_raw.json > /dev/null; then
-             echo "ERROR: API returned error when listing models."
-             jq . models_raw.json
-             exit 1
-          fi
-
           AVAILABLE_MODELS=$(jq -r '.models[] | select(.supportedGenerationMethods[]? == "generateContent") | .name' models_raw.json | sed 's/models\///')
-          echo "Available generateContent models:"
-          echo "$AVAILABLE_MODELS"
-
-          # Fallback prioritized list
+          
           case "$INPUT_MODEL" in
             pro) REQUESTED="gemini-2.5-pro gemini-2.0-pro gemini-1.5-pro" ;;
             flash-lite) REQUESTED="gemini-2.5-flash-lite gemini-2.0-flash-lite gemini-1.5-flash-8b" ;;
-            *) REQUESTED="gemini-2.5-flash gemini-2.0-flash gemini-1.5-flash-latest gemini-1.5-flash" ;;
+            *) REQUESTED="gemini-2.5-flash gemini-2.0-flash gemini-1.5-flash-latest" ;;
           esac
 
-          FALLBACK_ORDER="$REQUESTED gemini-2.5-flash gemini-2.0-flash gemini-1.5-flash-latest gemini-1.5-flash"
-          
+          FALLBACK_ORDER="$REQUESTED gemini-2.5-flash gemini-2.0-flash gemini-1.5-flash-latest"
           RESOLVED_MODEL=""
           for m in $FALLBACK_ORDER; do
-            if echo "$AVAILABLE_MODELS" | grep -q "^$m$"; then
-              RESOLVED_MODEL="$m"
-              break
-            fi
+            if echo "$AVAILABLE_MODELS" | grep -q "^$m$"; then RESOLVED_MODEL="$m"; break; fi
           done
-
-          if [ -z "$RESOLVED_MODEL" ]; then
-            echo "ERROR: No Gemini generateContent model available for this key from fallback list."
-            exit 1
-          fi
-
-          echo "SELECTED_MODEL=$RESOLVED_MODEL"
+          if [ -z "$RESOLVED_MODEL" ]; then echo "No supported model found"; exit 1; fi
           echo "SELECTED_MODEL=$RESOLVED_MODEL" >> "$GITHUB_ENV"
 
-      - name: Gemini Agentic Edit
+      - name: AI Session Loop
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_CLI_TRUST_WORKSPACE: "true"
+          DEEP_MODE: ${{ github.event.inputs.deep_mode }}
         run: |
-          MODEL_NAME="${{ env.SELECTED_MODEL }}"
-          echo "Running Gemini CLI with model: $MODEL_NAME"
+          START_TIME=$(date +%s)
+          FAILED_PASSES=0
+          NO_CHANGE_PASSES=0
+          PASS_COUNT=0
           
-          PROMPT="You are a senior maintenance engineer working on this repository. Your task is to make one focused, high-value, low-risk improvement to the CorePolicyManager Android app. Choose the best opportunity from the current codebase. Priorities (highest first): build issues, release config issues, Compose stability/performance, state handling bugs, permission flow correctness, lint issues, dependency alignment, UX papercuts, docs/setup clarity. Avoid trivial cosmetic edits. You may modify up to 3 files and 180 lines total. Do not redesign architecture. Do not add dependencies unless clearly necessary. Do not touch generated artifacts, secrets, ai_context.md. Stop after one focused improvement. At the end of your output, provide a single line: SUMMARY: <short description of the change>."
+          # Patch limits
+          if [ "$DEEP_MODE" = "true" ]; then
+            LIMIT_FILES=5
+            LIMIT_LINES=300
+          else
+            LIMIT_FILES=3
+            LIMIT_LINES=180
+          fi
           
-          gemini \
-            --model "$MODEL_NAME" \
-            --approval-mode=auto_edit \
-            --skip-trust \
-            --prompt "$PROMPT" > gemini_output.txt 2>&1 || (cat gemini_output.txt && exit 1)
+          mkdir -p session_artifacts/app
+          
+          while [ $(( $(date +%s) - START_TIME )) -lt $IMPROVE_UNTIL_SECONDS ]; do
+            PASS_COUNT=$((PASS_COUNT + 1))
+            echo "--- PASS $PASS_COUNT ---"
+            PASS_DIR="session_artifacts/app/pass-$PASS_COUNT"
+            mkdir -p "$PASS_DIR"
+            
+            PROMPT="You are a senior maintenance engineer. Make one high-value improvement to the CorePolicyManager Android app. Priorities: build/release config, Compose stability, state handling, lints. Avoid trivial edits. Max $LIMIT_FILES files and $LIMIT_LINES lines. Stop after one focused change. End with SUMMARY: <short description>."
+            
+            gemini --model "${{ env.SELECTED_MODEL }}" --approval-mode=auto_edit --skip-trust --prompt "$PROMPT" > "$PASS_DIR/gemini_output.txt" 2>&1 || true
+            
+            git diff > "$PASS_DIR/git-diff.patch"
+            git status --short > "$PASS_DIR/status.txt"
+            
+            if [ ! -s "$PASS_DIR/git-diff.patch" ]; then
+              echo "No changes."
+              NO_CHANGE_PASSES=$((NO_CHANGE_PASSES + 1))
+              echo "status=no_change" >> "$PASS_DIR/status.txt"
+            else
+              FILES_CHANGED=$(git diff --name-only | wc -l)
+              LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
+              
+              if [ "$FILES_CHANGED" -gt "$LIMIT_FILES" ] || [ "$LINES_CHANGED" -gt "$LIMIT_LINES" ] || (git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"); then
+                echo "Rejected: unsafe or too large."
+                git restore --worktree --staged .
+                FAILED_PASSES=$((FAILED_PASSES + 1))
+                echo "status=rejected_safety" >> "$PASS_DIR/status.txt"
+              else
+                echo "Validating pass $PASS_COUNT..."
+                if ./gradlew spotlessApply && ./gradlew spotlessCheck; then
+                  SUMMARY=$(grep "SUMMARY:" "$PASS_DIR/gemini_output.txt" | tail -n 1 | sed 's/SUMMARY: //')
+                  git add app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties README.md .gitignore
+                  git commit -m "AI(app): improve $SUMMARY (pass $PASS_COUNT)"
+                  echo "Pass $PASS_COUNT successful."
+                  NO_CHANGE_PASSES=0
+                  FAILED_PASSES=0
+                  echo "status=success" >> "$PASS_DIR/status.txt"
+                else
+                  echo "Validation failed."
+                  git restore --worktree --staged .
+                  FAILED_PASSES=$((FAILED_PASSES + 1))
+                  echo "status=failed_validation" >> "$PASS_DIR/status.txt"
+                fi
+              fi
+            fi
+            
+            if [ $FAILED_PASSES -ge $MAX_FAILED_PASSES ]; then echo "Max failures reached."; break; fi
+            if [ $NO_CHANGE_PASSES -ge $MAX_NO_CHANGE_PASSES ]; then echo "Max no-change reached."; break; fi
+            sleep $PASS_SLEEP_SECONDS
+          done
 
-      - name: Inspect Diff and Safety
+      - name: Final Validation and Push
         if: env.REBASE_FAILED != 'true'
         run: |
-          git diff > git-diff.patch
-          git status --short
-          git diff --name-only > changed_file_list.txt
-          
-          if [ ! -s git-diff.patch ]; then
-            echo "GEMINI_EDIT_PRODUCED=none" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          
-          FILES_CHANGED=$(cat changed_file_list.txt | wc -l)
-          LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
-          
-          if [ "$FILES_CHANGED" -gt 3 ] || [ "$LINES_CHANGED" -gt 180 ]; then
-            echo "ERROR: Gemini edit exceeded strict limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
-            git restore --worktree --staged .
-            echo "GEMINI_EDIT_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
-            exit 1
-          fi
-          
-          if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
-            echo "ERROR: Unsafe file changes detected. Reverting."
-            git restore --worktree --staged .
-            echo "GEMINI_EDIT_PRODUCED=unsafe" >> "$GITHUB_ENV"
-            exit 1
-          fi
-          
-          echo "GEMINI_EDIT_PRODUCED=true" >> "$GITHUB_ENV"
-
-      - name: Validate (App)
-        if: env.REBASE_FAILED != 'true' && env.GEMINI_EDIT_PRODUCED == 'true'
-        run: |
-          chmod +x gradlew
-          ./gradlew spotlessApply
-          ./gradlew spotlessCheck
+          # Final full build check
           ./gradlew :app:assembleDebug --stacktrace --no-daemon
-
-      - name: Cleanup and Commit
-        if: env.REBASE_FAILED != 'true' && env.GEMINI_EDIT_PRODUCED == 'true'
-        run: |
-          git restore --staged app/src/main/jniLibs || true
-          git restore app/src/main/jniLibs || true
           
-          SUMMARY=$(grep "SUMMARY:" gemini_output.txt | tail -n 1 | sed 's/SUMMARY: //')
-          if [ -z "$SUMMARY" ]; then SUMMARY="meaningful improvement"; fi
-          
-          git add app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties README.md .gitignore
-          if ! git diff --staged --quiet; then
-            git commit -m "AI(app): improve $SUMMARY (model=${{ env.SELECTED_MODEL }})"
+          if [[ "${{ env.DAILY_BRANCH }}" == ai/app-* ]]; then
+            git fetch origin "${{ env.DAILY_BRANCH }}"
+            git rebase "origin/${{ env.DAILY_BRANCH }}" || (git rebase --abort && exit 0)
+            git push origin "${{ env.DAILY_BRANCH }}"
           fi
 
       - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gemini-app-artifacts
-          path: |
-            gemini_output.txt
-            git-diff.patch
-            changed_file_list.txt
-            models_raw.json
-          retention-days: 7
-
-      - name: Handle Conflict
-        if: env.REBASE_FAILED == 'true'
-        run: |
-          git rebase --abort
-          exit 0
-
-      - name: Push Daily Branch
-        if: env.REBASE_FAILED != 'true' && env.GEMINI_EDIT_PRODUCED == 'true'
-        run: |
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          if [ "$CURRENT_BRANCH" == "main" ]; then
-            echo "ERROR: Direct push to main detected."
-            exit 1
-          fi
-          
-          if [[ "$CURRENT_BRANCH" == ai/app-* ]]; then
-            echo "Pushing $CURRENT_BRANCH..."
-            git fetch origin "$CURRENT_BRANCH"
-            git rebase "origin/$CURRENT_BRANCH" || (git rebase --abort && exit 0)
-            git push origin "$CURRENT_BRANCH"
-          fi
+          name: gemini-app-session-artifacts
+          path: session_artifacts/
+          retention-days: 3
