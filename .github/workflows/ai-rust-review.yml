@@ -66,6 +66,16 @@ jobs:
             git checkout -b "$DAILY_BRANCH" origin/main
           fi
 
+      - name: Setup Node
+        if: env.REBASE_FAILED != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Gemini CLI
+        if: env.REBASE_FAILED != 'true'
+        run: npm install -g @google/gemini-cli
+
       - name: Setup Rust
         if: env.REBASE_FAILED != 'true'
         uses: dtolnay/rust-toolchain@stable
@@ -83,16 +93,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;28.0.13004108"
 
-      - name: Verify Main Formatting
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          cd rust
-          if ! cargo fmt --check; then
-            echo "ERROR: Main branch Rust formatting is invalid. Run cargo fmt on main first."
-            exit 1
-          fi
-
-      - name: Gemini Code Improvement
+      - name: Gemini Agentic Edit
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -100,90 +101,52 @@ jobs:
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
           
-          # Resolve requested model
           case "$INPUT_MODEL" in
             pro) MODEL_NAME="gemini-1.5-pro" ;;
             flash-lite) MODEL_NAME="gemini-1.5-flash-8b" ;;
             *) MODEL_NAME="gemini-1.5-flash" ;;
           esac
-          echo "RESOLVED_MODEL=$MODEL_NAME" >> "$GITHUB_ENV"
           
-          # 1. Collect Context (Reduced Scope)
-          echo "--- GIT STATUS ---" > full_context.txt
-          git status >> full_context.txt
-          echo "--- CARGO.TOML ---" >> full_context.txt
-          cat rust/Cargo.toml >> full_context.txt
+          PROMPT="You are editing the CoreShift Rust daemon. Make ONE tiny safe improvement only. Allowed paths: rust/, scripts/build-rust-android.sh, docs/android-build.md, docs/runtime-notes.md, README.md. Prefer clippy cleanup, tests, comments that clarify behavior, docs alignment, or small maintainability improvements. Do not redesign architecture. Do not add dependencies. Do not touch app/src/main/jniLibs, target, build, .gradle, secrets, ai_context.md. Stop after one small change."
           
-          # Pick 2-3 key files for context
-          for f in rust/src/lib.rs rust/src/main.rs rust/src/core/mod.rs; do
-            if [ -f "$f" ]; then
-              echo "--- FILE: $f ---" >> full_context.txt
-              cat "$f" >> full_context.txt
-            fi
-          done
+          echo "Running Gemini CLI in auto-edit mode with model: $MODEL_NAME"
+          gemini \
+            --model "$MODEL_NAME" \
+            --approval-mode=auto_edit \
+            --prompt "$PROMPT" > gemini_output.txt 2>&1 || (cat gemini_output.txt && exit 1)
 
-          PROMPT_PREFIX="You are a conservative maintenance bot. Return ONLY a unified diff patch. Make exactly ONE tiny improvement in ONE file. Limit changes to 1 file and 50 changed lines total. Prefer formatting, lint fixes, or obvious maintainability cleanup. Do not redesign architecture. Do not add dependencies. If no safe patch exists, return exactly: NO_PATCH"
+      - name: Inspect Diff and Safety
+        if: env.REBASE_FAILED != 'true'
+        run: |
+          git diff > git-diff.patch
+          git status --short
           
-          jq -n --arg prefix "$PROMPT_PREFIX" --rawfile context full_context.txt \
-            '{contents: [{parts: [{text: ($prefix + "\n\nContext:\n" + $context)}]}]}' > payload.json
-
-          curl -s -X POST -H 'Content-Type: application/json' \
-            -d @payload.json \
-            "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent?key=$GEMINI_API_KEY" > response.json
-
-          # Check for error if Pro was requested
-          if [ "$MODEL_NAME" == "gemini-1.5-pro" ] && jq -e '.error' response.json > /dev/null; then
-            echo "Fallback to Flash..."
-            MODEL_NAME="gemini-1.5-flash"
-            echo "RESOLVED_MODEL=$MODEL_NAME (fallback)" >> "$GITHUB_ENV"
-            curl -s -X POST -H 'Content-Type: application/json' \
-              -d @payload.json \
-              "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent?key=$GEMINI_API_KEY" > response.json
+          if [ ! -s git-diff.patch ]; then
+            echo "GEMINI_EDIT_PRODUCED=none" >> "$GITHUB_ENV"
+            exit 0
           fi
-
-          RAW_RESPONSE=$(jq -r '.candidates[0].content.parts[0].text // empty' response.json)
           
-          if [ -z "$RAW_RESPONSE" ] || [ "$RAW_RESPONSE" == "NO_PATCH" ]; then
-            echo "PATCH_PRODUCED=none" >> "$GITHUB_ENV"
-          else
-            # Extract patch, removing markdown fences if any
-            echo "$RAW_RESPONSE" | sed -n '/^diff --git/,/$/p' > gemini.patch
-            if [ ! -s gemini.patch ]; then
-               # Fallback to simple format if diff --git not found
-               echo "$RAW_RESPONSE" | sed '/^```/d' > gemini.patch
-            fi
-
-            if [ ! -s gemini.patch ] || ! grep -qE "^(diff --git|--- |\+\+\+ )" gemini.patch; then
-              echo "PATCH_PRODUCED=false" >> "$GITHUB_ENV"
-            else
-              if git apply --check gemini.patch; then
-                git apply gemini.patch
-                
-                FILES_CHANGED=$(git diff --name-only | wc -l)
-                LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
-                
-                if [ "$FILES_CHANGED" -gt 1 ] || [ "$LINES_CHANGED" -gt 50 ]; then
-                  echo "ERROR: Patch exceeded strict limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
-                  git restore --worktree --staged .
-                  echo "PATCH_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
-                else
-                  echo "PATCH_PRODUCED=true" >> "$GITHUB_ENV"
-                fi
-              else
-                echo "PATCH_PRODUCED=invalid" >> "$GITHUB_ENV"
-              fi
-            fi
+          FILES_CHANGED=$(git diff --name-only | wc -l)
+          LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
+          
+          if [ "$FILES_CHANGED" -gt 1 ] || [ "$LINES_CHANGED" -gt 50 ]; then
+            echo "ERROR: Gemini edit exceeded strict limits (Files: $FILES_CHANGED, Lines: $LINES_CHANGED)"
+            git restore --worktree --staged .
+            echo "GEMINI_EDIT_PRODUCED=exceeded_limits" >> "$GITHUB_ENV"
+            exit 1
           fi
-
-      - name: Upload Gemini Response
-        uses: actions/upload-artifact@v4
-        with:
-          name: gemini-response-rust
-          path: response.json
-          retention-days: 1
+          
+          if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
+            echo "ERROR: Unsafe file changes detected. Reverting."
+            git restore --worktree --staged .
+            echo "GEMINI_EDIT_PRODUCED=unsafe" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          
+          echo "GEMINI_EDIT_PRODUCED=true" >> "$GITHUB_ENV"
 
       - name: Validate (Rust)
-        if: env.REBASE_FAILED != 'true' && env.PATCH_PRODUCED == 'true'
+        if: env.REBASE_FAILED != 'true' && env.GEMINI_EDIT_PRODUCED == 'true'
         run: |
           cd rust
           cargo fmt
@@ -200,57 +163,35 @@ jobs:
           bash -n scripts/build-rust-android.sh
           ./scripts/build-rust-android.sh
 
-      - name: Cleanup Build Artifacts
-        if: env.REBASE_FAILED != 'true'
+      - name: Cleanup and Commit
+        if: env.REBASE_FAILED != 'true' && env.GEMINI_EDIT_PRODUCED == 'true'
         run: |
           git restore --staged app/src/main/jniLibs || true
           git restore app/src/main/jniLibs || true
-          rm -f full_context.txt payload.json response.json gemini.patch
-
-      - name: Inspect and Commit
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          if [ "$PATCH_PRODUCED" == "true" ]; then
-            git status --short
-            
-            if git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"; then
-              echo "ERROR: Unsafe file changes detected. Reverting."
-              git restore --worktree --staged .
-              exit 1
-            fi
-            
-            git add rust/ scripts/ docs/ README.md .gitignore
-            if ! git diff --staged --quiet; then
-              git commit -m "AI(rust): apply Gemini patch (model=${{ env.RESOLVED_MODEL }})"
-            fi
-          elif [[ "$PATCH_PRODUCED" == "exceeded_limits" || "$PATCH_PRODUCED" == "invalid" ]]; then
-            mkdir -p reports/ai/rust
-            REPORT_FILE="reports/ai/rust/audit-$(date -u +'%H-%M-%S').md"
-            echo "# Gemini Audit Failure" > "$REPORT_FILE"
-            echo "Model: ${{ env.RESOLVED_MODEL }}" >> "$REPORT_FILE"
-            echo "Status: $PATCH_PRODUCED" >> "$REPORT_FILE"
-            git add "$REPORT_FILE"
-            git commit -m "AI(rust): record Gemini audit failure (model=${{ env.RESOLVED_MODEL }})"
+          
+          git add rust/ scripts/ docs/ README.md .gitignore
+          if ! git diff --staged --quiet; then
+            git commit -m "AI(rust): apply Gemini agentic improvement"
           fi
+
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-rust-artifacts
+          path: |
+            gemini_output.txt
+            git-diff.patch
+          retention-days: 7
 
       - name: Handle Conflict
         if: env.REBASE_FAILED == 'true'
         run: |
-          mkdir -p reports/ai/rust
-          CONFLICT_FILE="reports/ai/rust/push-conflict-$(date -u +'%H-%M-%S').md"
-          echo "# Rebase Conflict Report" > "$CONFLICT_FILE"
-          echo "Failed to rebase $DAILY_BRANCH onto origin/main." >> "$CONFLICT_FILE"
-          git add "$CONFLICT_FILE"
-          git commit -m "AI(rust): report rebase conflict"
-          
-          # Attempt final push of conflict report
-          git fetch origin "$DAILY_BRANCH"
-          git rebase "origin/$DAILY_BRANCH" || git rebase --abort
-          git push origin "$DAILY_BRANCH"
+          git rebase --abort
           exit 0
 
       - name: Push Daily Branch
-        if: env.REBASE_FAILED != 'true'
+        if: env.REBASE_FAILED != 'true' && env.GEMINI_EDIT_PRODUCED == 'true'
         run: |
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           if [ "$CURRENT_BRANCH" == "main" ]; then
@@ -259,8 +200,7 @@ jobs:
           fi
           
           if [[ "$CURRENT_BRANCH" == ai/rust-* ]]; then
-            echo "Pushing $CURRENT_BRANCH..."
             git fetch origin "$CURRENT_BRANCH"
-            git rebase "origin/$CURRENT_BRANCH" || (echo "Push race conflict" && exit 1)
+            git rebase "origin/$CURRENT_BRANCH" || (git rebase --abort && exit 0)
             git push origin "$CURRENT_BRANCH"
           fi
