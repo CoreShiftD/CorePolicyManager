@@ -17,8 +17,8 @@
 //!   reducer mutation
 //!
 //! Failure semantics:
-//! - stale handles are state drift and should be rejected explicitly at the
-//!   caller boundary where possible
+//! - stale handles are state drift and are surfaced as missing state rather
+//!   than release-path panics
 //! - incremental hash maintenance is part of the invariant surface, not a cache
 //!   that can be repaired later without replay drift
 
@@ -96,39 +96,31 @@ impl CoreState {
     }
 
     #[inline]
-    pub fn job(&self, h: JobHandle) -> &JobState {
-        let job = self.jobs.get(h.index, h.generation);
-        debug_assert!(job.is_some(), "Job handle dangling in jobs arena");
-        job.unwrap()
+    pub fn job(&self, h: JobHandle) -> Option<&JobState> {
+        self.jobs.get(h.index, h.generation)
     }
 
     #[inline]
-    pub fn job_mut(&mut self, h: JobHandle) -> &mut JobState {
-        let job = self.jobs.get_mut(h.index, h.generation);
-        debug_assert!(job.is_some(), "Job handle dangling in jobs arena (mut)");
-        job.unwrap()
+    pub fn job_mut(&mut self, h: JobHandle) -> Option<&mut JobState> {
+        self.jobs.get_mut(h.index, h.generation)
     }
 
     #[inline]
-    pub fn runtime(&self, h: JobHandle) -> &JobRuntime {
+    pub fn runtime(&self, h: JobHandle) -> Option<&JobRuntime> {
         // Runtime state is allocated in parallel with the job arena and is
         // indexed by the same slot index. A missing entry indicates state drift.
-        debug_assert!(
-            (h.index as usize) < self.runtime.len(),
-            "Runtime missing for job"
-        );
-        self.runtime[h.index as usize].as_ref().unwrap()
+        self.runtime
+            .get(h.index as usize)
+            .and_then(|runtime| runtime.as_ref())
     }
 
     #[inline]
-    pub fn runtime_mut(&mut self, h: JobHandle) -> &mut JobRuntime {
+    pub fn runtime_mut(&mut self, h: JobHandle) -> Option<&mut JobRuntime> {
         // See `runtime()`: callers are expected to hold only validated job
         // handles when mutating runtime state.
-        debug_assert!(
-            (h.index as usize) < self.runtime.len(),
-            "Runtime missing for job (mut)"
-        );
-        self.runtime[h.index as usize].as_mut().unwrap()
+        self.runtime
+            .get_mut(h.index as usize)
+            .and_then(|runtime| runtime.as_mut())
     }
 
     #[inline]
@@ -164,11 +156,10 @@ impl CoreState {
                 self.remove_io_index(io);
             }
 
-            debug_assert!(
-                self.runtime[h.index as usize].is_some(),
-                "Runtime missing during cleanup"
-            );
-            self.runtime[h.index as usize].take();
+            if let Some(runtime_slot) = self.runtime.get_mut(h.index as usize) {
+                debug_assert!(runtime_slot.is_some(), "Runtime missing during cleanup");
+                runtime_slot.take();
+            }
 
             return Some(job);
         }
@@ -217,8 +208,9 @@ impl CoreState {
             io: None,
         });
 
-        let job = self.jobs.get(index, generation).unwrap();
-        self.hash ^= mix(id, hash_job(job));
+        if let Some(job) = self.jobs.get(index, generation) {
+            self.hash ^= mix(id, hash_job(job));
+        }
     }
     // Additional helpers for indexing mutations
     #[inline]

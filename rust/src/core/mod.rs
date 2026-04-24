@@ -882,7 +882,7 @@ impl ExecutionState {
 impl crate::core::state_view::StateView for ExecutionState {
     fn job(&self, id: u64) -> Option<crate::core::state_view::JobView> {
         let h = self.core.job_handle(id)?;
-        let j = self.core.job(h);
+        let j = self.core.job(h)?;
         Some(crate::core::state_view::JobView {
             id: j.id,
             owner: j.owner,
@@ -896,7 +896,7 @@ impl crate::core::state_view::StateView for ExecutionState {
 
     fn job_by_process(&self, process: ProcessHandle) -> Option<crate::core::state_view::JobView> {
         let h = self.core.job_by_process(process)?;
-        let j = self.core.job(h);
+        let j = self.core.job(h)?;
         Some(crate::core::state_view::JobView {
             id: j.id,
             owner: j.owner,
@@ -910,7 +910,7 @@ impl crate::core::state_view::StateView for ExecutionState {
 
     fn job_by_io(&self, io: IoHandle) -> Option<crate::core::state_view::JobView> {
         let h = self.core.job_by_io(io)?;
-        let j = self.core.job(h);
+        let j = self.core.job(h)?;
         Some(crate::core::state_view::JobView {
             id: j.id,
             owner: j.owner,
