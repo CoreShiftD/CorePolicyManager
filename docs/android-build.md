@@ -42,6 +42,21 @@ touch /data/local/tmp/coreshift/control/enable_preload
 - **Trace**: `touch /data/local/tmp/coreshift/control/log_trace`
 - **Reset to Info**: `rm /data/local/tmp/coreshift/control/log_*`
 
+### CLI Help
+To verify shell-facing help output without entering daemon mode:
+```bash
+adb shell /data/local/tmp/coreshift_test --help
+```
+
+This is the only normal stdout path. Daemon-mode runtime output goes to the structured log files.
+
+### IPC and Spawn Failure Checks
+
+Use the structured logs when validating daemon-side behavior changes:
+- IPC response queue overflow is logged and the offending client is disconnected.
+- Invalid exec requests are rejected before spawn and reported as spawn failures.
+- Runtime startup and shutdown remain structured-log paths even when the binary is launched from a shell.
+
 ## Output Artifacts
 
 The final packaged payloads are located at:
@@ -52,6 +67,20 @@ The final packaged payloads are located at:
 
 ## CI Configuration
 The CI environment automatically installs the required Rust targets and uses the repo-local `rust/target` directory for deterministic builds.
+
+## Rust Validation
+
+Use these checks before committing daemon changes:
+
+```bash
+cd rust
+cargo fmt --check
+cargo check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+If the environment reports `error: jobs may not be 0`, rerun the cargo command with `-j 1`.
 
 ## Release Build Optimization
 
