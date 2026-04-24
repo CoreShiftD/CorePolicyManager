@@ -47,7 +47,7 @@ jobs:
       IMPROVE_UNTIL_SECONDS: 1500
       PASS_SLEEP_SECONDS: 10
       MAX_FAILED_PASSES: 3
-      MAX_NO_CHANGE_PASSES: 5
+      MAX_NO_CHANGE_PASSES: 3
       MAX_RECOVERY_PASSES: 2
 
     steps:
@@ -156,6 +156,7 @@ jobs:
           LAST_FAILURE_LOG=""
           STRATEGIES=("correctness" "test coverage" "clippy warnings" "error handling" "cleanup" "docs accuracy" "logging/observability" "performance")
           STRATEGY_INDEX=0
+          STOP_REASON="time_budget_reached"
           
           # Patch limits
           if [ "$DEEP_MODE" = "true" ]; then
@@ -175,14 +176,21 @@ jobs:
           echo "| Pass | Strategy | Status | Lines | Files | Commit |" >> "$SUMMARY_FILE"
           echo "| --- | --- | --- | --- | --- | --- |" >> "$SUMMARY_FILE"
           
+          echo "### Session Progress" >> $GITHUB_STEP_SUMMARY
+          echo "| Pass | Strategy | Status | Lines | Files | Commit |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- | --- | --- | --- | --- |" >> $GITHUB_STEP_SUMMARY
+
           while [ $(( $(date +%s) - START_TIME )) -lt $IMPROVE_UNTIL_SECONDS ]; do
             PASS_COUNT=$((PASS_COUNT + 1))
             CURRENT_STRATEGY=${STRATEGIES[$STRATEGY_INDEX]}
-            echo "--- PASS $PASS_COUNT (Strategy: $CURRENT_STRATEGY) ---"
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            
+            echo "::group::AI Pass $PASS_COUNT - $CURRENT_STRATEGY"
+            echo "PASS=$PASS_COUNT strategy=$CURRENT_STRATEGY elapsed=${ELAPSED}s"
+            
             PASS_DIR="session_artifacts/rust/pass-$PASS_COUNT"
             mkdir -p "$PASS_DIR"
             
-            # Phase A & B: Inspect & Plan
             if [ "$RECOVERY_MODE" = "true" ]; then
               echo "Entering RECOVERY MODE (Attempt $((RECOVERY_COUNT + 1)))"
               ERROR_SUMMARY=$(cat "$LAST_FAILURE_LOG" | head -n 50)
@@ -191,87 +199,121 @@ jobs:
               $ERROR_SUMMARY
               End with SUMMARY: fixed previous validation errors."
             else
-              # Ensure repo is clean before new improvement
               if ! git diff --quiet || ! git diff --cached --quiet; then
                 git restore --worktree --staged .
                 git clean -fd --exclude=session_artifacts/
               fi
-              PROMPT="You are a senior maintenance engineer working on the CoreShift Rust daemon. Task: make one focused, high-value, low-risk improvement in the category: $CURRENT_STRATEGY. Priorities: failing tests, missing tests, clippy, safety, IPC robustness. Avoid trivial edits. Max $LIMIT_FILES files and $LIMIT_LINES lines. All commits you suggest or perform must use DCO signoff (git commit --signoff). Stop after one focused change. End with SUMMARY: <short description>."
+              
+              if [ $NO_CHANGE_PASSES -gt 0 ]; then
+                AGGR_HINT="You previously returned no changes. You MUST inspect files and make a useful safe edit if any exists. Explicitly allow docs/tests/cleanup if code changes are not obvious. Do not return without editing unless there is truly nothing safe."
+              else
+                AGGR_HINT=""
+              fi
+              
+              PROMPT="You are a senior maintenance engineer working on the CoreShift Rust daemon. Task: make one focused, high-value, low-risk improvement in the category: $CURRENT_STRATEGY. Priorities: failing tests, missing tests, clippy, safety, IPC robustness. Avoid trivial edits. Max $LIMIT_FILES files and $LIMIT_LINES lines. All commits you suggest or perform must use DCO signoff (git commit --signoff). Stop after one focused change. $AGGR_HINT End with SUMMARY: <short description>."
             fi
             
-            # Phase C: Edit
             gemini --model "${{ env.SELECTED_MODEL }}" --approval-mode=auto_edit --skip-trust --prompt "$PROMPT" > "$PASS_DIR/gemini_output.txt" 2>&1 || true
             
             git diff > "$PASS_DIR/git-diff.patch"
             git status --short > "$PASS_DIR/status.txt"
             
-            # Phase D & E: Validate & Recover
+            STATUS="unknown"
+            L_LINES=0
+            L_FILES=0
+            L_HASH="-"
+
             if [ ! -s "$PASS_DIR/git-diff.patch" ]; then
               if [ "$RECOVERY_MODE" = "true" ]; then
-                git restore --worktree --staged .
-                RECOVERY_MODE=false
-                FAILED_PASSES=$((FAILED_PASSES + 1))
-                echo "| $PASS_COUNT | $CURRENT_STRATEGY | recovery_no_change | 0 | 0 | - |" >> "$SUMMARY_FILE"
-              else
-                NO_CHANGE_PASSES=$((NO_CHANGE_PASSES + 1))
-                STRATEGY_INDEX=$(( (STRATEGY_INDEX + 1) % ${#STRATEGIES[@]} ))
-                echo "| $PASS_COUNT | $CURRENT_STRATEGY | no_change | 0 | 0 | - |" >> "$SUMMARY_FILE"
-              fi
-            else
-              FILES_CHANGED=$(git diff --name-only | wc -l)
-              LINES_CHANGED=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
-              
-              if [ "$FILES_CHANGED" -gt "$LIMIT_FILES" ] || [ "$LINES_CHANGED" -gt "$LIMIT_LINES" ] || (git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"); then
+                echo "Recovery produced no changes. This is a recovery failure."
                 git restore --worktree --staged .
                 git clean -fd --exclude=session_artifacts/
                 RECOVERY_MODE=false
                 FAILED_PASSES=$((FAILED_PASSES + 1))
-                echo "| $PASS_COUNT | $CURRENT_STRATEGY | rejected_safety | $LINES_CHANGED | $FILES_CHANGED | - |" >> "$SUMMARY_FILE"
+                STATUS="recovery_no_change"
               else
+                echo "No changes."
+                NO_CHANGE_PASSES=$((NO_CHANGE_PASSES + 1))
+                STATUS="no_change"
+                if [ $NO_CHANGE_PASSES -ge $MAX_NO_CHANGE_PASSES ]; then
+                   echo "No-change threshold reached; rotating strategy."
+                   NO_CHANGE_PASSES=0
+                   STRATEGY_INDEX=$(( (STRATEGY_INDEX + 1) % ${#STRATEGIES[@]} ))
+                fi
+              fi
+              echo "::notice title=AI Pass::$PASS_COUNT strategy=$CURRENT_STRATEGY status=$STATUS"
+            else
+              L_FILES=$(git diff --name-only | wc -l)
+              L_LINES=$(git diff --shortstat | awk '{print ($4 + $6)}' || echo 0)
+              
+              if [ "$L_FILES" -gt "$LIMIT_FILES" ] || [ "$L_LINES" -gt "$LIMIT_LINES" ] || (git status --short | grep -E "ai_context|target/|build/|\.gradle/|jniLibs/|secrets"); then
+                echo "::error title=AI Unsafe Change::Rejected unsafe or too large ($L_FILES files, $L_LINES lines)"
+                git restore --worktree --staged .
+                git clean -fd --exclude=session_artifacts/
+                RECOVERY_MODE=false
+                FAILED_PASSES=$((FAILED_PASSES + 1))
+                STATUS="rejected_safety"
+              else
+                echo "Validating pass $PASS_COUNT..."
                 cd rust
                 if cargo fmt && cargo fmt --check && cargo check && cargo test && cargo clippy --all-targets --all-features -- -D warnings; then
                   cd ..
-                  # Phase F: Commit
                   SUMMARY=$(grep "SUMMARY:" "$PASS_DIR/gemini_output.txt" | tail -n 1 | sed 's/SUMMARY: //')
                   if [ -z "$SUMMARY" ]; then SUMMARY="improvement in $CURRENT_STRATEGY"; fi
                   git add rust/ scripts/ docs/ README.md .gitignore
                   git commit --signoff -m "AI(rust): $SUMMARY"
-                  HASH=$(git rev-parse --short HEAD)
+                  L_HASH=$(git rev-parse --short HEAD)
+                  echo "::notice title=AI Commit::Created commit $L_HASH"
                   COMMITS_CREATED=$((COMMITS_CREATED + 1))
                   FAILED_PASSES=0
                   NO_CHANGE_PASSES=0
                   RECOVERY_MODE=false
                   RECOVERY_COUNT=0
-                  echo "| $PASS_COUNT | $CURRENT_STRATEGY | success | $LINES_CHANGED | $FILES_CHANGED | $HASH |" >> "$SUMMARY_FILE"
+                  STATUS="success"
                 else
                   cd ..
+                  echo "::warning title=AI Validation Failed::Pass $PASS_COUNT failed validation"
                   LAST_FAILURE_LOG="$PASS_DIR/validation.log"
                   cd rust && (cargo check && cargo test && cargo clippy --all-targets --all-features -- -D warnings) > "../$LAST_FAILURE_LOG" 2>&1 || true
                   cd ..
                   RECOVERY_COUNT=$((RECOVERY_COUNT + 1))
                   if [ $RECOVERY_COUNT -ge $MAX_RECOVERY_PASSES ]; then
+                    echo "Max recovery attempts reached. Reverting."
                     git restore --worktree --staged .
                     git clean -fd --exclude=session_artifacts/
                     RECOVERY_MODE=false
                     RECOVERY_COUNT=0
                     FAILED_PASSES=$((FAILED_PASSES + 1))
-                    echo "| $PASS_COUNT | $CURRENT_STRATEGY | recovery_failed | $LINES_CHANGED | $FILES_CHANGED | - |" >> "$SUMMARY_FILE"
+                    STATUS="recovery_failed"
                   else
                     RECOVERY_MODE=true
-                    echo "| $PASS_COUNT | $CURRENT_STRATEGY | validation_failed_recovering | $LINES_CHANGED | $FILES_CHANGED | - |" >> "$SUMMARY_FILE"
+                    STATUS="recovering"
                   fi
                 fi
               fi
             fi
             
-            if [ $FAILED_PASSES -ge $MAX_FAILED_PASSES ]; then echo "STOP: Max failed passes reached."; break; fi
-            if [ $NO_CHANGE_PASSES -ge $MAX_NO_CHANGE_PASSES ]; then echo "STOP: Max no-change passes reached."; break; fi
+            echo "status=$STATUS" >> "$PASS_DIR/status.txt"
+            echo "| $PASS_COUNT | $CURRENT_STRATEGY | $STATUS | $L_LINES | $L_FILES | $L_HASH |" >> "$SUMMARY_FILE"
+            echo "| $PASS_COUNT | $CURRENT_STRATEGY | $STATUS | $L_LINES | $L_FILES | $L_HASH |" >> $GITHUB_STEP_SUMMARY
+            
+            if [ $FAILED_PASSES -ge $MAX_FAILED_PASSES ]; then 
+              echo "STOP: Max failed passes reached."
+              STOP_REASON="max_failed_passes"
+              break
+            fi
+            echo "::endgroup::"
             sleep $PASS_SLEEP_SECONDS
           done
           
+          if [ $(( $(date +%s) - START_TIME )) -ge $IMPROVE_UNTIL_SECONDS ]; then
+            echo "::notice title=AI Session::Time budget reached."
+          fi
+
           echo "" >> "$SUMMARY_FILE"
           echo "- **Ended at**: $(date -u)" >> "$SUMMARY_FILE"
           echo "- **Total Commits**: $COMMITS_CREATED" >> "$SUMMARY_FILE"
+          echo "- **Stop Reason**: $STOP_REASON" >> "$SUMMARY_FILE"
 
       - name: Final Validation and Push
         if: env.REBASE_FAILED != 'true'
