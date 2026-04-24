@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::core::{Action, Event, IoStream, Module};
+use smallvec::SmallVec;
 
 pub struct IoModule;
 
@@ -11,16 +12,16 @@ impl Module for IoModule {
         &self,
         _state: &dyn crate::core::state_view::StateView,
         _action: &Action,
-    ) -> Vec<Action> {
-        Vec::new()
+    ) -> crate::core::ActionList {
+        SmallVec::new()
     }
 
     fn handle_event(
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &Event,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         match event {
             Event::ProcessStarted { io, .. } => {
                 // Here the core module issues Watch actions purely via intent.

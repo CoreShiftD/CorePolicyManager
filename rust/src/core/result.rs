@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::core::{Action, Event, Module, StoredResult};
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, VecDeque};
 
 pub struct ResultState {
@@ -38,8 +39,8 @@ impl Module for ResultModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         action: &Action,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         match action {
             Action::Query { id } => {
                 if let Some(r) = state.result(*id) {
@@ -82,8 +83,8 @@ impl Module for ResultModule {
         &self,
         state: &dyn crate::core::state_view::StateView,
         event: &Event,
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
+    ) -> crate::core::ActionList {
+        let mut actions = SmallVec::new();
         if let Event::ProcessExited { process, status } = event
             && let Some(job) = state.job_by_process(*process)
         {
