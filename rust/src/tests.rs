@@ -167,6 +167,35 @@ mod tests_internal {
     }
 
     #[test]
+    fn execution_state_job_view_handles_stale_core_handles() {
+        use crate::core::state_view::StateView;
+
+        let mut state = ExecutionState::new();
+        state.core.insert_job(
+            7,
+            42,
+            crate::core::ExecSpec {
+                argv: vec!["true".to_string()],
+                stdin: None,
+                capture_stdout: false,
+                capture_stderr: false,
+                max_output: 0,
+            },
+            crate::core::ExecPolicy {
+                timeout_ms: None,
+                kill_grace_ms: 0,
+                cancel: crate::core::CancelPolicy::None,
+            },
+        );
+
+        let handle = state.core.job_handle(7).expect("job handle must exist");
+        let removed = state.core.jobs.remove(handle.index, handle.generation);
+        assert!(removed.is_some());
+
+        assert!(state.job(7).is_none());
+    }
+
+    #[test]
     fn test_preload_addon_debouncing() {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;

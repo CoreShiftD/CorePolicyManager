@@ -81,34 +81,42 @@ impl Reducer for JobReducer {
                 id,
                 state: lifecycle_state,
             } => {
-                if let Some(h) = core.job_handle(*id) {
-                    let old_job = core.job(h).clone();
-                    if old_job.lifecycle != *lifecycle_state {
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(old_job) = core.job(h).cloned()
+                    && old_job.lifecycle != *lifecycle_state
+                {
+                    core.hash ^= crate::core::core_state::mix(
+                        *id,
+                        crate::core::core_state::hash_job(&old_job),
+                    );
+                    if let Some(job) = core.job_mut(h) {
+                        job.lifecycle = *lifecycle_state;
+                    }
+                    if let Some(job) = core.job(h) {
                         core.hash ^= crate::core::core_state::mix(
                             *id,
-                            crate::core::core_state::hash_job(&old_job),
-                        );
-                        core.job_mut(h).lifecycle = *lifecycle_state;
-                        core.hash ^= crate::core::core_state::mix(
-                            *id,
-                            crate::core::core_state::hash_job(core.job(h)),
+                            crate::core::core_state::hash_job(job),
                         );
                     }
                 }
             }
             Action::Finished { id, .. } | Action::Rejected { id, .. } => {
                 // ONLY semantic transition, NO removals here
-                if let Some(h) = core.job_handle(*id) {
-                    let old_job = core.job(h).clone();
-                    if old_job.lifecycle != JobLifecycle::Finished {
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(old_job) = core.job(h).cloned()
+                    && old_job.lifecycle != JobLifecycle::Finished
+                {
+                    core.hash ^= crate::core::core_state::mix(
+                        *id,
+                        crate::core::core_state::hash_job(&old_job),
+                    );
+                    if let Some(job) = core.job_mut(h) {
+                        job.lifecycle = JobLifecycle::Finished;
+                    }
+                    if let Some(job) = core.job(h) {
                         core.hash ^= crate::core::core_state::mix(
                             *id,
-                            crate::core::core_state::hash_job(&old_job),
-                        );
-                        core.job_mut(h).lifecycle = JobLifecycle::Finished;
-                        core.hash ^= crate::core::core_state::mix(
-                            *id,
-                            crate::core::core_state::hash_job(core.job(h)),
+                            crate::core::core_state::hash_job(job),
                         );
                     }
                 }
@@ -117,75 +125,97 @@ impl Reducer for JobReducer {
                 core.remove_job(*id);
             }
             Action::AssignProcess { id, process } => {
-                if let Some(h) = core.job_handle(*id) {
-                    let old_job = core.job(h).clone();
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(old_job) = core.job(h).cloned()
+                {
                     if old_job.process != Some(*process) {
                         core.hash ^= crate::core::core_state::mix(
                             *id,
                             crate::core::core_state::hash_job(&old_job),
                         );
-                        core.job_mut(h).process = Some(*process);
-                        core.hash ^= crate::core::core_state::mix(
-                            *id,
-                            crate::core::core_state::hash_job(core.job(h)),
-                        );
+                        if let Some(job) = core.job_mut(h) {
+                            job.process = Some(*process);
+                        }
+                        if let Some(job) = core.job(h) {
+                            core.hash ^= crate::core::core_state::mix(
+                                *id,
+                                crate::core::core_state::hash_job(job),
+                            );
+                        }
                     }
-                    if let Some(old) = core.runtime(h).process {
+                    if let Some(old) = core.runtime(h).and_then(|runtime| runtime.process) {
                         core.remove_process_index(old);
                     }
-                    core.runtime_mut(h).process = Some(*process);
-                    core.insert_process_index(*process, h);
+                    if let Some(runtime) = core.runtime_mut(h) {
+                        runtime.process = Some(*process);
+                        core.insert_process_index(*process, h);
+                    }
                 }
             }
             Action::AssignIo { id, io } => {
-                if let Some(h) = core.job_handle(*id) {
-                    let old_job = core.job(h).clone();
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(old_job) = core.job(h).cloned()
+                {
                     if old_job.io != Some(*io) {
                         core.hash ^= crate::core::core_state::mix(
                             *id,
                             crate::core::core_state::hash_job(&old_job),
                         );
-                        core.job_mut(h).io = Some(*io);
-                        core.hash ^= crate::core::core_state::mix(
-                            *id,
-                            crate::core::core_state::hash_job(core.job(h)),
-                        );
+                        if let Some(job) = core.job_mut(h) {
+                            job.io = Some(*io);
+                        }
+                        if let Some(job) = core.job(h) {
+                            core.hash ^= crate::core::core_state::mix(
+                                *id,
+                                crate::core::core_state::hash_job(job),
+                            );
+                        }
                     }
-                    if let Some(old) = core.runtime(h).io {
+                    if let Some(old) = core.runtime(h).and_then(|runtime| runtime.io) {
                         core.remove_io_index(old);
                     }
-                    core.runtime_mut(h).io = Some(*io);
-                    core.insert_io_index(*io, h);
+                    if let Some(runtime) = core.runtime_mut(h) {
+                        runtime.io = Some(*io);
+                        core.insert_io_index(*io, h);
+                    }
                 }
             }
             Action::SetJobIoState { id, state } => {
-                if let Some(h) = core.job_handle(*id) {
-                    let old_job = core.job(h).clone();
-                    if old_job.io_state != *state {
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(old_job) = core.job(h).cloned()
+                    && old_job.io_state != *state
+                {
+                    core.hash ^= crate::core::core_state::mix(
+                        *id,
+                        crate::core::core_state::hash_job(&old_job),
+                    );
+                    if let Some(job) = core.job_mut(h) {
+                        job.io_state = *state;
+                    }
+                    if let Some(job) = core.job(h) {
                         core.hash ^= crate::core::core_state::mix(
                             *id,
-                            crate::core::core_state::hash_job(&old_job),
-                        );
-                        core.job_mut(h).io_state = *state;
-                        core.hash ^= crate::core::core_state::mix(
-                            *id,
-                            crate::core::core_state::hash_job(core.job(h)),
+                            crate::core::core_state::hash_job(job),
                         );
                     }
                 }
             }
             Action::TimeoutReached { id } => {
-                if let Some(h) = core.job_handle(*id) {
-                    let old_job = core.job(h).clone();
-                    if !old_job.timed_out {
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(old_job) = core.job(h).cloned()
+                    && !old_job.timed_out
+                {
+                    core.hash ^= crate::core::core_state::mix(
+                        *id,
+                        crate::core::core_state::hash_job(&old_job),
+                    );
+                    if let Some(job) = core.job_mut(h) {
+                        job.timed_out = true;
+                    }
+                    if let Some(job) = core.job(h) {
                         core.hash ^= crate::core::core_state::mix(
                             *id,
-                            crate::core::core_state::hash_job(&old_job),
-                        );
-                        core.job_mut(h).timed_out = true;
-                        core.hash ^= crate::core::core_state::mix(
-                            *id,
-                            crate::core::core_state::hash_job(core.job(h)),
+                            crate::core::core_state::hash_job(job),
                         );
                     }
                 }
@@ -194,8 +224,9 @@ impl Reducer for JobReducer {
                 effects.push(crate::core::Effect::PollProcess { process: *process });
             }
             Action::StartProcess { id } => {
-                if let Some(h) = core.job_handle(*id) {
-                    let job = core.job(h);
+                if let Some(h) = core.job_handle(*id)
+                    && let Some(job) = core.job(h)
+                {
                     effects.push(crate::core::Effect::StartProcess {
                         id: *id,
                         exec: job.exec.clone(),
@@ -210,10 +241,12 @@ impl Reducer for JobReducer {
                 });
             }
             Action::HandleProcessFailure { process, err } => {
-                if let Some(h) = core.job_by_process(*process) {
-                    let id = core.job(h).id;
+                if let Some(h) = core.job_by_process(*process)
+                    && let Some(job) = core.job(h)
+                {
+                    let id = job.id;
                     effects.push(crate::core::Effect::Log {
-                        owner: core.job(h).owner,
+                        owner: job.owner,
                         level: crate::core::LogLevel::Error,
                         event: crate::core::LogEvent::Error {
                             id,
@@ -221,25 +254,31 @@ impl Reducer for JobReducer {
                         },
                     });
 
-                    let old_job = core.job(h).clone();
+                    let old_job = job.clone();
                     if old_job.process.is_some() {
                         core.hash ^= crate::core::core_state::mix(
                             id,
                             crate::core::core_state::hash_job(&old_job),
                         );
-                        core.job_mut(h).process = None;
-                        core.hash ^= crate::core::core_state::mix(
-                            id,
-                            crate::core::core_state::hash_job(core.job(h)),
-                        );
+                        if let Some(job) = core.job_mut(h) {
+                            job.process = None;
+                        }
+                        if let Some(job) = core.job(h) {
+                            core.hash ^= crate::core::core_state::mix(
+                                id,
+                                crate::core::core_state::hash_job(job),
+                            );
+                        }
                     }
                 }
             }
             Action::HandleIoFailure { io, reason } => {
-                if let Some(h) = core.job_by_io(*io) {
-                    let id = core.job(h).id;
+                if let Some(h) = core.job_by_io(*io)
+                    && let Some(job) = core.job(h)
+                {
+                    let id = job.id;
                     effects.push(crate::core::Effect::Log {
-                        owner: core.job(h).owner,
+                        owner: job.owner,
                         level: crate::core::LogLevel::Error,
                         event: crate::core::LogEvent::Error {
                             id,
@@ -247,19 +286,22 @@ impl Reducer for JobReducer {
                         },
                     });
 
-                    let old_job = core.job(h).clone();
+                    let old_job = job.clone();
                     if old_job.io.is_some() || old_job.io_state != JobIoState::Closed {
                         core.hash ^= crate::core::core_state::mix(
                             id,
                             crate::core::core_state::hash_job(&old_job),
                         );
-                        let job_mut = core.job_mut(h);
-                        job_mut.io = None;
-                        job_mut.io_state = JobIoState::Closed;
-                        core.hash ^= crate::core::core_state::mix(
-                            id,
-                            crate::core::core_state::hash_job(core.job(h)),
-                        );
+                        if let Some(job_mut) = core.job_mut(h) {
+                            job_mut.io = None;
+                            job_mut.io_state = JobIoState::Closed;
+                        }
+                        if let Some(job) = core.job(h) {
+                            core.hash ^= crate::core::core_state::mix(
+                                id,
+                                crate::core::core_state::hash_job(job),
+                            );
+                        }
                     }
                 }
             }
