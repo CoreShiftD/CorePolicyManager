@@ -332,25 +332,27 @@ impl IpcModule {
             Some(id) => id,
             None => return,
         };
+        let mut overflow_reason = None;
         match action {
             crate::core::Action::Started { id } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
-                    Self::queue_response(conn, WireResponse::Exec(*id));
+                    overflow_reason = Self::queue_response(conn, WireResponse::Exec(*id)).err();
                 }
             }
             crate::core::Action::Controlled { id: _ } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
-                    Self::queue_response(conn, WireResponse::CancelOk);
+                    overflow_reason = Self::queue_response(conn, WireResponse::CancelOk).err();
                 }
             }
             crate::core::Action::QueryResult { id: _, result } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
-                    Self::queue_response(conn, WireResponse::Result(result.clone()));
+                    overflow_reason =
+                        Self::queue_response(conn, WireResponse::Result(result.clone())).err();
                 }
             }
             crate::core::Action::Rejected { .. } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
-                    Self::queue_response(conn, WireResponse::Error);
+                    overflow_reason = Self::queue_response(conn, WireResponse::Error).err();
                 }
             }
             crate::core::Action::Finished { id, result, .. } => {
@@ -359,18 +361,19 @@ impl IpcModule {
                         id: *id,
                         result: result.clone(),
                     };
-                    Self::queue_response(conn, WireResponse::Result(Some(outcome)));
+                    overflow_reason =
+                        Self::queue_response(conn, WireResponse::Result(Some(outcome))).err();
                 }
             }
             _ => {}
         }
+
+        if let Some(reason) = overflow_reason {
+            self.drop_client(client_id, &reason);
+        }
     }
 
-    fn queue_response(conn: &mut Conn, resp: WireResponse) {
-        if conn.write_buf.len() > MAX_WRITE_BUF {
-            return; // Drop response on buffer overflow
-        }
-
+    fn queue_response(conn: &mut Conn, resp: WireResponse) -> Result<(), String> {
         let payload = match resp {
             WireResponse::Exec(id) => {
                 let mut p = Vec::with_capacity(9);
@@ -388,9 +391,36 @@ impl IpcModule {
             WireResponse::CancelOk => vec![3u8],
             WireResponse::Error => vec![4u8],
         };
+        let frame_len = payload.len() + std::mem::size_of::<u32>();
+        let next_len = conn.write_buf.len().saturating_add(frame_len);
+        if next_len > MAX_WRITE_BUF {
+            return Err(format!(
+                "ipc write buffer overflow uid={} current_len={} frame_len={} max_len={}",
+                conn.uid,
+                conn.write_buf.len(),
+                frame_len,
+                MAX_WRITE_BUF
+            ));
+        }
+
         let len = payload.len() as u32;
         conn.write_buf.extend_from_slice(&len.to_le_bytes());
         conn.write_buf.extend_from_slice(&payload);
+        Ok(())
+    }
+
+    fn drop_client(&mut self, client_id: u32, reason: &str) {
+        if let Some(conn) = self.clients.remove(&client_id) {
+            crate::runtime::log_runtime_event(
+                crate::core::CORE_OWNER,
+                crate::core::LogLevel::Warn,
+                crate::core::LogEvent::Generic(format!(
+                    "disconnecting ipc client id={} uid={} reason={}",
+                    client_id, conn.uid, reason
+                )),
+            );
+            self.client_tokens.remove(&conn.token);
+        }
     }
 }
 
