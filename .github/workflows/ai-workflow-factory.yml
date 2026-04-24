@@ -1,0 +1,74 @@
+name: AI Workflow Factory
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_name:
+        description: 'Display name for the new workflow'
+        required: true
+      workflow_filename:
+        description: 'Filename (without extension)'
+        required: true
+      scope_description:
+        description: 'File paths or patterns to review'
+        required: true
+      branch_prefix:
+        description: 'Branch prefix (e.g., ai/feature-)'
+        required: true
+        default: 'ai/factory-'
+      validation_commands:
+        description: 'Shell commands to validate changes'
+        required: false
+        default: './gradlew spotlessCheck'
+      ai_prompt:
+        description: 'Specific instructions for the AI agents'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  create-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch origin/main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Create Factory Branch
+        run: |
+          BRANCH_NAME="ai/workflow-factory-${{ github.run_id }}"
+          git checkout -b "$BRANCH_NAME"
+          echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
+
+      - name: Generate Workflow File
+        run: |
+          cat <<EOF > .github/workflows/${{ github.event.inputs.workflow_filename }}.yml
+          name: ${{ github.event.inputs.workflow_name }}
+          on:
+            workflow_dispatch:
+          permissions:
+            contents: write
+          jobs:
+            review:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - name: AI Review Step
+                  run: |
+                    echo "Reviewing scope: ${{ github.event.inputs.scope_description }}"
+                    echo "Prompt: ${{ github.event.inputs.ai_prompt }}"
+                - name: Validation
+                  run: |
+                    ${{ github.event.inputs.validation_commands }}
+          EOF
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/${{ github.event.inputs.workflow_filename }}.yml
+          git commit -m "AI(workflows): create requested AI workflow"
+          git push origin "${{ env.BRANCH_NAME }}"

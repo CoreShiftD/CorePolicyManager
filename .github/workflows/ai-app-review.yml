@@ -1,0 +1,72 @@
+name: AI App Review (Dual-Agent)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for review (optional)'
+        required: false
+        default: 'General quality pass'
+
+permissions:
+  contents: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch origin/main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Create Review Branch
+        run: |
+          BRANCH_NAME="ai/app-${{ github.run_id }}"
+          git checkout -b "$BRANCH_NAME"
+          echo "BRANCH_NAME=$BRANCH_NAME" >> "$GITHUB_ENV"
+
+      - name: Collect App Scope
+        run: |
+          find app/ core/ feature/ gradle/ -maxdepth 3 -not -path '*/.*' > scope.txt
+          echo "build.gradle.kts" >> scope.txt
+          echo "settings.gradle.kts" >> scope.txt
+          echo "gradle.properties" >> scope.txt
+
+      - name: Codex Review
+        env:
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
+          if [ -z "$CODEX_API_KEY" ]; then echo "CODEX_API_KEY missing"; exit 1; fi
+          echo '{"proposal": "App quality review placeholder from Codex"}' > codex_proposal.json
+
+      - name: Gemini Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
+          echo '{"proposal": "App quality review placeholder from Gemini"}' > gemini_proposal.json
+
+      - name: Determine Agreement
+        run: |
+          echo "# AI Review Report (Dual-Agent Agreement)" > REPORT.md
+          echo "## Codex Opinion" >> REPORT.md
+          cat codex_proposal.json >> REPORT.md
+          echo "## Gemini Opinion" >> REPORT.md
+          cat gemini_proposal.json >> REPORT.md
+          echo "## Agreement Status" >> REPORT.md
+          echo "Manual review required. No automatic source mutations allowed." >> REPORT.md
+
+      - name: Validate (App)
+        run: |
+          chmod +x gradlew
+          ./gradlew spotlessCheck
+
+      - name: Commit and Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add REPORT.md
+          git commit -m "AI(app): apply dual-agent agreed improvement pass"
+          git push origin "${{ env.BRANCH_NAME }}"
