@@ -396,20 +396,24 @@ mod tests_internal {
 
     #[test]
     fn production_source_has_no_ad_hoc_output_macros() {
-        let forbidden = [
-            concat!("print", "ln!"),
-            concat!("eprint", "ln!"),
-            concat!("db", "g!"),
-        ];
+        let forbidden = [concat!("eprint", "ln!"), concat!("db", "g!")];
+        let forbidden_outside_main = concat!("print", "ln!");
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let tests_rs = src_dir.join("tests.rs");
+        let main_rs = src_dir.join("main.rs");
 
-        fn check_dir(dir: &std::path::Path, tests_rs: &std::path::Path, forbidden: &[&str]) {
+        fn check_dir(
+            dir: &std::path::Path,
+            tests_rs: &std::path::Path,
+            main_rs: &std::path::Path,
+            forbidden: &[&str],
+            forbidden_outside_main: &str,
+        ) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let entry = entry.unwrap();
                 let path = entry.path();
                 if path.is_dir() {
-                    check_dir(&path, tests_rs, forbidden);
+                    check_dir(&path, tests_rs, main_rs, forbidden, forbidden_outside_main);
                 } else if path.extension().is_some_and(|e| e == "rs") && path != *tests_rs {
                     let content = std::fs::read_to_string(&path).unwrap();
                     for token in forbidden {
@@ -420,11 +424,25 @@ mod tests_internal {
                             path
                         );
                     }
+                    if path != *main_rs {
+                        assert!(
+                            !content.contains(forbidden_outside_main),
+                            "Found forbidden output macro '{}' in {:?}",
+                            forbidden_outside_main,
+                            path
+                        );
+                    }
                 }
             }
         }
 
-        check_dir(&src_dir, &tests_rs, &forbidden);
+        check_dir(
+            &src_dir,
+            &tests_rs,
+            &main_rs,
+            &forbidden,
+            forbidden_outside_main,
+        );
     }
 
     #[test]
