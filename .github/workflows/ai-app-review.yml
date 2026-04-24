@@ -1,4 +1,4 @@
-name: AI App Review (Dual-Agent)
+name: AI App Review (Gemini)
 
 on:
   workflow_dispatch:
@@ -7,8 +7,6 @@ on:
         description: 'Reason for review (optional)'
         required: false
         default: 'General quality pass'
-  # Hourly cron removed to prevent unexpected API costs.
-  # Manual dispatch only. Run when review is needed.
 
 concurrency:
   group: ai-app-review-daily
@@ -21,7 +19,6 @@ jobs:
   review:
     runs-on: ubuntu-latest
     # Secrets should be stored in GitHub Environment: ai-audit
-    # This allows approval rules / restricted access / secret isolation
     environment:
       name: ai-audit
     steps:
@@ -78,31 +75,17 @@ jobs:
           echo "settings.gradle.kts" >> scope.txt
           echo "gradle.properties" >> scope.txt
 
-      - name: Codex Review
-        if: env.REBASE_FAILED != 'true'
-        env:
-          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-        run: |
-          if [ -z "$CODEX_API_KEY" ]; then echo "CODEX_API_KEY missing"; exit 1; fi
-          echo '{"proposal": "App quality review placeholder from Codex"}' > codex_proposal.json
-
       - name: Gemini Review
         if: env.REBASE_FAILED != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
-          echo '{"proposal": "App quality review placeholder from Gemini"}' > gemini_proposal.json
-
-      - name: Determine Agreement
-        if: env.REBASE_FAILED != 'true'
-        run: |
-          REPORT_FILE="REPORT_$(date -u +'%H-%M').md"
-          echo "# AI Review Report (Dual-Agent Agreement) - $(date -u)" > "$REPORT_FILE"
-          echo "## Codex Opinion" >> "$REPORT_FILE"
-          cat codex_proposal.json >> "$REPORT_FILE"
-          echo "## Gemini Opinion" >> "$REPORT_FILE"
-          cat gemini_proposal.json >> "$REPORT_FILE"
+          mkdir -p reports/ai/app
+          REPORT_FILE="reports/ai/app/REPORT_$(date -u +'%H-%M').md"
+          echo "# Gemini App Review Report - $(date -u)" > "$REPORT_FILE"
+          echo "General quality pass requested: ${{ github.event.inputs.reason }}" >> "$REPORT_FILE"
+          echo "Placeholder: Real Gemini review output would go here." >> "$REPORT_FILE"
           echo "REPORT_FILE=$REPORT_FILE" >> "$GITHUB_ENV"
 
       - name: Validate (App)
@@ -137,5 +120,5 @@ jobs:
             exit 0
           fi
           
-          git commit -m "AI(app): hourly agreed improvement pass"
+          git commit -m "AI(app): daily agreed improvement pass (Gemini only)"
           git push origin "$CURRENT_BRANCH"

@@ -1,4 +1,4 @@
-name: AI Workflow Factory
+name: AI Workflow Factory (Gemini)
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ on:
         required: false
         default: './gradlew spotlessCheck'
       ai_prompt:
-        description: 'Specific instructions for the AI agents'
+        description: 'Specific instructions for Gemini'
         required: true
 
 permissions:
@@ -31,7 +31,6 @@ jobs:
   create-workflow:
     runs-on: ubuntu-latest
     # Secrets should be stored in GitHub Environment: ai-audit
-    # This allows approval rules / restricted access / secret isolation
     environment:
       name: ai-audit
     steps:
@@ -63,6 +62,8 @@ jobs:
           jobs:
             review:
               runs-on: ubuntu-latest
+              environment:
+                name: ai-audit
               steps:
                 - name: Checkout
                   uses: actions/checkout@v4
@@ -76,8 +77,11 @@ jobs:
                     BRANCH_NAME="${{ github.event.inputs.branch_prefix }}\${{ github.run_id }}"
                     git checkout -b "\$BRANCH_NAME"
                     echo "BRANCH_NAME=\$BRANCH_NAME" >> "\$GITHUB_ENV"
-                - name: AI Review Step
+                - name: Gemini Review Step
+                  env:
+                    GEMINI_API_KEY: \${{ secrets.GEMINI_API_KEY }}
                   run: |
+                    if [ -z "\$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY missing"; exit 1; fi
                     echo "Reviewing scope: ${{ github.event.inputs.scope_description }}"
                     echo "Prompt: ${{ github.event.inputs.ai_prompt }}"
                 - name: Validation
@@ -93,7 +97,7 @@ jobs:
                     git config user.name "github-actions[bot]"
                     git config user.email "github-actions[bot]@users.noreply.github.com"
                     git add .
-                    git commit -m "AI review pass"
+                    git commit -m "AI review pass (Gemini only)"
                     git push origin "\$CURRENT_BRANCH"
           EOF
 
@@ -110,5 +114,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/${{ github.event.inputs.workflow_filename }}.yml
-          git commit -m "AI(workflows): create requested AI workflow"
+          git commit -m "AI(workflows): create requested AI workflow (Gemini only)"
           git push origin "$CURRENT_BRANCH"

@@ -11,9 +11,7 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 1.  Navigate to **Settings** → **Environments** → **New environment**.
 2.  Name the environment: `ai-audit`.
 3.  Add the following **Environment secrets**:
-    -   `CODEX_API_KEY`: Your OpenAI/Codex API key.
     -   `GEMINI_API_KEY`: Your Google Gemini API key.
-    -   `OPENAI_API_KEY`: (Optional) If separate from Codex.
 
 ### Recommended Protections
 
@@ -23,7 +21,7 @@ To provide tighter control over AI API secrets and execution, all AI workflows a
 
 ## Workflow Behavior
 
--   **Manual Dispatch**: Workflows are triggered manually (`workflow_dispatch`). Hourly cron schedules have been removed to prevent unexpected API costs.
--   **Cost Awareness**: Note that consumer subscriptions (ChatGPT Plus, Gemini Advanced) do not necessarily include Developer API usage. API keys may require separate billing or credit quotas.
+-   **Manual Dispatch**: Workflows are triggered manually (`workflow_dispatch`).
+-   **Gemini-Only**: Codex and OpenAI integration has been removed to simplify quota management and focus on Gemini-based reviews.
+-   **Report-Only**: Currently, workflows generate reports under `reports/ai/` rather than mutating source code.
 -   **No Direct Push to Main**: All AI-generated improvements and reports are committed to isolated branches (e.g., `ai/app-YYYY-MM-DD`).
--   **Dual-Agent Agreement**: Changes are proposed by both Codex and Gemini and only considered stable if both agents agree on the path and intent.
