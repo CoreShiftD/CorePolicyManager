@@ -10,7 +10,7 @@ pub struct Scheduler {
     normal_queue: VecDeque<RoutedAction>,
     background_queue: VecDeque<RoutedAction>,
     pub total_len: usize,
-    per_kind_counts: [usize; 43], // Based on ActionKind count
+    per_kind_counts: [usize; 40], // Exactly matches ActionKind count
     step_budget: usize,
     steps_executed: usize,
     rr_index: usize,
@@ -20,11 +20,11 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(step_budget: usize) -> Self {
         Self {
-            critical_queue: VecDeque::with_capacity(MAX_QUEUE),
-            normal_queue: VecDeque::with_capacity(MAX_QUEUE),
-            background_queue: VecDeque::with_capacity(MAX_QUEUE),
+            critical_queue: VecDeque::with_capacity(512),
+            normal_queue: VecDeque::with_capacity(1024),
+            background_queue: VecDeque::with_capacity(2048),
             total_len: 0,
-            per_kind_counts: [0; 43],
+            per_kind_counts: [0; 40],
             step_budget,
             steps_executed: 0,
             rr_index: 0,
@@ -32,42 +32,43 @@ impl Scheduler {
         }
     }
 
-    pub fn enqueue(&mut self, action: RoutedAction) -> Option<Event> {
+    pub fn enqueue(&mut self, action: RoutedAction, state: &mut crate::core::ExecutionState) -> Option<Event> {
         let kind = action.action.kind();
         let kind_idx = kind as usize;
+
+        if kind_idx >= self.per_kind_counts.len() {
+            state.metrics.dropped_actions += 1;
+            return Some(crate::core::Event::DroppedAction { kind });
+        }
+
         let count = self.per_kind_counts[kind_idx];
         if count >= MAX_PER_ACTION_KIND {
+            state.metrics.dropped_actions += 1;
             return Some(crate::core::Event::DroppedAction { kind });
         }
 
         let mut dropped_event = None;
 
         if self.total_len >= MAX_QUEUE {
-            // Drop lowest priority, oldest (FIFO drop -> pop_front)
-            let mut evicted = None;
             let action_prio = action.action.priority();
+            let mut evicted = None;
 
-            if !self.background_queue.is_empty() {
-                if action_prio <= Priority::Background {
-                    evicted = self.background_queue.pop_front();
-                }
-            } else if !self.normal_queue.is_empty() {
-                if action_prio <= Priority::Normal {
-                    evicted = self.normal_queue.pop_front();
-                }
-            } else if !self.critical_queue.is_empty() {
-                if action_prio <= Priority::Critical {
-                    evicted = self.critical_queue.pop_front();
-                }
+            if !self.background_queue.is_empty() && action_prio >= Priority::Background {
+                evicted = self.background_queue.pop_front();
+            } else if !self.normal_queue.is_empty() && action_prio >= Priority::Normal {
+                evicted = self.normal_queue.pop_front();
+            } else if !self.critical_queue.is_empty() && action_prio >= Priority::Critical {
+                 evicted = self.critical_queue.pop_front();
             }
 
             if let Some(ev) = evicted {
                 let ev_kind = ev.action.kind();
                 self.per_kind_counts[ev_kind as usize] -= 1;
                 self.total_len -= 1;
+                state.metrics.dropped_actions += 1;
                 dropped_event = Some(crate::core::Event::DroppedAction { kind: ev_kind });
             } else {
-                // Cannot evict, so drop the incoming action
+                state.metrics.dropped_actions += 1;
                 return Some(crate::core::Event::DroppedAction { kind });
             }
         }
@@ -114,16 +115,13 @@ impl Scheduler {
                     let kind = routed.action.kind();
                     self.per_kind_counts[kind as usize] -= 1;
                     return Some(routed);
-                } else {
-                    self.rr_index = (self.rr_index + 1) % schedule.len();
-                    self.rr_count = 0;
                 }
-            } else {
-                self.rr_index = (self.rr_index + 1) % schedule.len();
-                self.rr_count = 0;
             }
+            
+            self.rr_index = (self.rr_index + 1) % schedule.len();
+            self.rr_count = 0;
 
-            if self.rr_index == start_index && self.rr_count == 0 {
+            if self.rr_index == start_index {
                 if checked_all {
                     return None;
                 }

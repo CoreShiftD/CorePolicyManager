@@ -9,6 +9,10 @@ pub mod arena;
 pub mod core;
 pub mod high_level;
 pub mod runtime;
+pub mod paths;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug)]
 pub enum RuntimeLimit {
@@ -51,8 +55,29 @@ impl TraceStore {
     }
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+static RUNNING: AtomicBool = AtomicBool::new(true);
+
+extern "C" fn handle_signal(_sig: libc::c_int) {
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
 pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::SysError> {
     const MAX_ACTIONS_PER_TICK: usize = 10_000;
+
+    // Ensure runtime directories exist
+    if let Err(e) = paths::ensure_dirs() {
+        return Err(crate::low_level::spawn::SysError::sys(
+            e.raw_os_error().unwrap_or(0),
+            "ensure_dirs",
+        ));
+    }
+
+    // Register signal handlers
+    unsafe {
+        libc::signal(libc::SIGTERM, handle_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, handle_signal as *const () as libc::sighandler_t);
+    }
 
     use crate::core::{Core, ExecutionState};
     use crate::high_level::capability::{CapabilityRegistry, CapabilityToken};
@@ -71,7 +96,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         "ipc",
     )?;
 
-    let socket_path = "/data/local/tmp/coreshift.sock";
+    let socket_path = paths::SOCKET_PATH;
     let _ = std::fs::remove_file(socket_path);
 
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
@@ -112,7 +137,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     use crate::high_level::addon::{Addon, AddonSpec, EchoAddon, NoOpAddon};
     use crate::high_level::addons::preload::PreloadAddon;
 
-    let mut addons: Vec<(Box<dyn Addon>, AddonSpec)> = vec![
+    let mut addons: Vec<(Box<dyn Addon>, AddonSpec, u32)> = vec![
         (
             Box::new(NoOpAddon),
             AddonSpec {
@@ -120,6 +145,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 capability: CapabilityToken::empty(),
                 max_actions_per_tick: 50,
             },
+            0, // Initial error count
         ),
         (
             Box::new(EchoAddon),
@@ -128,28 +154,33 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 capability: CapabilityToken::empty(),
                 max_actions_per_tick: 50,
             },
+            0,
         ),
     ];
 
     if config.enable_warmup {
         addons.push((
-            Box::new(PreloadAddon::new()),
+            Box::new(PreloadAddon::new(crate::high_level::addons::preload::PreloadConfig::default())),
             AddonSpec {
                 id: 102,
                 capability: CapabilityToken::allow_all(), 
                 max_actions_per_tick: 100,
             },
+            0,
         ));
     }
 
     let mut effect_executor =
-        crate::runtime::EffectExecutor::new(reactor, "/data/local/tmp/coreshift");
+        crate::runtime::EffectExecutor::new(reactor);
+
+    // Load log level from system property if possible (placeholder for Android)
+    // effect_executor.log_router.verbosity = LogLevel::Info;
 
     let mut capabilities = CapabilityRegistry::new();
     capabilities.insert(0, CapabilityToken::allow_all()); // System / IPC root
 
     // Capability assignment for addons
-    for (_, spec) in &addons {
+    for (_, spec, _) in &addons {
         capabilities.insert(spec.id, spec.capability.clone());
     }
 
@@ -204,15 +235,19 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     let mut last_tick_time = std::time::Instant::now();
     let mut tick_counter = 0u64;
+    let mut reactor_failure_count = 0;
 
-    loop {
+    while RUNNING.load(Ordering::SeqCst) {
+        let tick_start_time = std::time::Instant::now();
         tick_counter += 1;
-        let now = std::time::Instant::now();
-        let elapsed = now.duration_since(last_tick_time).as_millis() as u64;
+        let elapsed = tick_start_time.duration_since(last_tick_time).as_millis() as u64;
 
         const TICK_MS: u64 = 16;
         let ticks = elapsed / TICK_MS;
 
+        // Update metrics
+        state.metrics.active_clients = ipc.clients.len() as u32;
+        
         let mut sys_events = Vec::new();
         for _ in 0..ticks {
             sys_events.push(crate::core::Event::TimeAdvanced(TICK_MS));
@@ -229,26 +264,47 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         match reactor_res {
             Ok(evs) => {
                 sys_events.extend(evs);
+                reactor_failure_count = 0;
             }
             Err(e) => {
-                sys_events.push(crate::core::Event::ReactorError {
-                    err: format!("reactor wait failed: {}", e),
+                reactor_failure_count += 1;
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Error,
+                    event: crate::core::LogEvent::Error { id: 0, err: format!("reactor wait failed: {}", e) },
                 });
+                
+                if reactor_failure_count >= 10 {
+                    match Reactor::new() {
+                        Ok(new_reactor) => {
+                            effect_executor.reactor = new_reactor;
+                            let _ = effect_executor.reactor.add_with_token(ipc.fd.as_raw_fd(), ipc_token, true, false);
+                            ipc.clients.clear();
+                            ipc.client_tokens.clear();
+                            reactor_failure_count = 0;
+                            state.metrics.restart_count += 1;
+                        }
+                        Err(_) => {
+                             std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                    }
+                }
             }
         }
 
         sys_events.append(&mut pending_events);
 
         let mut scheduler = crate::core::scheduler::Scheduler::new(MAX_ACTIONS_PER_TICK);
+        let queue_before = scheduler.total_len;
+        state.metrics.queue_depth = queue_before as u32;
+
+        for conn in ipc.clients.values() {
+            state.metrics.peak_read_buf_kb = state.metrics.peak_read_buf_kb.max((conn.read_buf.len() / 1024) as u32);
+            state.metrics.peak_write_buf_kb = state.metrics.peak_write_buf_kb.max((conn.write_buf.len() / 1024) as u32);
+        }
 
         // Phase 1: Collect
         let mut collected_actions: Vec<(crate::core::Action, crate::core::ActionMeta)> = Vec::new();
-
-        let _ = effect_executor.apply(crate::core::Effect::Log {
-            owner: crate::core::CORE_OWNER,
-            level: crate::core::LogLevel::Info,
-            event: crate::core::LogEvent::TickStart,
-        });
 
         for rev in reactor_events {
             let ipc_msgs = ipc.handle_event(&mut effect_executor.reactor, &rev);
@@ -300,7 +356,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             }
 
             let mut addon_reqs = Vec::new();
-            for (addon, spec) in &mut addons {
+            for (addon, spec, error_count) in &mut addons {
+                if *error_count >= 10 { continue; }
                 let reqs = addon.on_reactor_event(&state, &rev);
                 let count = std::cmp::min(reqs.len(), spec.max_actions_per_tick as usize);
                 for mut req in reqs.into_iter().take(count) {
@@ -323,7 +380,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
             for req in all_reqs {
                 if crate::core::validation::validate_request(&req, &state).is_ok() {
-                    // We expand first, then check caps for each action.
                     let actions = crate::core::expand_intent(req.intent.clone(), state.clock);
                     let mut allowed = true;
                     for action in &actions {
@@ -422,16 +478,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                                     }
                                 }
                             }
-                        } else if n < 0 {
-                            let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                            let _ = effect_executor.apply(crate::core::Effect::Log {
-                                owner: crate::core::CORE_OWNER,
-                                level: crate::core::LogLevel::Error,
-                                event: crate::core::LogEvent::Error {
-                                    id: 0,
-                                    err: format!("READ_ERR {}", err),
-                                },
-                            });
                         }
                     }
                 }
@@ -452,7 +498,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     }
 
                     // Feed core events to addons
-                    for (addon, spec) in &mut addons {
+                    for (addon, spec, error_count) in &mut addons {
+                        if *error_count >= 10 { continue; }
                         let reqs = addon.on_core_event(&state, &ev);
                         for mut req in reqs {
                             let cause = crate::core::CauseId(next_action_id);
@@ -464,7 +511,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             req.cause = cause;
                             req.principal = crate::high_level::identity::Principal::Addon(spec.id);
                             
-                            // Validate and Expand addon requests immediately
                             if crate::core::validation::validate_request(&req, &state).is_ok() {
                                 let actions = crate::core::expand_intent(req.intent, state.clock);
                                 for action in actions {
@@ -502,13 +548,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             if !collected_actions.is_empty() {
                 let current_actions = std::mem::take(&mut collected_actions);
                 for (action, meta) in current_actions {
-                    debug_assert!(
-                        capabilities.allows(&meta.source, action.kind()),
-                        "Capability enforcement before enqueue"
-                    );
-                    if !capabilities.allows(&meta.source, action.kind()) {
-                        continue;
-                    }
+                    if !capabilities.allows(&meta.source, action.kind()) { continue; }
 
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(meta.id));
@@ -522,7 +562,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
                         action,
                         meta: new_meta,
-                    }) {
+                    }, &mut state) {
                         sys_events.push(ev);
                     }
                     next_action_id += 1;
@@ -531,10 +571,26 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         }
 
         if tick_counter % 64 == 0 {
+            // Check log verbosity trigger files
+            let new_verbosity = if std::path::Path::new(paths::LOG_TRACE_PATH).exists() {
+                crate::core::LogLevel::Trace
+            } else if std::path::Path::new(paths::LOG_DEBUG_PATH).exists() {
+                crate::core::LogLevel::Debug
+            } else {
+                crate::core::LogLevel::Info
+            };
+
+            if new_verbosity != effect_executor.log_router.verbosity {
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Info,
+                    event: crate::core::LogEvent::Generic(format!("log verbosity changed level={:?}", new_verbosity)),
+                });
+                effect_executor.log_router.verbosity = new_verbosity;
+            }
+
             crate::core::verify::verify_global(&state);
         }
-
-        // Phase 3: Enqueue (Merged into Phase 2 loop above)
 
         // Phase 4: Resolve
         let mut generated_effects = Vec::with_capacity(16);
@@ -550,21 +606,65 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             let mut made_progress = false;
 
             while let Some(routed) = scheduler.next() {
-                debug_assert!(true, "Action has source (in rust we checked this statically)");
-
                 let count = per_source_count
                     .entry(routed.meta.source.clone())
                     .or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;
-
-                    continue; // Drop action due to source limit
+                    continue; 
                 }
                 *count += 1;
 
                 ipc.intercept_action(&routed.action, routed.meta.reply_to);
-
                 tick_actions_processed += 1;
+
+                if let crate::core::Action::HandleAddonFailure { addon_id, .. } = routed.action {
+                    for (_, spec, error_count) in &mut addons {
+                        if spec.id == addon_id { *error_count += 1; }
+                    }
+                }
+
+                // Structured Action Log
+                let payload_len = match &routed.action {
+                    crate::core::Action::SystemRequest { payload, .. } => payload.len(),
+                    crate::core::Action::AddonTask { payload, .. } => payload.len(),
+                    _ => 0,
+                };
+                
+                let log_id = match &routed.action {
+                    crate::core::Action::Submit { id, .. } => Some(*id),
+                    crate::core::Action::SystemRequest { request_id, .. } => Some(*request_id),
+                    _ => None,
+                };
+
+                let log_addon = match &routed.action {
+                    crate::core::Action::AddonTask { addon_id, .. } => Some(*addon_id),
+                    crate::core::Action::AddonLog { addon_id, .. } => Some(*addon_id),
+                    _ => None,
+                };
+
+                let log_key = match &routed.action {
+                    crate::core::Action::AddonTask { key, .. } => Some(key.clone()),
+                    _ => None,
+                };
+
+                let log_svc = match &routed.action {
+                    crate::core::Action::SystemRequest { kind, .. } => Some(*kind),
+                    _ => None,
+                };
+
+                let _ = effect_executor.apply(crate::core::Effect::Log {
+                    owner: crate::core::CORE_OWNER,
+                    level: crate::core::LogLevel::Trace,
+                    event: crate::core::LogEvent::ActionDispatch {
+                        kind: routed.action.kind(),
+                        id: log_id,
+                        addon_id: log_addon,
+                        key: log_key,
+                        service: log_svc,
+                        payload_len,
+                    },
+                });
 
                 action_effects.clear();
 
@@ -586,16 +686,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
                 state.update_hash();
 
-                if !matches!(routed.action, crate::core::Action::EmitLog { .. }) {
-                    let _ = effect_executor.apply(crate::core::Effect::Log {
-                        owner: crate::core::CORE_OWNER,
-                        level: crate::core::LogLevel::Info,
-                        event: crate::core::LogEvent::ActionDispatched,
-                    });
-                }
-
                 let new_actions = core.dispatcher.dispatch(&state, &routed.action);
-
                 for action in new_actions {
                     let next_id = crate::core::CauseId(next_action_id);
                     trace_store.insert(next_id, Some(routed.meta.id));
@@ -607,7 +698,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             source: routed.meta.source.clone(),
                             reply_to: routed.meta.reply_to,
                         },
-                    }) {
+                    }, &mut state) {
                         sys_events.push(ev);
                     }
                     next_action_id += 1;
@@ -621,25 +712,18 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         let current_events = std::mem::take(&mut sys_events);
                         for ev in current_events {
                             if let Some(f) = &mut record_file {
-                                let _ = bincode::serialize_into(
-                                    f,
-                                    &crate::core::replay::ReplayInput::Event(ev.clone()),
-                                );
+                                let _ = bincode::serialize_into(f, &crate::core::replay::ReplayInput::Event(ev.clone()));
                             }
                             let sys_actions = core.dispatcher.dispatch_event(&state, &ev);
                             for action in sys_actions {
                                 let cause = crate::core::CauseId(next_action_id);
                                 next_action_id += 1;
                                 trace_store.insert(cause, None);
-                                collected_actions.push((
-                                    action,
-                                    crate::core::ActionMeta {
-                                        id: cause,
-                                        parent: None,
+                                collected_actions.push((action, crate::core::ActionMeta {
+                                        id: cause, parent: None,
                                         source: crate::high_level::identity::Principal::System,
                                         reply_to: None,
-                                    },
-                                ));
+                                }));
                             }
                         }
                     }
@@ -647,14 +731,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     if !collected_actions.is_empty() {
                         let current_actions = std::mem::take(&mut collected_actions);
                         for (action, meta) in current_actions {
-                            debug_assert!(
-                                capabilities.allows(&meta.source, action.kind()),
-                                "Capability enforcement before enqueue"
-                            );
-                            if !capabilities.allows(&meta.source, action.kind()) {
-                                continue;
-                            }
-
+                            if !capabilities.allows(&meta.source, action.kind()) { continue; }
                             let next_id = crate::core::CauseId(next_action_id);
                             next_action_id += 1;
                             trace_store.insert(next_id, Some(meta.id));
@@ -662,12 +739,10 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             if let Some(ev) = scheduler.enqueue(crate::core::RoutedAction {
                                 action,
                                 meta: crate::core::ActionMeta {
-                                    id: next_id,
-                                    parent: Some(meta.id), // Here cause is already bound to ingress
-                                    source: meta.source.clone(),
-                                    reply_to: meta.reply_to,
+                                    id: next_id, parent: Some(meta.id),
+                                    source: meta.source.clone(), reply_to: meta.reply_to,
                                 },
-                            }) {
+                            }, &mut state) {
                                 sys_events.push(ev);
                             }
                         }
@@ -675,18 +750,19 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
             }
 
-            if !made_progress {
-                break;
-            }
-        } // Close resolve loop
+            if !made_progress { break; }
+        }
 
-        generated_effects.push(crate::core::Effect::Log {
-            owner: crate::core::CORE_OWNER,
-            level: crate::core::LogLevel::Info,
-            event: crate::core::LogEvent::TickEnd,
-        });
+        if tick_counter % 640 == 0 {
+            let m = &state.metrics;
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: crate::core::CORE_OWNER,
+                level: crate::core::LogLevel::Info,
+                event: crate::core::LogEvent::Generic(format!("METRICS: clients={} dropped={} queue={} avg_tick_us={} peak_r_kb={} peak_w_kb={}",
+                        m.active_clients, m.dropped_actions, m.queue_depth, m.avg_tick_duration_us, m.peak_read_buf_kb, m.peak_write_buf_kb)),
+            });
+        }
 
-        // Apply effects at the end of the tick boundary to avoid interleaving events
         for effect in generated_effects {
             let events = effect_executor.apply(effect);
             next_events.extend(events);
@@ -695,17 +771,20 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         std::mem::swap(&mut pending_events, &mut next_events);
         next_events.clear();
 
-        if state.clock % 100 == 0 {
-            let _ = effect_executor.apply(crate::core::Effect::Log {
-                owner: crate::core::CORE_OWNER,
-                level: crate::core::LogLevel::Info,
-                event: crate::core::LogEvent::Observability {
-                    queue_len: scheduler.total_len,
-                    actions_processed: tick_actions_processed,
-                    dropped: tick_dropped_actions,
-                },
-            });
-        }
+        let tick_duration_us = tick_start_time.elapsed().as_micros() as u64;
+        state.metrics.avg_tick_duration_us = (state.metrics.avg_tick_duration_us * 7 + tick_duration_us as u32) / 8;
+
+        let _ = effect_executor.apply(crate::core::Effect::Log {
+            owner: crate::core::CORE_OWNER,
+            level: crate::core::LogLevel::Debug,
+            event: crate::core::LogEvent::TickSummary {
+                processed: tick_actions_processed,
+                dropped: tick_dropped_actions,
+                queue_before,
+                queue_after: scheduler.total_len,
+                elapsed_us: tick_duration_us,
+            },
+        });
 
         if let Some(f) = &mut record_file {
             let stats = crate::core::replay::TickStats {
@@ -716,6 +795,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             let _ = bincode::serialize_into(f, &crate::core::replay::ReplayInput::TickEnd(stats));
         }
     }
+
+    let _ = std::fs::remove_file(socket_path);
+    Ok(())
 }
 
 pub fn run_replay(path: &str) -> u64 {
@@ -748,13 +830,9 @@ pub fn run_replay(path: &str) -> u64 {
         let mut tick_intents: Vec<crate::high_level::identity::Request> = Vec::new();
         let mut expected_hash = None;
 
-        // Replay modes natively serialize TimeAdvanced via the sys_events queue.
-        // We gracefully ignore the legacy `Time` format, if any.
-
         while current_input_idx < inputs.len() {
             match &inputs[current_input_idx] {
                 ReplayInput::Time(dur) => {
-                    // Legacy support: map old time format to explicit constant TICK_MS quantization.
                     let elapsed = dur.as_millis() as u64;
                     let ticks = elapsed / 16;
                     for _ in 0..ticks {
@@ -829,14 +907,13 @@ pub fn run_replay(path: &str) -> u64 {
                         source: req.principal.clone(),
                         reply_to: req.client_id,
                     },
-                }) {
+                }, &mut state) {
                     tick_events.push(ev);
                 }
                 next_action_id += 1;
             }
         }
 
-        // Ensure any intents that dropped actions get their dropped actions processed
         let mut collected_actions: Vec<crate::core::Action> = Vec::new();
         while !tick_events.is_empty() || !collected_actions.is_empty() {
             if !tick_events.is_empty() {
@@ -862,7 +939,7 @@ pub fn run_replay(path: &str) -> u64 {
                             source: crate::high_level::identity::Principal::System,
                             reply_to: None,
                         },
-                    }) {
+                    }, &mut state) {
                         tick_events.push(ev);
                     }
                     next_action_id += 1;
@@ -881,16 +958,12 @@ pub fn run_replay(path: &str) -> u64 {
             let mut made_progress = false;
 
             while let Some(routed) = scheduler.next() {
-                let count = per_source_count
-                    .entry(routed.meta.source.clone())
-                    .or_insert(0);
+                let count = per_source_count.entry(routed.meta.source.clone()).or_insert(0);
                 if *count >= 256 {
                     tick_dropped_actions += 1;
-
-                    continue; // Drop action due to source limit
+                    continue; 
                 }
                 *count += 1;
-
                 tick_actions_processed += 1;
 
                 action_effects.clear();
@@ -905,7 +978,6 @@ pub fn run_replay(path: &str) -> u64 {
                             clock: &mut state.clock,
                         };
                         reducer.apply(&mut ctx, &routed.action, &mut action_effects);
-                        // Drop effects in replay mode
                     }
                 }
                 state.update_hash();
@@ -922,15 +994,12 @@ pub fn run_replay(path: &str) -> u64 {
                             source: routed.meta.source.clone(),
                             reply_to: routed.meta.reply_to,
                         },
-                    }) {
+                    }, &mut state) {
                         tick_events.push(ev);
                     }
                     next_action_id += 1;
                 }
             }
-
-            // Pending events dropped by scheduler during replay are collected here,
-            // but normally they would go into the next tick.
 
             if !tick_events.is_empty() || !collected_actions.is_empty() {
                 made_progress = true;
@@ -958,7 +1027,7 @@ pub fn run_replay(path: &str) -> u64 {
                                     source: crate::high_level::identity::Principal::System,
                                     reply_to: None,
                                 },
-                            }) {
+                            }, &mut state) {
                                 tick_events.push(ev);
                             }
                             next_action_id += 1;
@@ -967,30 +1036,15 @@ pub fn run_replay(path: &str) -> u64 {
                 }
             }
 
-            if !made_progress {
-                break;
-            }
+            if !made_progress { break; }
         }
 
         if let Some(expected) = expected_hash {
             let actual = state.hash;
-            assert_eq!(
-                actual, expected.hash,
-                "Determinism violation: state hash diverged at tick {}",
-                tick_idx
-            );
-            // Ignore stats matching for legacy hashes
+            assert_eq!(actual, expected.hash, "Determinism violation: state hash diverged at tick {}", tick_idx);
             if expected.actions_processed > 0 || expected.dropped_actions > 0 {
-                assert_eq!(
-                    tick_actions_processed, expected.actions_processed,
-                    "Determinism violation: actions processed diverged at tick {}",
-                    tick_idx
-                );
-                assert_eq!(
-                    tick_dropped_actions, expected.dropped_actions,
-                    "Determinism violation: dropped actions diverged at tick {}",
-                    tick_idx
-                );
+                assert_eq!(tick_actions_processed, expected.actions_processed, "Determinism violation: actions processed diverged at tick {}", tick_idx);
+                assert_eq!(tick_dropped_actions, expected.dropped_actions, "Determinism violation: dropped actions diverged at tick {}", tick_idx);
             }
             tick_idx += 1;
         }
@@ -998,32 +1052,4 @@ pub fn run_replay(path: &str) -> u64 {
 
     println!("Replay finished deterministically.");
     state.hash
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deterministic_replay() {
-        use crate::core::replay::{ReplayInput, TickStats};
-
-        let path = "test_replay.bin";
-        let mut file = std::fs::File::create(path).unwrap();
-
-        // Write some dummy inputs
-        let stats = TickStats {
-            hash: 0,
-            actions_processed: 0,
-            dropped_actions: 0,
-        };
-        bincode::serialize_into(&mut file, &ReplayInput::TickEnd(stats)).unwrap();
-
-        let hash1 = run_replay(path);
-        let hash2 = run_replay(path);
-
-        assert_eq!(hash1, hash2);
-
-        let _ = std::fs::remove_file(path);
-    }
 }

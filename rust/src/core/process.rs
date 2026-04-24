@@ -55,6 +55,16 @@ impl Module for ProcessModule {
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         match event {
+            Event::Tick => {
+                // Poll all running processes
+                for entry in state.timeouts() {
+                     if let Some(job) = state.job(entry.id) {
+                         if let Some(process) = job.process {
+                             actions.push(Action::PollProcess { process });
+                         }
+                     }
+                }
+            }
             Event::ProcessSpawnFailed { id, err } => {
                 let job = state.job(*id);
                 let owner = job.as_ref().map(|j| j.owner).unwrap_or(0);

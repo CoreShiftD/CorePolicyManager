@@ -319,6 +319,15 @@ impl Reducer for AddonReducer {
             Action::AddonTask { addon_id, key, payload } => {
                 effects.push(Effect::AddonTask { addon_id: *addon_id, key: key.clone(), payload: payload.clone() });
             }
+            Action::AddonLog { addon_id, level, msg } => {
+                effects.push(Effect::AddonLog { addon_id: *addon_id, level: *level, msg: msg.clone() });
+            }
+            Action::AddonEvent { addon_id: _, key: _ } => {
+                // Generic notify, no effect yet
+            }
+            Action::EmitLog { owner, level, event } => {
+                effects.push(Effect::Log { owner: *owner, level: *level, event: event.clone() });
+            }
             Action::SystemRequest { request_id, kind, payload } => {
                 effects.push(Effect::SystemRequest { request_id: *request_id, kind: *kind, payload: payload.clone() });
             }

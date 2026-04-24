@@ -8,6 +8,12 @@ use libc::{
 use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+const MAX_CLIENTS: usize = 32;
+const MAX_PACKET_SIZE: usize = 128 * 1024; // 128 KB
+const MAX_READ_BUF: usize = 256 * 1024; // 256 KB
+const MAX_WRITE_BUF: usize = 1024 * 1024; // 1 MB
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadState {
     Header { needed: usize },
     Body { len: usize },
@@ -49,8 +55,6 @@ impl IpcModule {
         }
     }
 
-    /// Verifies the credentials of a peer on a connected Unix domain socket.
-    /// Returns `Ok(uid)` if successful, or a `SysError` if validation fails.
     pub fn verify_peer_credentials(&self, peer_fd: RawFd) -> Result<u32, SysError> {
         let mut cred: ucred = unsafe { std::mem::zeroed() };
         let mut len: socklen_t = std::mem::size_of::<ucred>() as socklen_t;
@@ -77,6 +81,10 @@ impl IpcModule {
 
     pub fn accept_clients(&mut self, reactor: &mut crate::low_level::reactor::Reactor) {
         loop {
+            if self.clients.len() >= MAX_CLIENTS {
+                return;
+            }
+
             let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
             let mut addr_len: socklen_t = std::mem::size_of::<libc::sockaddr_un>() as socklen_t;
 
@@ -92,19 +100,17 @@ impl IpcModule {
             if client_fd < 0 {
                 let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
                 if err == libc::EAGAIN || err == libc::EWOULDBLOCK {
-                    return; // Non-blocking, no more clients for now
+                    return;
                 }
                 return;
             }
 
             if let Ok(client_fd_obj) = Fd::new(client_fd, "accept4") {
-                // Extract UID
                 let uid = match self.verify_peer_credentials(client_fd) {
                     Ok(u) => u,
-                    Err(_) => continue, // Drop on verification failure
+                    Err(_) => continue, 
                 };
 
-                // Register with reactor
                 let token = match reactor.add(&client_fd_obj, true, true) {
                     Ok(t) => t,
                     Err(_) => continue,
@@ -119,8 +125,8 @@ impl IpcModule {
                 let conn = Conn {
                     fd: client_fd_obj,
                     token,
-                    read_buf: Vec::new(),
-                    write_buf: Vec::new(),
+                    read_buf: Vec::with_capacity(4096),
+                    write_buf: Vec::with_capacity(4096),
                     state: ReadState::Header { needed: 4 },
                     uid,
                 };
@@ -137,15 +143,14 @@ impl IpcModule {
             return Vec::new();
         }
 
-        let mut actions = Vec::new();
         let client_id = match self.client_tokens.get(&event.token) {
             Some(&id) => id,
-            None => return actions,
+            None => return Vec::new(),
         };
 
         if event.error {
             self.disconnect(client_id, reactor);
-            return actions;
+            return Vec::new();
         }
 
         let mut should_disconnect = false;
@@ -161,7 +166,7 @@ impl IpcModule {
                         }
                         Ok(n) => {
                             conn.read_buf.extend_from_slice(&buf[..n]);
-                            if conn.read_buf.len() > 16 * 1024 * 1024 {
+                            if conn.read_buf.len() > MAX_READ_BUF {
                                 should_disconnect = true;
                                 break;
                             }
@@ -179,7 +184,6 @@ impl IpcModule {
                 }
 
                 if !should_disconnect {
-                    // Process read_buf
                     loop {
                         match conn.state {
                             ReadState::Header { needed } => {
@@ -188,7 +192,7 @@ impl IpcModule {
                                     len_buf.copy_from_slice(&conn.read_buf[..4]);
                                     let body_len = u32::from_le_bytes(len_buf) as usize;
 
-                                    if body_len > 10 * 1024 * 1024 {
+                                    if body_len > MAX_PACKET_SIZE || body_len == 0 {
                                         should_disconnect = true;
                                         break;
                                     }
@@ -204,7 +208,6 @@ impl IpcModule {
                                     let payload = conn.read_buf.drain(..len).collect::<Vec<_>>();
                                     conn.state = ReadState::Header { needed: 4 };
 
-                                    // Decode payload
                                     if !payload.is_empty() {
                                         let req_type = payload[0];
                                         let req = match req_type {
@@ -235,9 +238,7 @@ impl IpcModule {
                                         };
 
                                         if let Some(cmd) = req {
-
-
-                                            actions.push(WireMsg { client_id, command: cmd, uid: conn.uid });
+                                            return vec![WireMsg { client_id, command: cmd, uid: conn.uid }];
                                         } else {
                                             should_disconnect = true;
                                             break;
@@ -258,30 +259,24 @@ impl IpcModule {
 
         if event.writable && !should_disconnect {
             if let Some(conn) = self.clients.get_mut(&client_id) {
-                if !conn.write_buf.is_empty() {
-                    let mut total_written = 0;
-                    while total_written < conn.write_buf.len() {
-                        match conn.fd.write(conn.write_buf[total_written..].as_ptr(), conn.write_buf.len() - total_written) {
-                            Ok(0) => {
+                while !conn.write_buf.is_empty() {
+                    match conn.fd.write(conn.write_buf.as_ptr(), conn.write_buf.len()) {
+                        Ok(0) => {
+                            should_disconnect = true;
+                            break;
+                        }
+                        Ok(n) => {
+                            conn.write_buf.drain(..n);
+                        }
+                        Err(e) => {
+                            let raw_err = e.raw_os_error();
+                            if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
+                                break;
+                            } else {
                                 should_disconnect = true;
                                 break;
                             }
-                            Ok(n) => {
-                                total_written += n;
-                            }
-                            Err(e) => {
-                                let raw_err = e.raw_os_error();
-                                if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
-                                    break;
-                                } else {
-                                    should_disconnect = true;
-                                    break;
-                                }
-                            }
                         }
-                    }
-                    if total_written > 0 {
-                        conn.write_buf.drain(..total_written);
                     }
                 }
             }
@@ -291,7 +286,7 @@ impl IpcModule {
             self.disconnect(client_id, reactor);
         }
 
-        actions
+        Vec::new()
     }
 
     pub fn disconnect(&mut self, client_id: u32, reactor: &mut crate::low_level::reactor::Reactor) {
@@ -299,7 +294,6 @@ impl IpcModule {
             reactor.del(&conn.fd);
             self.client_tokens.remove(&conn.token);
         }
-
     }
 
     pub fn intercept_action(&mut self, action: &crate::core::Action, reply_to: Option<u32>) {
@@ -323,18 +317,12 @@ impl IpcModule {
                     Self::queue_response(conn, WireResponse::Result(result.clone()));
                 }
             }
-            crate::core::Action::Rejected {
-                ..
-            } => {
+            crate::core::Action::Rejected { .. } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
                     Self::queue_response(conn, WireResponse::Error);
                 }
             }
-            crate::core::Action::Finished {
-                id,
-                result,
-                ..
-            } => {
+            crate::core::Action::Finished { id, result, .. } => {
                 if let Some(conn) = self.clients.get_mut(&client_id) {
                     let outcome = crate::core::ExecOutcome {
                         id: *id,
@@ -348,24 +336,26 @@ impl IpcModule {
     }
 
     fn queue_response(conn: &mut Conn, resp: WireResponse) {
+        if conn.write_buf.len() > MAX_WRITE_BUF {
+            return; // Drop response on buffer overflow
+        }
+
         let payload = match resp {
             WireResponse::Exec(id) => {
-                let mut p = vec![1u8];
+                let mut p = Vec::with_capacity(9);
+                p.push(1u8);
                 p.extend_from_slice(&id.to_le_bytes());
                 p
             }
             WireResponse::Result(res) => {
-                let mut p = vec![2u8];
+                let mut p = Vec::with_capacity(1024);
+                p.push(2u8);
                 let json = serde_json::to_vec(&res).unwrap_or_default();
                 p.extend_from_slice(&json);
                 p
             }
-            WireResponse::CancelOk => {
-                vec![3u8]
-            }
-            WireResponse::Error => {
-                vec![4u8]
-            }
+            WireResponse::CancelOk => vec![3u8],
+            WireResponse::Error => vec![4u8],
         };
         let len = payload.len() as u32;
         conn.write_buf.extend_from_slice(&len.to_le_bytes());
@@ -374,7 +364,6 @@ impl IpcModule {
 }
 
 use crate::high_level::api::Command;
-
 
 enum WireResponse {
     Exec(u64),

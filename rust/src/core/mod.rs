@@ -93,30 +93,61 @@ pub struct ExecOutcome {
     pub result: Result<ExecResult, ExecError>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogLevel {
+    Trace,
+    Debug,
     Info,
     Warn,
     Error,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum LogEvent {
-    Submit { id: u64 },
-    Spawn { id: u64, pid: i32 },
-    Cancel { id: u64 },
-    ForceKill { id: u64 },
-    Exit { id: u64, status: Option<i32> },
-    Timeout { id: u64 },
+    // Structured Events
+    TickSummary {
+        processed: usize,
+        dropped: usize,
+        queue_before: usize,
+        queue_after: usize,
+        elapsed_us: u64,
+    },
+    ActionDispatch {
+        kind: ActionKind,
+        id: Option<u64>,
+        addon_id: Option<u32>,
+        key: Option<String>,
+        service: Option<SystemService>,
+        payload_len: usize,
+    },
+    PreloadForeground {
+        pid: i32,
+        package: String,
+    },
+    PreloadSkip {
+        package: String,
+        reason: String,
+        remaining_ms: Option<u64>,
+    },
+    PreloadStart {
+        package: String,
+        paths: usize,
+    },
+    PreloadDone {
+        package: String,
+        paths: usize,
+        bytes: u64,
+        duration_ms: u64,
+    },
+    PreloadFail {
+        package: String,
+        reason: String,
+        backoff_ms: u64,
+    },
+    
+    // Legacy/Generic
+    Generic(String),
     Error { id: u64, err: String },
-
-    TickStart,
-    Observability { queue_len: usize, actions_processed: usize, dropped: usize },
-    TickEnd,
-    AddonReceived,
-    AddonTranslated,
-    AddonDropped,
-    ActionDispatched,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +265,7 @@ pub enum ActionKind {
     PackagesChanged,
     SystemRequest,
     AddonTask,
+    AddonLog,
     AddonEvent,
     CleanupJob,
     TrackTimeout,
@@ -279,6 +311,11 @@ pub enum Intent {
         key: String,
         payload: Vec<u8>,
     },
+    AddonLog {
+        addon_id: u32,
+        level: LogLevel,
+        msg: String,
+    },
 }
 
 pub fn validate_intent(intent: &Intent) -> bool {
@@ -290,6 +327,7 @@ pub fn validate_intent(intent: &Intent) -> bool {
         Intent::PackagesChanged => true,
         Intent::SystemRequest { .. } => true,
         Intent::AddonTask { .. } => true,
+        Intent::AddonLog { .. } => true,
     }
 }
 
@@ -346,6 +384,9 @@ pub fn expand_intent(intent: Intent, now: u64) -> Vec<Action> {
         }
         Intent::AddonTask { addon_id, key, payload } => {
             vec![Action::AddonTask { addon_id, key, payload }]
+        }
+        Intent::AddonLog { addon_id, level, msg } => {
+            vec![Action::AddonLog { addon_id, level, msg }]
         }
     }
 }
@@ -466,6 +507,11 @@ pub enum Action {
         key: String,
         payload: Vec<u8>,
     },
+    AddonLog {
+        addon_id: u32,
+        level: LogLevel,
+        msg: String,
+    },
     AddonEvent {
         addon_id: u32,
         key: String,
@@ -538,6 +584,7 @@ impl Action {
             Action::PackagesChanged => ActionKind::PackagesChanged,
             Action::SystemRequest { .. } => ActionKind::SystemRequest,
             Action::AddonTask { .. } => ActionKind::AddonTask,
+            Action::AddonLog { .. } => ActionKind::AddonLog,
             Action::AddonEvent { .. } => ActionKind::AddonEvent,
             Action::CleanupJob { .. } => ActionKind::CleanupJob,
             Action::TrackTimeout { .. } => ActionKind::TrackTimeout,
@@ -595,6 +642,7 @@ impl Action {
             | Action::PackagesChanged
             | Action::SystemRequest { .. }
             | Action::AddonTask { .. }
+            | Action::AddonLog { .. }
             | Action::AddonEvent { .. }
             | Action::EmitLog { .. } => Priority::Background,
         }
@@ -658,6 +706,11 @@ pub enum Effect {
         addon_id: u32,
         key: String,
         payload: Vec<u8>,
+    },
+    AddonLog {
+        addon_id: u32,
+        level: LogLevel,
+        msg: String,
     },
     SystemRequest {
         request_id: u64,
@@ -750,10 +803,22 @@ pub enum TimeoutState {
     WaitingForKillGrace(u64),
 }
 
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
+pub struct Metrics {
+    pub active_clients: u32,
+    pub dropped_actions: u64,
+    pub queue_depth: u32,
+    pub avg_tick_duration_us: u32,
+    pub peak_read_buf_kb: u32,
+    pub peak_write_buf_kb: u32,
+    pub restart_count: u32,
+}
+
 pub struct ExecutionState {
     pub core: crate::core::core_state::CoreState,
     pub timeout: crate::core::policy::TimeoutStateStore,
     pub result: crate::core::result::ResultState,
+    pub metrics: Metrics,
     pub clock: u64,
     pub hash: u64,
 }
@@ -770,6 +835,7 @@ impl ExecutionState {
             core: crate::core::core_state::CoreState::new(),
             timeout: crate::core::policy::TimeoutStateStore::new(),
             result: crate::core::result::ResultState::new(),
+            metrics: Metrics::default(),
             clock: 0,
             hash: 0,
         }

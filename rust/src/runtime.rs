@@ -52,28 +52,29 @@ impl FileSink {
 pub struct LogRouter {
     sinks: HashMap<u32, FileSink>,
     default: FileSink,
+    pub verbosity: LogLevel,
 }
 
 impl LogRouter {
-    pub fn new(base_dir: &str) -> Self {
-        let default_path = format!("{}/core.log", base_dir);
-        let _ = std::fs::create_dir_all(base_dir);
+    pub fn new() -> Self {
         Self {
             sinks: HashMap::new(),
-            default: FileSink::new(&default_path),
+            default: FileSink::new(crate::paths::CORE_LOG_PATH),
+            verbosity: LogLevel::Info,
         }
     }
 
     fn get_or_create(&mut self, owner: u32) -> &mut FileSink {
         self.sinks.entry(owner).or_insert_with(|| {
-            let dir_path = format!("/data/local/tmp/coreshift/addon_{}", owner);
-            let _ = std::fs::create_dir_all(&dir_path);
-            let file_path = format!("{}/log.txt", dir_path);
-            FileSink::new(&file_path)
+            let path = crate::paths::addon_log_path(owner);
+            FileSink::new(&path)
         })
     }
 
     pub fn write(&mut self, owner: u32, level: LogLevel, msg: String) {
+        if (level as u8) < (self.verbosity as u8) {
+            return;
+        }
         if owner == crate::core::CORE_OWNER {
             self.default.write(level, msg);
         } else {
@@ -100,13 +101,13 @@ pub struct EffectExecutor {
 }
 
 impl EffectExecutor {
-    pub fn new(reactor: Reactor, base_dir: &str) -> Self {
+    pub fn new(reactor: Reactor) -> Self {
         Self {
             reactor,
             fd_map: Vec::new(),
             processes: Arena::new(),
             drains: Arena::new(),
-            log_router: LogRouter::new(base_dir),
+            log_router: LogRouter::new(),
         }
     }
 
@@ -135,29 +136,47 @@ impl EffectExecutor {
         Ok(sys_events)
     }
 
+    fn format_log_event(&self, event: &LogEvent) -> String {
+        match event {
+            LogEvent::TickSummary { processed, dropped, queue_before, queue_after, elapsed_us } => {
+                format!("tick processed={} dropped={} queue_before={} queue_after={} elapsed_ms={}",
+                    processed, dropped, queue_before, queue_after, elapsed_us / 1000)
+            }
+            LogEvent::ActionDispatch { kind, id, addon_id, key, service, payload_len } => {
+                let mut parts = vec![format!("action={:?}", kind)];
+                if let Some(i) = id { parts.push(format!("id={}", i)); }
+                if let Some(a) = addon_id { parts.push(format!("addon_id={}", a)); }
+                if let Some(k) = key { parts.push(format!("key={}", k)); }
+                if let Some(s) = service { parts.push(format!("service={:?}", s)); }
+                if *payload_len > 0 { parts.push(format!("payload_len={}", payload_len)); }
+                parts.join(" ")
+            }
+            LogEvent::PreloadForeground { pid, package } => {
+                format!("preload foreground pid={} package={}", pid, package)
+            }
+            LogEvent::PreloadSkip { package, reason, remaining_ms } => {
+                let mut s = format!("preload skip package={} reason={}", package, reason);
+                if let Some(r) = remaining_ms { s.push_str(&format!(" remaining_ms={}", r)); }
+                s
+            }
+            LogEvent::PreloadStart { package, paths } => {
+                format!("preload start package={} paths={}", package, paths)
+            }
+            LogEvent::PreloadDone { package, paths, bytes, duration_ms } => {
+                format!("preload done package={} paths={} bytes={} duration_ms={}", package, paths, bytes, duration_ms)
+            }
+            LogEvent::PreloadFail { package, reason, backoff_ms } => {
+                format!("preload fail package={} reason={} backoff_ms={}", package, reason, backoff_ms)
+            }
+            LogEvent::Generic(s) => s.clone(),
+            LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
+        }
+    }
+
     pub fn apply(&mut self, effect: Effect) -> Vec<Event> {
         match effect {
-            Effect::Log {
-                owner,
-                level,
-                event,
-            } => {
-                let msg = match event {
-                    LogEvent::Submit { id } => format!("Submit id={}", id),
-                    LogEvent::Spawn { id, pid } => format!("Spawn id={}, pid={}", id, pid),
-                    LogEvent::Cancel { id } => format!("Cancel id={}", id),
-                    LogEvent::ForceKill { id } => format!("ForceKill id={}", id),
-                    LogEvent::Exit { id, status } => format!("Exit id={}, status={:?}", id, status),
-                    LogEvent::Timeout { id } => format!("Timeout id={}", id),
-                    LogEvent::Error { id, err } => format!("Error id={}, err={}", id, err),
-                    LogEvent::TickStart => "tick_start".to_string(),
-                    LogEvent::TickEnd => "tick_end".to_string(),
-                    LogEvent::AddonReceived => "addon_received".to_string(),
-                    LogEvent::AddonTranslated => "addon_translated".to_string(),
-                    LogEvent::AddonDropped => "addon_dropped".to_string(),
-                    LogEvent::ActionDispatched => "action_dispatched".to_string(),
-                    LogEvent::Observability { queue_len, actions_processed, dropped } => format!("queue_len={} processed={} dropped={}", queue_len, actions_processed, dropped),
-                };
+            Effect::Log { owner, level, event } => {
+                let msg = self.format_log_event(&event);
                 self.log_router.write(owner, level, msg);
                 vec![]
             }
@@ -466,6 +485,10 @@ impl EffectExecutor {
                     }
                     _ => vec![Event::AddonFailed { addon_id, key, err: "unknown task type".to_string() }]
                 }
+            }
+            Effect::AddonLog { addon_id, level, msg } => {
+                self.log_router.write(addon_id, level, msg);
+                vec![]
             }
             Effect::SystemRequest { request_id, kind, payload } => {
                 match kind {
