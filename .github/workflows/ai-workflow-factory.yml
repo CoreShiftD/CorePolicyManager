@@ -119,7 +119,7 @@ jobs:
                     if git diff --staged --quiet; then
                       echo "No report to commit."
                     else
-                      git commit -m "AI: add generated review report"
+                      git commit --signoff -m "AI: add generated review report"
                       git push origin "\$CURRENT_BRANCH"
                     fi
           EOF
@@ -135,5 +135,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$WORKFLOW_PATH"
-          git commit -m "AI(workflows): create requested AI workflow"
+          git commit --signoff -m "AI(workflows): create requested AI workflow"
           git push origin "$CURRENT_BRANCH"

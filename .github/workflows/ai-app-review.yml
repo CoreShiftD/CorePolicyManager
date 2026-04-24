@@ -166,7 +166,7 @@ jobs:
             if [ "$RECOVERY_MODE" = "true" ]; then
               echo "Entering RECOVERY MODE (Attempt $((RECOVERY_COUNT + 1)))"
               ERROR_SUMMARY=$(cat "$LAST_FAILURE_LOG" | head -n 50)
-              PROMPT="You are a senior maintenance engineer. You previously made a change that failed validation. Fix the compile/test errors below. Do not make unrelated changes. Return/edit only the minimum necessary fix.
+              PROMPT="You are a senior maintenance engineer. You previously made a change that failed validation. Fix the compile/test errors below. Do not make unrelated changes. Return/edit only the minimum necessary fix. All commits you suggest or perform must use DCO signoff (git commit --signoff).
               Error log:
               $ERROR_SUMMARY
               End with SUMMARY: fixed previous validation errors."
@@ -177,7 +177,7 @@ jobs:
                 git restore --worktree --staged .
                 git clean -fd --exclude=session_artifacts/
               fi
-              PROMPT="You are a senior maintenance engineer. Make one high-value improvement to the CorePolicyManager Android app. Priorities: build/release config, Compose stability, state handling, lints. Avoid trivial edits. Max $LIMIT_FILES files and $LIMIT_LINES lines. Stop after one focused change. End with SUMMARY: <short description>."
+              PROMPT="You are a senior maintenance engineer. Make one high-value improvement to the CorePolicyManager Android app. Priorities: build/release config, Compose stability, state handling, lints. Avoid trivial edits. Max $LIMIT_FILES files and $LIMIT_LINES lines. All commits you suggest or perform must use DCO signoff (git commit --signoff). Stop after one focused change. End with SUMMARY: <short description>."
             fi
             
             gemini --model "${{ env.SELECTED_MODEL }}" --approval-mode=auto_edit --skip-trust --prompt "$PROMPT" > "$PASS_DIR/gemini_output.txt" 2>&1 || true
@@ -216,7 +216,7 @@ jobs:
                 if ./gradlew spotlessApply && ./gradlew spotlessCheck; then
                   SUMMARY=$(grep "SUMMARY:" "$PASS_DIR/gemini_output.txt" | tail -n 1 | sed 's/SUMMARY: //')
                   git add app/ core/ feature/ gradle/ build.gradle.kts settings.gradle.kts gradle.properties README.md .gitignore
-                  git commit -m "AI(app): improve $SUMMARY (pass $PASS_COUNT)"
+                  git commit --signoff -m "AI(app): improve $SUMMARY (pass $PASS_COUNT)"
                   echo "Pass $PASS_COUNT successful."
                   NO_CHANGE_PASSES=0
                   FAILED_PASSES=0
