@@ -88,9 +88,9 @@ impl<T> Arena<T> {
                 false
             };
         if valid {
-            let next_gen = generation
-                .checked_add(1)
-                .expect("Arena generation overflow");
+            // Keep generation 0 reserved so stale handles remain invalid even if
+            // a very long-lived slot eventually wraps after repeated reuse.
+            let next_gen = generation.wrapping_add(1).max(1);
             let slot = std::mem::replace(
                 &mut self.slots[index as usize],
                 Slot::Free {
