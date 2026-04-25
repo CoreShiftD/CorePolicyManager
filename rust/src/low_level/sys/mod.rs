@@ -19,14 +19,14 @@
 use crate::low_level::spawn::{SysError, syscall_ret};
 use libc::sigset_t;
 
-/// Probe whether a filesystem path exists without following symlinks.
+/// Probe whether a filesystem path is visible and accessible.
 ///
-/// Uses `libc::access` with `F_OK` so the check is a single syscall with no
-/// Rust allocator involvement.  Returns `true` if the path is accessible,
-/// `false` on any error (including `ENOENT`, `EACCES`, etc.).
+/// Uses `libc::access` with `F_OK`, which returns `true` if the path exists
+/// and the process has permission to search all directories in the path
+/// prefix. Returns `false` on any error (including `ENOENT`, `EACCES`, etc.).
 ///
-/// This is the canonical low-level path-existence helper.  Higher layers
-/// (runtime, addons) must call this instead of `std::path::Path::exists()`.
+/// Note: This does not follow symlinks for the final component if it's broken.
+/// This is the canonical low-level path-existence helper.
 pub fn path_exists(path: &str) -> bool {
     match std::ffi::CString::new(path) {
         Ok(c) => unsafe { libc::access(c.as_ptr(), libc::F_OK) == 0 },
@@ -44,11 +44,15 @@ pub struct ProcStatus {
     pub uid: u32,
 }
 
+/// Reads process status from `/proc/<pid>/status`.
+/// Returns `Err` with `ErrorKind::NotFound` if the process does not exist.
 pub fn read_proc_status(pid: i32) -> Result<ProcStatus, std::io::Error> {
     let path = format!("/proc/{}/status", pid);
     parse_proc_status(&std::fs::read_to_string(path)?)
 }
 
+/// Reads process command line from `/proc/<pid>/cmdline`.
+/// Returns `Err` with `ErrorKind::NotFound` if the process does not exist.
 pub fn read_proc_cmdline(pid: i32) -> Result<String, std::io::Error> {
     let path = format!("/proc/{}/cmdline", pid);
     let bytes = std::fs::read(path)?;

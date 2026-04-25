@@ -44,27 +44,21 @@ pub fn add_watch(fd: &Fd, path: &str, mask: u32) -> Result<i32, SysError> {
 }
 
 pub fn read_events(fd: &Fd) -> Result<Vec<InotifyEvent>, SysError> {
-    let mut len: libc::c_int = 0;
-    let ret = unsafe { libc::ioctl(fd.raw(), libc::FIONREAD, &mut len) };
-    if ret < 0 {
-        return Err(SysError::sys(
-            std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
-            "ioctl(FIONREAD)",
-        ));
-    }
-    if len <= 0 {
-        return Ok(Vec::new());
+    let mut all_events = Vec::new();
+    let mut buf = vec![0u8; 4096];
+
+    loop {
+        match fd.read(buf.as_mut_ptr(), buf.len()) {
+            Ok(Some(0)) => break, // EOF
+            Ok(Some(n)) => {
+                all_events.extend(decode_events(&buf[..n]));
+            }
+            Ok(None) => break, // EAGAIN
+            Err(e) => return Err(e),
+        }
     }
 
-    let mut buf = vec![0u8; len as usize];
-    let n = match fd.read(buf.as_mut_ptr(), buf.len()) {
-        Ok(Some(0)) => return Ok(Vec::new()),
-        Ok(Some(n)) => n,
-        Ok(None) => return Ok(Vec::new()),
-        Err(e) => return Err(e),
-    };
-
-    Ok(decode_events(&buf[..n]))
+    Ok(all_events)
 }
 
 pub fn decode_events(buf: &[u8]) -> Vec<InotifyEvent> {

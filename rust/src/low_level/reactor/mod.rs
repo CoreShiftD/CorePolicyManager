@@ -11,7 +11,6 @@ fn errno() -> i32 {
 }
 
 /// A safe wrapper for file descriptors ensuring they are closed when dropped.
-#[derive(Clone)]
 pub struct Fd(RawFd);
 
 use std::os::unix::io::{AsRawFd, RawFd};
