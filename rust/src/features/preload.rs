@@ -40,6 +40,18 @@ impl PreloadFeature {
         if let Some(last_time) = self.cooldowns.get(pkg)
             && last_time.elapsed() < PRELOAD_COOLDOWN
         {
+            let remaining = PRELOAD_COOLDOWN.saturating_sub(last_time.elapsed());
+            let remaining_secs = remaining.as_secs();
+            logging::dedup_info(
+                &format!("preload_cooldown:{}", pkg),
+                &format!(
+                    "Preload: cooldown package={} remaining_secs={}",
+                    pkg, remaining_secs
+                ),
+                Duration::from_secs(30),
+            );
+            status.last_preload_package = Some(pkg.to_string());
+            status.last_preload_result = Some("cooldown".to_string());
             return;
         }
 
@@ -270,5 +282,22 @@ mod tests {
         assert!(plan.total_bytes > 0);
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_cooldown_skip_updates_status() {
+        let mut preload = PreloadFeature::new();
+        let mut status = DaemonStatus::default();
+        preload
+            .cooldowns
+            .insert("com.example.app".to_string(), Instant::now());
+
+        preload.on_foreground_package("com.example.app", &mut status);
+
+        assert_eq!(
+            status.last_preload_package.as_deref(),
+            Some("com.example.app")
+        );
+        assert_eq!(status.last_preload_result.as_deref(), Some("cooldown"));
     }
 }
