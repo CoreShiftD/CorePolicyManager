@@ -1236,10 +1236,13 @@ mod tests_internal {
             in_flight_count: 0,
             total_failures: 2,
             auto_disabled: false,
+            events_seen: 100,
             last_skip_reason: Some("cooldown".to_string()),
+            last_skip_package: None,
             last_warmup_result: Some(
                 "package=com.example.app bytes=4096 duration_ms=12".to_string(),
             ),
+            last_warmup_package: None,
         };
 
         let json = serde_json::to_string(&snap).expect("serialization must succeed");
@@ -1259,6 +1262,7 @@ mod tests_internal {
         use crate::high_level::api::{DaemonStatusReport, PreloadSnapshot, WatchedPathStatus};
 
         let report = DaemonStatusReport {
+            uptime_secs: 10,
             mode: "preload".to_string(),
             socket_path: "/data/local/tmp/coreshift/coreshift.sock".to_string(),
             preload_addon_loaded: true,
@@ -1287,8 +1291,11 @@ mod tests_internal {
                 in_flight_count: 0,
                 total_failures: 0,
                 auto_disabled: false,
+                events_seen: 50,
                 last_skip_reason: None,
+                last_skip_package: None,
                 last_warmup_result: None,
+                last_warmup_package: None,
             }),
         };
 
@@ -1321,6 +1328,7 @@ mod tests_internal {
         }];
 
         let report = assemble_daemon_status(
+            0,
             "preload",
             "/data/local/tmp/coreshift/coreshift.sock",
             Some(&addon as &dyn Addon),
@@ -1352,7 +1360,7 @@ mod tests_internal {
     fn runtime_assembler_without_preload_addon() {
         use crate::runtime::assemble_daemon_status;
 
-        let report = assemble_daemon_status("normal", "/tmp/test.sock", None, &[], None);
+        let report = assemble_daemon_status(0, "normal", "/tmp/test.sock", None, &[], None);
 
         assert_eq!(report.mode, "normal");
         assert!(!report.preload_addon_loaded);
@@ -1526,6 +1534,7 @@ mod tests_internal {
         // The runtime passes watch registrations directly; the addon snapshot
         // does not carry them.
         let report = assemble_daemon_status(
+            0,
             "preload",
             "/tmp/s.sock",
             Some(&addon as &dyn Addon),

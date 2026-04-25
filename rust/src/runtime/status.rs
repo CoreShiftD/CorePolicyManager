@@ -32,6 +32,7 @@ use crate::low_level::sys::path_exists;
 /// Filesystem probes (`path_exists`) are performed here in the runtime layer,
 /// not inside the addon.
 pub fn assemble_daemon_status(
+    uptime_secs: u64,
     mode: &str,
     socket_path: &str,
     preload_addon: Option<&dyn Addon>,
@@ -42,6 +43,7 @@ pub fn assemble_daemon_status(
     let foreground_path_exists = path_exists("/dev/cpuset/top-app/cgroup.procs");
 
     DaemonStatusReport {
+        uptime_secs,
         mode: mode.to_string(),
         socket_path: socket_path.to_string(),
         preload_addon_loaded: preload_addon.is_some(),

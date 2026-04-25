@@ -70,8 +70,18 @@ fn run_command(command: Command) -> Result<(), String> {
         Command::PreloadStatus => {
             use std::io::{Read, Write};
             use std::os::unix::net::UnixStream;
-            let mut stream = UnixStream::connect(CoreShift::paths::SOCKET_PATH)
-                .map_err(|e| format!("failed to connect to daemon: {}", e))?;
+            use std::time::Duration;
+
+            let stream_res = UnixStream::connect(CoreShift::paths::SOCKET_PATH);
+            let mut stream = stream_res.map_err(|e| format!("failed to connect to daemon: {}", e))?;
+
+            // Set reasonable timeouts for the status request.
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .map_err(|e| e.to_string())?;
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .map_err(|e| e.to_string())?;
 
             // Type 4: PreloadStatus request (single-byte body, no JSON payload).
             let body: [u8; 1] = [4u8];

@@ -50,11 +50,17 @@ pub struct PreloadAddon {
 
     total_failures: u32,
     auto_disabled: bool,
+    events_seen: u64,
+    last_cleanup_time: u64,
 
     /// Last skip reason emitted (e.g. `"already_in_flight"`, `"cooldown"`).
     pub last_skip_reason: Option<String>,
+    /// Last package skipped.
+    pub last_skip_package: Option<String>,
     /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
     pub last_warmup_result: Option<String>,
+    /// Last package warmed up.
+    pub last_warmup_package: Option<String>,
 }
 
 impl PreloadAddon {
@@ -72,8 +78,12 @@ impl PreloadAddon {
             last_foreground_package: None,
             total_failures: 0,
             auto_disabled: false,
+            events_seen: 0,
+            last_cleanup_time: 0,
             last_skip_reason: None,
+            last_skip_package: None,
             last_warmup_result: None,
+            last_warmup_package: None,
         }
     }
 
@@ -89,6 +99,8 @@ impl PreloadAddon {
 
 impl Addon for PreloadAddon {
     fn on_core_event(&mut self, state: &dyn StateView, event: &Event) -> Vec<Request> {
+        self.events_seen += 1;
+
         if self.auto_disabled {
             return Vec::new();
         }
@@ -122,6 +134,7 @@ impl Addon for PreloadAddon {
 
         match event {
             Event::Tick => {
+                // 1. Debounce foreground resolution
                 if let Some(pid) = self.pending_foreground_pid
                     && now.saturating_sub(self.last_foreground_time) >= self.config.debounce_ms
                 {
@@ -132,6 +145,20 @@ impl Addon for PreloadAddon {
                         payload,
                     }));
                     self.pending_foreground_pid = None;
+                }
+
+                // 2. Periodic cache cleanup (every 1 minute)
+                if now.saturating_sub(self.last_cleanup_time) >= 60_000 {
+                    self.last_cleanup_time = now;
+                    // Cleanup dedup cache (entries older than 1 hour)
+                    let one_hour_ms = 3_600_000;
+                    self.dedup_cache
+                        .retain(|_, &mut time| now.saturating_sub(time) < one_hour_ms);
+
+                    // Cleanup negative cache (entries older than 30 mins)
+                    let thirty_mins_ms = 1_800_000;
+                    self.negative_cache
+                        .retain(|_, &mut time| now.saturating_sub(time) < thirty_mins_ms);
                 }
             }
             Event::ForegroundChanged { pid } if *pid != self.last_foreground_pid => {
@@ -154,6 +181,15 @@ impl Addon for PreloadAddon {
                 match kind {
                     SystemService::ResolveIdentity => {
                         if let Ok(package_name) = String::from_utf8(payload.clone()) {
+                            // Suppress system server and other common system processes
+                            if package_name == "android"
+                                || package_name == "system"
+                                || package_name.contains("com.android.systemui")
+                            {
+                                self.last_skip_reason = Some("system_package".to_string());
+                                return reqs;
+                            }
+
                             self.last_foreground_package = Some(package_name.clone());
                             reqs.push(self.submit(Intent::AddonLog {
                                 addon_id: 102,
@@ -166,6 +202,7 @@ impl Addon for PreloadAddon {
 
                             if self.in_flight.contains(&package_name) {
                                 self.last_skip_reason = Some("already_in_flight".to_string());
+                                self.last_skip_package = Some(package_name.clone());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Debug,
@@ -179,6 +216,7 @@ impl Addon for PreloadAddon {
 
                             if self.in_flight.len() >= self.config.global_max_in_flight {
                                 self.last_skip_reason = Some("global_budget_full".to_string());
+                                self.last_skip_package = Some(package_name.clone());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Warn,
@@ -194,6 +232,7 @@ impl Addon for PreloadAddon {
                                 let elapsed = now.saturating_sub(*t);
                                 if elapsed < self.config.per_package_failure_backoff_ms {
                                     self.last_skip_reason = Some("failure_backoff".to_string());
+                                    self.last_skip_package = Some(package_name.clone());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
                                         level: LogLevel::Debug,
@@ -207,6 +246,7 @@ impl Addon for PreloadAddon {
                                 let elapsed = now.saturating_sub(*last_warmup);
                                 if elapsed < self.config.per_package_warmup_cooldown_ms {
                                     self.last_skip_reason = Some("cooldown".to_string());
+                                    self.last_skip_package = Some(package_name.clone());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
                                         level: LogLevel::Debug,
@@ -313,6 +353,7 @@ impl Addon for PreloadAddon {
             {
                 self.in_flight.remove(package);
                 self.dedup_cache.insert(package.to_string(), now);
+                self.last_warmup_package = Some(package.to_string());
 
                 if let Ok((bytes, duration_ms)) = serde_json::from_slice::<(u64, u64)>(payload) {
                     let result_summary = format!(
@@ -374,8 +415,11 @@ impl PreloadAddon {
             in_flight_count: self.in_flight.len(),
             total_failures: self.total_failures,
             auto_disabled: self.auto_disabled,
+            events_seen: self.events_seen,
             last_skip_reason: self.last_skip_reason.clone(),
+            last_skip_package: self.last_skip_package.clone(),
             last_warmup_result: self.last_warmup_result.clone(),
+            last_warmup_package: self.last_warmup_package.clone(),
         }
     }
 }

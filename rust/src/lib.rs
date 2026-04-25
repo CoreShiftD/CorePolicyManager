@@ -165,6 +165,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     use crate::low_level::reactor::{Fd, Reactor, Token};
     use crate::mid_level::ipc::IpcModule;
 
+    let start_time = std::time::Instant::now();
     let mut reactor = Reactor::new()?;
     let ipc_fd = Fd::new(
         unsafe {
@@ -178,6 +179,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     )?;
 
     let socket_path = paths::SOCKET_PATH;
+    if let Some(parent) = std::path::Path::new(socket_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let _ = std::fs::remove_file(socket_path);
 
     let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
@@ -634,6 +638,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                                 }
                             });
                         let report = crate::runtime::assemble_daemon_status(
+                            start_time.elapsed().as_secs(),
                             mode,
                             paths::SOCKET_PATH,
                             preload_ref,

@@ -31,19 +31,23 @@ unsafe extern "C" {
 }
 
 #[inline(always)]
-unsafe fn do_readahead(fd: libc::c_int) {
-    if fd < 0 {
+unsafe fn do_readahead(fd: libc::c_int, count: u64) {
+    if fd < 0 || count == 0 {
         return;
     }
 
     #[cfg(target_os = "android")]
     unsafe {
-        libc::syscall(libc::SYS_readahead, fd, 0, 0);
+        // readahead(int fd, off64_t offset, size_t count)
+        // On ARM64/Android, we use the libc wrapper if available, or syscall.
+        // The count is limited by size_t.
+        let count_fixed = (count as usize).min(1024 * 1024 * 512); // Cap at 512MB per file
+        libc::syscall(libc::SYS_readahead, fd, 0 as libc::off64_t, count_fixed);
     }
 
     #[cfg(all(target_os = "linux", not(target_os = "android")))]
     unsafe {
-        readahead(fd, 0, 0);
+        readahead(fd, 0, count as libc::size_t);
     }
 }
 
@@ -388,10 +392,14 @@ impl EffectExecutor {
                                         let fd = libc::open(c_path.as_ptr(), libc::O_RDONLY);
                                         if fd >= 0 {
                                             let mut st: libc::stat = std::mem::zeroed();
-                                            if libc::fstat(fd, &mut st) == 0 {
-                                                bytes += st.st_size as u64;
-                                            }
-                                            do_readahead(fd);
+                                            let size = if libc::fstat(fd, &mut st) == 0 {
+                                                let s = st.st_size as u64;
+                                                bytes += s;
+                                                s
+                                            } else {
+                                                0
+                                            };
+                                            do_readahead(fd, size);
                                             libc::close(fd);
                                         } else {
                                             failure_reason =

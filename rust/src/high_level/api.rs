@@ -40,6 +40,8 @@ pub struct WatchedPathStatus {
 /// It is serialized to JSON and framed by `mid_level::ipc`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DaemonStatusReport {
+    /// Seconds since daemon startup.
+    pub uptime_secs: u64,
     /// Daemon mode: `"normal"`, `"preload"`, or `"record"`.
     pub mode: String,
     /// Path of the Unix-domain socket the daemon is listening on.
@@ -111,10 +113,16 @@ pub struct PreloadSnapshot {
     pub total_failures: u32,
     /// Whether the addon has been auto-disabled due to excessive failures.
     pub auto_disabled: bool,
+    /// Number of core events seen by the addon.
+    pub events_seen: u64,
     /// Last skip reason (e.g. `"already_in_flight"`, `"cooldown"`).
     pub last_skip_reason: Option<String>,
+    /// Last package skipped.
+    pub last_skip_package: Option<String>,
     /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
     pub last_warmup_result: Option<String>,
+    /// Last package warmed up.
+    pub last_warmup_package: Option<String>,
 }
 
 use crate::high_level::android::ExecConfig;
