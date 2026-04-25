@@ -431,6 +431,7 @@ impl IpcModule {
         }
 
         let len = payload.len() as u32;
+        conn.write_buf.reserve(frame_len);
         conn.write_buf.extend_from_slice(&len.to_le_bytes());
         conn.write_buf.extend_from_slice(&payload);
         Ok(())

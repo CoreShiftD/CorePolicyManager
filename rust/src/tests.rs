@@ -438,6 +438,22 @@ mod tests_internal {
     }
 
     #[test]
+    fn runtime_log_level_gate_matches_router_filtering() {
+        assert!(crate::log_level_enabled(
+            crate::core::LogLevel::Info,
+            crate::core::LogLevel::Warn
+        ));
+        assert!(crate::log_level_enabled(
+            crate::core::LogLevel::Info,
+            crate::core::LogLevel::Info
+        ));
+        assert!(!crate::log_level_enabled(
+            crate::core::LogLevel::Info,
+            crate::core::LogLevel::Debug
+        ));
+    }
+
+    #[test]
     fn test_preload_addon_debouncing() {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;

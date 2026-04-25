@@ -91,6 +91,11 @@ fn compute_reactor_timeout_ms(policy_timeout_ms: i32, elapsed_ms: u64) -> i32 {
     }
 }
 
+#[inline]
+fn log_level_enabled(verbosity: crate::core::LogLevel, level: crate::core::LogLevel) -> bool {
+    (level as u8) >= (verbosity as u8)
+}
+
 /// Create the `enable_preload` control file at `path` if it does not already
 /// exist.  Returns `true` if the file was created, `false` if it was already
 /// present, and logs a warning (without returning an error) if creation fails.
@@ -1111,7 +1116,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         if tick_counter.is_multiple_of(640) {
             let m = &state.metrics;
             let log_router_verbosity = effect_executor.log_router.verbosity;
-            let is_verbose = (log_router_verbosity as u8) <= (crate::core::LogLevel::Debug as u8);
+            let is_verbose = log_level_enabled(log_router_verbosity, crate::core::LogLevel::Debug);
 
             let changed = m.active_clients != last_metrics_clients
                 || m.queue_depth != last_metrics_queue
@@ -1150,17 +1155,22 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         state.metrics.avg_tick_duration_us =
             (state.metrics.avg_tick_duration_us * 7 + tick_duration_us as u32) / 8;
 
-        let _ = effect_executor.apply(crate::core::Effect::Log {
-            owner: crate::core::CORE_OWNER,
-            level: crate::core::LogLevel::Debug,
-            event: crate::core::LogEvent::TickSummary {
-                processed: tick_actions_processed,
-                dropped: tick_dropped_actions,
-                queue_before,
-                queue_after: scheduler.total_len,
-                elapsed_us: tick_duration_us,
-            },
-        });
+        if log_level_enabled(
+            effect_executor.log_router.verbosity,
+            crate::core::LogLevel::Debug,
+        ) {
+            let _ = effect_executor.apply(crate::core::Effect::Log {
+                owner: crate::core::CORE_OWNER,
+                level: crate::core::LogLevel::Debug,
+                event: crate::core::LogEvent::TickSummary {
+                    processed: tick_actions_processed,
+                    dropped: tick_dropped_actions,
+                    queue_before,
+                    queue_after: scheduler.total_len,
+                    elapsed_us: tick_duration_us,
+                },
+            });
+        }
 
         if let Some(f) = &mut record_file {
             let stats = crate::core::replay::TickStats {
