@@ -67,6 +67,7 @@ pub struct PreloadInotify {
     pub wd_pkg_xml: i32,
     pub wd_pkg_list: i32,
     last_foreground_pid: Option<i32>,
+    last_accepted_package: Option<String>,
     packages_dirty: bool,
     events_seen: u64,
     last_raw_mask: Option<u32>,
@@ -82,6 +83,7 @@ impl PreloadInotify {
             wd_pkg_xml,
             wd_pkg_list,
             last_foreground_pid: None,
+            last_accepted_package: None,
             packages_dirty: false,
             events_seen: 0,
             last_raw_mask: None,
@@ -230,12 +232,15 @@ impl PreloadInotify {
                 self.last_foreground_pid = Some(new_pid);
                 match classify_foreground_pid(new_pid, &mut read_status, &mut read_cmdline) {
                     ForegroundClassification::Accept { uid, package } => {
-                        out.push(PreloadInotifyEvent::ForegroundAccepted {
-                            old_pid,
-                            new_pid,
-                            uid,
-                            package,
-                        });
+                        if self.last_accepted_package.as_deref() != Some(package.as_str()) {
+                            self.last_accepted_package = Some(package.clone());
+                            out.push(PreloadInotifyEvent::ForegroundAccepted {
+                                old_pid,
+                                new_pid,
+                                uid,
+                                package,
+                            });
+                        }
                     }
                     ForegroundClassification::Reject {
                         uid,
@@ -354,6 +359,15 @@ where
         };
     }
 
+    if core_process_name(&status.name) {
+        return ForegroundClassification::Reject {
+            uid: Some(status.uid),
+            name: Some(status.name),
+            cmdline: None,
+            reason: "system_process",
+        };
+    }
+
     if status.name.starts_with("com.android.") || status.name.starts_with("com.google.android.") {
         return ForegroundClassification::Reject {
             uid: Some(status.uid),
@@ -387,17 +401,70 @@ where
         }
     };
 
-    if cmdline.contains(':') {
-        return ForegroundClassification::Reject {
-            uid: Some(status.uid),
-            name: Some(status.name),
-            cmdline: Some(cmdline),
-            reason: "secondary_process",
-        };
-    }
+    let package = match normalize_foreground_package(&cmdline) {
+        PackageNormalization::Accept(package) => package,
+        PackageNormalization::RejectHelperProcess => {
+            return ForegroundClassification::Reject {
+                uid: Some(status.uid),
+                name: Some(status.name),
+                cmdline: Some(cmdline),
+                reason: "helper_process",
+            };
+        }
+    };
 
     ForegroundClassification::Accept {
         uid: status.uid,
-        package: status.name,
+        package,
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PackageNormalization {
+    Accept(String),
+    RejectHelperProcess,
+}
+
+fn normalize_foreground_package(cmdline: &str) -> PackageNormalization {
+    let (base_pkg, suffix) = match cmdline.split_once(':') {
+        Some((base, suffix)) => (base, Some(suffix)),
+        None => (cmdline, None),
+    };
+
+    if let Some(suffix) = suffix
+        && helper_process_suffix(suffix)
+    {
+        return PackageNormalization::RejectHelperProcess;
+    }
+
+    PackageNormalization::Accept(base_pkg.to_string())
+}
+
+fn helper_process_suffix(suffix: &str) -> bool {
+    [
+        "sandboxed_process",
+        "renderer",
+        "webview",
+        "gpu",
+        "isolated",
+        "privileged_process",
+    ]
+    .iter()
+    .any(|needle| suffix.contains(needle))
+}
+
+fn core_process_name(name: &str) -> bool {
+    matches!(
+        name,
+        "system_server"
+            | "zygote"
+            | "zygote64"
+            | "surfaceflinger"
+            | "servicemanager"
+            | "hwservicemanager"
+            | "vndservicemanager"
+            | "logd"
+            | "netd"
+            | "installd"
+    )
 }

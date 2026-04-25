@@ -699,7 +699,7 @@ mod tests_internal {
         assert!(matches!(
             decision,
             crate::runtime::ForegroundClassification::Reject {
-                reason: "no_dot_name",
+                reason: "system_process",
                 ..
             }
         ));
@@ -711,7 +711,7 @@ mod tests_internal {
             123,
             |_| {
                 Ok(crate::low_level::sys::ProcStatus {
-                    name: "surfaceflinger".to_string(),
+                    name: "launcher".to_string(),
                     uid: 10000,
                 })
             },
@@ -772,7 +772,29 @@ mod tests_internal {
     }
 
     #[test]
-    fn foreground_classifier_rejects_secondary_process_cmdline() {
+    fn foreground_classifier_accepts_telegram_push_as_base_package() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "org.telegram.messenger".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("org.telegram.messenger:push".to_string()),
+        );
+
+        assert_eq!(
+            decision,
+            crate::runtime::ForegroundClassification::Accept {
+                uid: 10234,
+                package: "org.telegram.messenger".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn foreground_classifier_accepts_service_process_as_base_package() {
         let decision = crate::runtime::classify_foreground_pid(
             123,
             |_| {
@@ -784,10 +806,54 @@ mod tests_internal {
             |_| Ok("com.foo.bar:service".to_string()),
         );
 
+        assert_eq!(
+            decision,
+            crate::runtime::ForegroundClassification::Accept {
+                uid: 10234,
+                package: "com.foo.bar".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn foreground_classifier_rejects_helper_process_cmdline() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.android.chrome".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("com.android.chrome:sandboxed_process0".to_string()),
+        );
+
         assert!(matches!(
             decision,
             crate::runtime::ForegroundClassification::Reject {
-                reason: "secondary_process",
+                reason: "system_process",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn foreground_classifier_rejects_helper_suffix_for_app_owned_process() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "org.chromium.chrome".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("org.chromium.chrome:sandboxed_process0".to_string()),
+        );
+
+        assert!(matches!(
+            decision,
+            crate::runtime::ForegroundClassification::Reject {
+                reason: "helper_process",
                 ..
             }
         ));
@@ -956,6 +1022,61 @@ mod tests_internal {
         );
         assert_eq!(status_reads, 2);
         assert_eq!(cmdline_reads, 2);
+    }
+
+    #[test]
+    fn inotify_suppresses_repeated_normalized_package() {
+        use crate::low_level::inotify::InotifyEvent;
+        use crate::low_level::reactor::Fd;
+        use crate::runtime::{PreloadInotify, PreloadInotifyEvent};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (fd, _peer) = UnixStream::pair().unwrap();
+        let mut watcher =
+            PreloadInotify::new(Fd::new(fd.into_raw_fd(), "test").unwrap(), 10, 11, 12);
+
+        let first = watcher.handle_decoded_events_with_procfs(
+            &[InotifyEvent {
+                wd: 10,
+                mask: crate::low_level::inotify::MODIFY_MASK,
+                name_len: 0,
+            }],
+            || Ok("100\n".to_string()),
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.foo.bar".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("com.foo.bar:service".to_string()),
+        );
+        assert_eq!(
+            first,
+            vec![PreloadInotifyEvent::ForegroundAccepted {
+                old_pid: None,
+                new_pid: 100,
+                uid: 10234,
+                package: "com.foo.bar".to_string(),
+            }]
+        );
+
+        let repeated_package = watcher.handle_decoded_events_with_procfs(
+            &[InotifyEvent {
+                wd: 10,
+                mask: crate::low_level::inotify::MODIFY_MASK,
+                name_len: 0,
+            }],
+            || Ok("200\n".to_string()),
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.foo.bar".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("com.foo.bar:push".to_string()),
+        );
+        assert!(repeated_package.is_empty());
     }
 
     #[test]

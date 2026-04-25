@@ -20,9 +20,11 @@ Preload foreground handling is intentionally cheap. A cgroup event first reads
 the runtime reads `/proc/<pid>/status` and parses only `Name` and `Uid`.
 Processes that vanished, have UID below `10000`, use obvious Android system
 package names, or have no dot in `Name` do not trigger preload. Only surviving
-package-like candidates read `/proc/<pid>/cmdline`; names containing `:` are
-treated as secondary processes and skipped. Package database files remain cache
-invalidation signals only and are not parsed in this hot path.
+package-like candidates read `/proc/<pid>/cmdline`. Multiprocess names are
+normalized at the first `:` and usually accepted as the base package; known
+helper suffixes such as `sandboxed_process`, `renderer`, `webview`, `gpu`,
+`isolated`, and `privileged_process` are skipped. Package database files remain
+cache invalidation signals only and are not parsed in this hot path.
 
 ## The Event Loop
 
