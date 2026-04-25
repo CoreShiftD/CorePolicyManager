@@ -210,16 +210,8 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         // exists so the addon activates immediately without requiring a manual
         // toggle.  We create it here (before the addon's first tick) so that
         // `PreloadAddon::on_core_event` sees it on the very first `Tick`.
-        if let Err(e) = paths::ensure_dirs() {
-            crate::runtime::log_runtime_event(
-                crate::core::CORE_OWNER,
-                crate::core::LogLevel::Warn,
-                crate::core::LogEvent::Generic(format!(
-                    "preload: failed to ensure dirs before writing enable_preload: {}",
-                    e
-                )),
-            );
-        } else if !crate::low_level::sys::path_exists(paths::ENABLE_PRELOAD_PATH) {
+        // `ensure_dirs()` already ran successfully above; no need to repeat it.
+        if !crate::low_level::sys::path_exists(paths::ENABLE_PRELOAD_PATH) {
             match std::fs::write(paths::ENABLE_PRELOAD_PATH, b"") {
                 Ok(()) => {
                     crate::runtime::log_runtime_event(
@@ -420,11 +412,11 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         )
                     };
 
-                    // Record watch registration results on the PreloadAddon so
-                    // `preload-status` can report them accurately.  The addon
-                    // Build watch registration results using the api type so
-                    // the runtime status assembler can include them directly.
-                    let watch_results = vec![
+                    // Build watch registration results using the api type.
+                    // Stored in daemon_watch_registrations so the runtime
+                    // status assembler can include them in DaemonStatusReport
+                    // without re-probing inotify on every status request.
+                    daemon_watch_registrations = vec![
                         crate::high_level::api::WatchedPathStatus {
                             path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
                             registered: wd_cgroup >= 0,
@@ -438,15 +430,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             registered: wd_pkg_list >= 0,
                         },
                     ];
-                    // Store on the addon (for snapshot) and in the daemon-level
-                    // variable (for status assembly without addon access).
-                    daemon_watch_registrations = watch_results.clone();
-                    for (addon, spec, _) in &mut addons {
-                        if spec.id == 102 {
-                            addon.set_watch_registrations(watch_results.clone());
-                            break;
-                        }
-                    }
 
                     if wd_cgroup >= 0 && wd_pkg_xml >= 0 && wd_pkg_list >= 0 {
                         let _ = effect_executor.apply(crate::core::Effect::Log {
@@ -916,10 +899,11 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         }
 
         if tick_counter.is_multiple_of(64) {
-            // Check log verbosity trigger files
-            let new_verbosity = if std::path::Path::new(paths::LOG_TRACE_PATH).exists() {
+            // Check log verbosity trigger files via the low_level probe so
+            // all path-existence checks go through the same syscall wrapper.
+            let new_verbosity = if crate::low_level::sys::path_exists(paths::LOG_TRACE_PATH) {
                 crate::core::LogLevel::Trace
-            } else if std::path::Path::new(paths::LOG_DEBUG_PATH).exists() {
+            } else if crate::low_level::sys::path_exists(paths::LOG_DEBUG_PATH) {
                 crate::core::LogLevel::Debug
             } else {
                 crate::core::LogLevel::Info

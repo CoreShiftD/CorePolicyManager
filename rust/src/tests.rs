@@ -966,17 +966,17 @@ mod tests_internal {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// set_watch_registrations stores results on the addon; status_snapshot
-    /// does not include them (they belong in DaemonStatusReport via runtime).
+    /// Watch registrations are owned by the runtime (daemon_watch_registrations),
+    /// not by the addon.  The runtime assembler passes them directly into
+    /// DaemonStatusReport.watched_paths; the addon snapshot has no watch fields.
     #[test]
-    fn preload_addon_set_watch_registrations_stored_on_addon() {
+    fn runtime_assembler_watch_registrations_come_from_runtime_not_addon() {
         use crate::high_level::addon::Addon;
         use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
         use crate::high_level::api::WatchedPathStatus;
+        use crate::runtime::assemble_daemon_status;
 
-        let mut addon = PreloadAddon::new(PreloadConfig::default());
-        assert!(addon.watch_registrations.is_empty());
-
+        let addon = PreloadAddon::new(PreloadConfig::default());
         let regs = vec![
             WatchedPathStatus {
                 path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
@@ -987,24 +987,19 @@ mod tests_internal {
                 registered: false,
             },
         ];
-        addon.set_watch_registrations(regs.clone());
 
-        assert_eq!(addon.watch_registrations.len(), 2);
-        assert!(addon.watch_registrations[0].registered);
-        assert!(!addon.watch_registrations[1].registered);
-
-        // The snapshot itself does not carry watch_registrations - those are
-        // assembled by the runtime into DaemonStatusReport.watched_paths.
-        // Verify the runtime assembler picks them up correctly.
-        use crate::high_level::addon::Addon as AddonTrait;
-        use crate::runtime::assemble_daemon_status;
-        let report = assemble_daemon_status(
-            "preload",
-            "/tmp/s.sock",
-            Some(&addon as &dyn AddonTrait),
-            &regs,
-        );
+        // The runtime passes watch registrations directly; the addon snapshot
+        // does not carry them.
+        let report =
+            assemble_daemon_status("preload", "/tmp/s.sock", Some(&addon as &dyn Addon), &regs);
         assert_eq!(report.watched_paths, regs);
+        assert!(report.watched_paths[0].registered);
+        assert!(!report.watched_paths[1].registered);
+
+        // Snapshot has no watch_registrations field - confirmed by the type.
+        let snap = report.preload.expect("snapshot must be present");
+        // PreloadSnapshot fields are all policy state; no watched_paths field.
+        assert_eq!(snap.last_foreground_pid, -1);
     }
 
     #[test]

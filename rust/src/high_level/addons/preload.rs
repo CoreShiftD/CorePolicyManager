@@ -5,7 +5,7 @@
 use crate::core::state_view::StateView;
 use crate::core::{Event, Intent, LogLevel, SystemService};
 use crate::high_level::addon::Addon;
-use crate::high_level::api::{PreloadSnapshot, WatchedPathStatus};
+use crate::high_level::api::PreloadSnapshot;
 use crate::high_level::identity::{Principal, Request};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,10 +50,6 @@ pub struct PreloadAddon {
     total_failures: u32,
     auto_disabled: bool,
 
-    /// Inotify watch registration results, populated by the runtime after
-    /// inotify setup.  The addon stores the result but does not perform the
-    /// registration itself.
-    pub watch_registrations: Vec<WatchedPathStatus>,
     /// Last skip reason emitted (e.g. `"already_in_flight"`, `"cooldown"`).
     pub last_skip_reason: Option<String>,
     /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
@@ -74,7 +70,6 @@ impl PreloadAddon {
             last_foreground_package: None,
             total_failures: 0,
             auto_disabled: false,
-            watch_registrations: Vec::new(),
             last_skip_reason: None,
             last_warmup_result: None,
         }
@@ -340,10 +335,6 @@ impl Addon for PreloadAddon {
             _ => {}
         }
         reqs
-    }
-
-    fn set_watch_registrations(&mut self, registrations: Vec<WatchedPathStatus>) {
-        self.watch_registrations = registrations;
     }
 
     fn preload_snapshot(&self) -> Option<crate::high_level::api::PreloadSnapshot> {
