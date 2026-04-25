@@ -1,6 +1,6 @@
-# CorePolicyManager
+# CoreShift Policy
 
-Android policy and performance management platform powered by **CoreShift**.
+Android policy and performance management platform powered by the **CoreShift Policy** daemon.
 
 > [!CAUTION]
 > **Project Status: EXPERIMENTAL / TESTING PHASE**
@@ -8,21 +8,21 @@ Android policy and performance management platform powered by **CoreShift**.
 
 ## Overview
 
-CorePolicyManager is a comprehensive Android management platform designed to optimize system performance and enforce operational policies. 
+CoreShift Policy is a comprehensive Android management platform designed to optimize system performance and enforce operational policies. 
 
 The project is split into two halves:
 1. **CorePolicyManager (App)**: A high-level Android application frontend providing configuration and user interfaces.
-2. **CoreShift (Daemon)**: A high-performance native backend written in Rust. It serves as the system's execution engine, monitoring environment changes, spawning tasks, and dispatching modular addons (like process preloading) to adjust system behavior in real time.
+2. **CoreShift Policy (Daemon)**: A high-performance native backend written in Rust. It serves as the system's execution engine, monitoring environment changes, spawning tasks, and dispatching modular addons (like process preloading) to adjust system behavior in real time. The executable is named `corepolicy`.
 
 ## Deployment Model (Planned)
 
-The intended deployment model is for the Android app to extract the CoreShift daemon from its `jniLibs` folder and launch it dynamically as an isolated process. Communication between the frontend App and the daemon will occur over a secure UNIX domain socket (`coreshift.sock`). Currently, the daemon must be launched manually via an `adb shell`.
+The intended deployment model is for the Android app to extract the `corepolicy` daemon from its `jniLibs` folder and launch it dynamically as an isolated process. Communication between the frontend App and the daemon will occur over a secure UNIX domain socket (`coreshift.sock`). Currently, the daemon must be launched manually via an `adb shell`.
 
 ## Documentation
 
-- **[Daemon Usage Guide](docs/daemon-usage.md)**: How to run the daemon, debug failures, socket paths, and logging.
+- **[Daemon Usage Guide](docs/daemon-usage.md)**: How to run the `corepolicy` daemon, debug failures, socket paths, and logging.
 - **[Developer Quickstart](docs/quickstart.md)**: Prerequisites, building, and running.
-- **[CoreShift Architecture](rust/README.md)**: Definitive technical reference and deep dive into the Rust engine internals.
+- **[CoreShift Policy Architecture](rust/README.md)**: Definitive technical reference and deep dive into the Rust engine internals.
 
 ## License
 This project is licensed under the Mozilla Public License, v. 2.0. See the [LICENSE](LICENSE) file for the full license text.

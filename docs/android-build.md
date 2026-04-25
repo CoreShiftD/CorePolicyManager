@@ -1,4 +1,4 @@
-# Building Rust Daemon for Android
+# Building CoreShift Policy Daemon for Android
 
 This project supports cross-compilation for Android ARM targets using a dedicated build script.
 
@@ -21,7 +21,7 @@ Use the provided script to build for all supported targets and package them for 
 
 ### Script Behavior
 - **`CARGO_TARGET_DIR`**: The script respects your `CARGO_TARGET_DIR` if set. In CI or if unset, it defaults to a repo-local directory: `rust/target`.
-- **Packaging**: It creates the required `jniLibs` structure in the `app` module and copies the binaries as `libcoreshift.so`.
+- **Packaging**: It creates the required `jniLibs` structure in the `app` module and copies the binaries as `libcorepolicy.so`.
 - **Permissions**: It applies `chmod 755` to the packaged binaries.
 
 ### Supported Targets
@@ -60,8 +60,8 @@ Use the structured logs when validating daemon-side behavior changes:
 ## Output Artifacts
 
 The final packaged payloads are located at:
-- `app/src/main/jniLibs/arm64-v8a/libcoreshift.so`
-- `app/src/main/jniLibs/armeabi-v7a/libcoreshift.so`
+- `app/src/main/jniLibs/arm64-v8a/libcorepolicy.so`
+- `app/src/main/jniLibs/armeabi-v7a/libcorepolicy.so`
 
 **Important**: These are **executable ELF PIE payloads**, not JNI shared libraries. They are named with `.so` to ensure the Android Package Manager extracts them upon installation.
 

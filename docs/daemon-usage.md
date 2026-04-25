@@ -1,15 +1,15 @@
 # Daemon Operations & Usage
 
-This guide covers running, controlling, and troubleshooting the CoreShift daemon directly.
+This guide covers running, controlling, and troubleshooting the CoreShift Policy daemon directly.
 
 ## CLI Commands
 
-The `coreshift` executable provides the following commands:
-- `coreshift` (no args): Run daemon in default mode.
-- `coreshift preload`: Run daemon with the Preload warmup addon enabled.
-- `coreshift record <file>`: Run daemon and record trace to a file.
-- `coreshift replay <file>`: Replay a recorded trace file locally.
-- `coreshift help`: Show usage.
+The `corepolicy` executable provides the following commands:
+- `corepolicy` (no args): Run daemon in default mode.
+- `corepolicy preload`: Run daemon with the Preload warmup addon enabled.
+- `corepolicy record <file>`: Run daemon and record trace to a file.
+- `corepolicy replay <file>`: Replay a recorded trace file locally.
+- `corepolicy help`: Show usage.
 
 ## Socket Configuration
 
@@ -28,7 +28,7 @@ The daemon uses structured logging routed to the filesystem.
 You can control daemon verbosity and features dynamically by touching control files in the runtime directory (`/data/local/tmp/coreshift/control/`):
 - **Enable Debug Logging**: `touch log_debug`
 - **Enable Trace Logging**: `touch log_trace`
-- **Enable Preload Addon**: `touch enable_preload` *(Note: Running `coreshift preload` auto-creates this file).*
+- **Enable Preload Addon**: `touch enable_preload` *(Note: Running `corepolicy preload` auto-creates this file).*
 
 ## Idle Diagnostics
 
@@ -54,7 +54,7 @@ When debugging or monitoring the daemon, use these techniques to assess its heal
 You can check if the daemon is currently running and responsive by using standard system tools:
 ```bash
 # Check if the process is listed in the OS
-ps -A | grep coreshift
+ps -A | grep corepolicy
 ```
 If the daemon is frozen or deadlocked, it will fail to respond to IPC commands or write new lines to its log file.
 

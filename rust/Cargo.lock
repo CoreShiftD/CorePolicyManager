@@ -3,21 +3,6 @@
 version = 4
 
 [[package]]
-name = "CoreShift"
-version = "0.1.0"
-dependencies = [
- "arrayvec",
- "bincode",
- "blake3",
- "bytemuck",
- "lazy_static",
- "libc",
- "serde",
- "serde_json",
- "smallvec",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -79,6 +64,21 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "coreshift-policy"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "bincode",
+ "blake3",
+ "bytemuck",
+ "lazy_static",
+ "libc",
+ "serde",
+ "serde_json",
+ "smallvec",
+]
 
 [[package]]
 name = "cpufeatures"

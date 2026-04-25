@@ -28,8 +28,8 @@ echo "Building for armv7-linux-androideabi..."
 cargo build --release --target armv7-linux-androideabi -j 1
 
 # Define expected binary paths
-BINARY_ARM64="$CARGO_TARGET_DIR/aarch64-linux-android/release/CoreShift"
-BINARY_ARMV7="$CARGO_TARGET_DIR/armv7-linux-androideabi/release/CoreShift"
+BINARY_ARM64="$CARGO_TARGET_DIR/aarch64-linux-android/release/corepolicy"
+BINARY_ARMV7="$CARGO_TARGET_DIR/armv7-linux-androideabi/release/corepolicy"
 
 # Validation
 function check_binary() {
@@ -51,16 +51,16 @@ mkdir -p "$JNI_LIBS_ROOT/armeabi-v7a"
 
 # Copy and rename binaries
 echo "Copying executable payloads to jniLibs..."
-cp "$BINARY_ARM64" "$JNI_LIBS_ROOT/arm64-v8a/libcoreshift.so"
-cp "$BINARY_ARMV7" "$JNI_LIBS_ROOT/armeabi-v7a/libcoreshift.so"
+cp "$BINARY_ARM64" "$JNI_LIBS_ROOT/arm64-v8a/libcorepolicy.so"
+cp "$BINARY_ARMV7" "$JNI_LIBS_ROOT/armeabi-v7a/libcorepolicy.so"
 
 # Ensure executability
-chmod 755 "$JNI_LIBS_ROOT/arm64-v8a/libcoreshift.so"
-chmod 755 "$JNI_LIBS_ROOT/armeabi-v7a/libcoreshift.so"
+chmod 755 "$JNI_LIBS_ROOT/arm64-v8a/libcorepolicy.so"
+chmod 755 "$JNI_LIBS_ROOT/armeabi-v7a/libcorepolicy.so"
 
 # Print verification info
 echo "Verifying packaged binaries:"
-file "$JNI_LIBS_ROOT/arm64-v8a/libcoreshift.so"
-file "$JNI_LIBS_ROOT/armeabi-v7a/libcoreshift.so"
+file "$JNI_LIBS_ROOT/arm64-v8a/libcorepolicy.so"
+file "$JNI_LIBS_ROOT/armeabi-v7a/libcorepolicy.so"
 
 echo "Rust Android build and packaging successfully complete."

@@ -1,17 +1,17 @@
-# Rust Daemon Runtime Notes
+# CoreShift Policy Runtime Notes
 
 This document describes the daemon runtime contract, not the Android UI.
 
 ## Packaging Strategy
-The Rust daemon is packaged as `libcoreshift.so` within the `jniLibs` directory. 
+The CoreShift Policy daemon is packaged as `libcorepolicy.so` within the `jniLibs` directory. 
 **Note**: This is a packaged **executable binary (ELF PIE)**, not a JNI shared library. 
 It is named with a `.so` prefix to ensure the Android Package Manager (PM) extracts it to the application's native library directory upon installation.
 
 ## Runtime Execution
 Because modern Android versions restrict the execution of binaries directly from the APK or certain storage locations, the Android application must follow these steps to run the daemon:
 
-1.  **Locate the Binary**: Find the extracted `libcoreshift.so` in the app's `nativeLibraryDir`.
-2.  **Copy to Internal Storage**: Copy the file from the native library directory to the app's internal files directory (e.g., `/data/data/<package_name>/files/coreshift`).
+1.  **Locate the Binary**: Find the extracted `libcorepolicy.so` in the app's `nativeLibraryDir`.
+2.  **Copy to Internal Storage**: Copy the file from the native library directory to the app's internal files directory (e.g., `/data/data/<package_name>/files/corepolicy`).
 3.  **Set Permissions**: Apply execute permissions to the copied file:
     ```java
     file.setExecutable(true, true); // Equivalent to chmod 700
@@ -26,10 +26,11 @@ Because modern Android versions restrict the execution of binaries directly from
 - **Daemon mode** writes runtime output through structured logging only.
 - Structured daemon output is routed through `LogLevel`, `LogEvent`, and the runtime `LogRouter`.
 - Core logs default to `/data/local/tmp/coreshift/core.log`; addon logs are written under `/data/local/tmp/coreshift/addons/`.
+...
+## Target Architectures
+- **arm64-v8a**: `lib/arm64-v8a/libcorepolicy.so`
+- **armeabi-v7a**: `lib/armeabi-v7a/libcorepolicy.so`
 
-## Runtime Responsibility Split
-
-- `runtime/logging.rs`: formatting, routing, and ownership-aware log sinks.
 - `runtime/control.rs`: signal mapping, exit status translation, and process-control helpers.
 - `runtime/effects.rs`: side-effect execution for `core::Effect` values.
 - `runtime/system_services.rs`: Android and system-facing service requests.
