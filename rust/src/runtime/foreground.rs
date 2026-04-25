@@ -104,7 +104,7 @@ impl ForegroundResolver {
             return None;
         }
 
-        logging::info(&format!(
+        logging::debug(&format!(
             "ForegroundResolver: foreground pid={} package={}",
             pid, pkg
         ));
@@ -128,7 +128,7 @@ impl ForegroundResolver {
             "ForegroundResolver: skip no_app_candidate total={} system_uid={} blacklisted={} malformed={} cmdline_failed={} proc_stat_failed={}",
             s.total, s.system_uid, s.blacklisted, s.malformed, s.cmdline_failed, s.proc_stat_failed
         );
-        logging::dedup_info("no_app_candidate", &msg, Duration::from_secs(60));
+        logging::dedup_debug("no_app_candidate", &msg, Duration::from_secs(60));
 
         Some(ForegroundSnapshot {
             pid: None,

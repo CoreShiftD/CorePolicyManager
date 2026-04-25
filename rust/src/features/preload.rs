@@ -42,7 +42,7 @@ impl PreloadFeature {
         {
             let remaining = PRELOAD_COOLDOWN.saturating_sub(last_time.elapsed());
             let remaining_secs = remaining.as_secs();
-            logging::dedup_info(
+            logging::dedup_debug(
                 &format!("preload_cooldown:{}", pkg),
                 &format!(
                     "Preload: cooldown package={} remaining_secs={}",
@@ -62,7 +62,7 @@ impl PreloadFeature {
 
         if plan.candidates.is_empty() {
             let total_ms = start_total.elapsed().as_millis() as u64;
-            logging::info(&format!(
+            logging::debug(&format!(
                 "preload package={} files_done=0 files_failed=0 bytes=0 discovery_ms={} readahead_ms=0 total_ms={} result=no_candidates",
                 pkg, discovery_ms, total_ms
             ));
@@ -109,7 +109,7 @@ impl PreloadFeature {
             "ok"
         };
 
-        logging::info(&format!(
+        logging::debug(&format!(
             "preload package={} files_done={} files_failed={} bytes={} discovery_ms={} readahead_ms={} total_ms={} result={}",
             pkg, files_done, files_failed, bytes_done, discovery_ms, readahead_ms, total_ms, result
         ));
