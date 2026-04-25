@@ -58,16 +58,9 @@ pub fn read_events(fd: &Fd) -> Result<Vec<InotifyEvent>, SysError> {
 
     let mut buf = vec![0u8; len as usize];
     let n = match fd.read(buf.as_mut_ptr(), buf.len()) {
-        Ok(0) => return Ok(Vec::new()),
-        Ok(n) => n,
-        Err(e)
-            if matches!(
-                e.raw_os_error(),
-                Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK
-            ) =>
-        {
-            return Ok(Vec::new());
-        }
+        Ok(Some(0)) => return Ok(Vec::new()),
+        Ok(Some(n)) => n,
+        Ok(None) => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
 

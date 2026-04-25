@@ -469,29 +469,29 @@ mod tests_internal {
 
         // PID 100 foregrounded at t=0
         let reqs = addon.on_core_event(&state, &Event::ForegroundChanged { pid: 100 });
-        assert!(reqs.is_empty()); // Should be pending
+        assert_eq!(reqs.len(), 1); // Log
 
         // PID 200 foregrounded at t=50 (overwrites 100)
         let mut state50 = ExecutionState::new();
         state50.clock = 50;
         let reqs = addon.on_core_event(&state50, &Event::ForegroundChanged { pid: 200 });
-        assert!(reqs.is_empty());
+        assert_eq!(reqs.len(), 1); // Log
 
         // t=140: No tick yet
         let mut state140 = ExecutionState::new();
         state140.clock = 140;
         let reqs = addon.on_core_event(&state140, &Event::Tick);
-        assert!(reqs.is_empty());
+        assert!(reqs.is_empty()); // Tick cleanup only, or nothing
 
         // t=151: Tick triggers resolve for 200
         let mut state151 = ExecutionState::new();
         state151.clock = 151;
         let reqs = addon.on_core_event(&state151, &Event::Tick);
-        assert_eq!(reqs.len(), 1);
-        if let crate::core::Intent::SystemRequest { kind, .. } = &reqs[0].intent {
+        assert_eq!(reqs.len(), 2); // Log + ResolveIdentity
+        if let crate::core::Intent::SystemRequest { kind, .. } = &reqs[1].intent {
             assert_eq!(*kind, crate::core::SystemService::ResolveIdentity);
         } else {
-            panic!("Expected SystemRequest");
+            panic!("Expected SystemRequest at index 1");
         }
     }
 
@@ -622,7 +622,7 @@ mod tests_internal {
                 payload: "com.fail".to_string().into_bytes(),
             },
         );
-        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs.len(), 3);
     }
 
     #[test]
@@ -1234,11 +1234,14 @@ mod tests_internal {
             dedup_cache_count: 1,
             negative_cache_count: 0,
             in_flight_count: 0,
+            in_flight_packages: Vec::new(),
             total_failures: 2,
             auto_disabled: false,
             events_seen: 100,
+            last_skip_stage: Some("identity_resolution".to_string()),
             last_skip_reason: Some("cooldown".to_string()),
             last_skip_package: None,
+            last_discovered_path_count: 0,
             last_warmup_result: Some(
                 "package=com.example.app bytes=4096 duration_ms=12".to_string(),
             ),
@@ -1289,11 +1292,14 @@ mod tests_internal {
                 dedup_cache_count: 0,
                 negative_cache_count: 0,
                 in_flight_count: 0,
+                in_flight_packages: Vec::new(),
                 total_failures: 0,
                 auto_disabled: false,
                 events_seen: 50,
+                last_skip_stage: None,
                 last_skip_reason: None,
                 last_skip_package: None,
+                last_discovered_path_count: 0,
                 last_warmup_result: None,
                 last_warmup_package: None,
             }),

@@ -46,13 +46,11 @@ impl BufferState {
                 // Limit reached, just discard data.
                 let mut drop_buf = [0u8; 8192];
                 match fd.read(drop_buf.as_mut_ptr(), drop_buf.len()) {
-                    Ok(n) if n > 0 => continue,
-                    Ok(_) => {
+                    Ok(Some(n)) if n > 0 => continue,
+                    Ok(Some(_)) => {
                         return Ok(true); // EOF
                     }
-                    Err(SysError::Syscall { code, .. })
-                        if code == libc::EAGAIN || code == libc::EWOULDBLOCK =>
-                    {
+                    Ok(None) => {
                         return Ok(false);
                     } // Would block
                     Err(e) => {
@@ -69,7 +67,7 @@ impl BufferState {
 
             let ptr = unsafe { dest.as_mut_ptr().add(len) };
             match fd.read(ptr, to_read) {
-                Ok(n) if n > 0 => {
+                Ok(Some(n)) if n > 0 => {
                     unsafe {
                         dest.set_len(len + n);
                     }
@@ -81,12 +79,10 @@ impl BufferState {
                         return Ok(true); // Early exit implies EOF/done
                     }
                 }
-                Ok(_) => {
+                Ok(Some(_)) => {
                     return Ok(true); // EOF
                 }
-                Err(SysError::Syscall { code, .. })
-                    if code == libc::EAGAIN || code == libc::EWOULDBLOCK =>
-                {
+                Ok(None) => {
                     return Ok(false);
                 } // Would block
                 Err(e) => {

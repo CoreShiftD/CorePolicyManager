@@ -65,7 +65,7 @@ impl Fd {
         syscall_ret(r, "fcntl(F_SETFD)")
     }
 
-    pub fn read(&self, buf: *mut u8, count: usize) -> Result<usize, SysError> {
+    pub fn read(&self, buf: *mut u8, count: usize) -> Result<Option<usize>, SysError> {
         loop {
             let n = unsafe { libc::read(self.0, buf as *mut libc::c_void, count) };
             if n < 0 {
@@ -73,13 +73,16 @@ impl Fd {
                 if e == libc::EINTR {
                     continue;
                 }
-                syscall_ret(-1, "read")?;
+                if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
+                    return Ok(None);
+                }
+                return Err(SysError::sys(e, "read"));
             }
-            return Ok(n as usize);
+            return Ok(Some(n as usize));
         }
     }
 
-    pub fn write(&self, buf: *const u8, count: usize) -> Result<usize, SysError> {
+    pub fn write(&self, buf: *const u8, count: usize) -> Result<Option<usize>, SysError> {
         loop {
             let n = unsafe { libc::write(self.0, buf as *const libc::c_void, count) };
             if n < 0 {
@@ -87,9 +90,12 @@ impl Fd {
                 if e == libc::EINTR {
                     continue;
                 }
-                syscall_ret(-1, "write")?;
+                if e == libc::EAGAIN || e == libc::EWOULDBLOCK {
+                    return Ok(None);
+                }
+                return Err(SysError::sys(e, "write"));
             }
-            return Ok(n as usize);
+            return Ok(Some(n as usize));
         }
     }
 }
@@ -175,8 +181,9 @@ impl Reactor {
             let mut buf = [0u8; std::mem::size_of::<libc::signalfd_siginfo>()];
             loop {
                 match fd.read(buf.as_mut_ptr(), buf.len()) {
-                    Ok(n) if n < buf.len() => break,
-                    Ok(_) => continue,
+                    Ok(Some(n)) if n < buf.len() => break,
+                    Ok(Some(_)) => continue,
+                    Ok(None) => break,
                     Err(_) => break,
                 }
             }

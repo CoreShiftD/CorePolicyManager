@@ -109,16 +109,22 @@ pub struct PreloadSnapshot {
     pub negative_cache_count: usize,
     /// Number of warmups currently in flight.
     pub in_flight_count: usize,
+    /// Packages currently in flight.
+    pub in_flight_packages: Vec<String>,
     /// Total warmup failures since daemon start.
     pub total_failures: u32,
     /// Whether the addon has been auto-disabled due to excessive failures.
     pub auto_disabled: bool,
     /// Number of core events seen by the addon.
     pub events_seen: u64,
+    /// Last stage where a preload was skipped.
+    pub last_skip_stage: Option<String>,
     /// Last skip reason (e.g. `"already_in_flight"`, `"cooldown"`).
     pub last_skip_reason: Option<String>,
     /// Last package skipped.
     pub last_skip_package: Option<String>,
+    /// Last discovered path count for a package.
+    pub last_discovered_path_count: usize,
     /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
     pub last_warmup_result: Option<String>,
     /// Last package warmed up.

@@ -53,10 +53,14 @@ pub struct PreloadAddon {
     events_seen: u64,
     last_cleanup_time: u64,
 
+    /// Last stage where a preload was skipped.
+    pub last_skip_stage: Option<String>,
     /// Last skip reason emitted (e.g. `"already_in_flight"`, `"cooldown"`).
     pub last_skip_reason: Option<String>,
     /// Last package skipped.
     pub last_skip_package: Option<String>,
+    /// Last discovered path count for a package.
+    pub last_discovered_path_count: usize,
     /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
     pub last_warmup_result: Option<String>,
     /// Last package warmed up.
@@ -80,8 +84,10 @@ impl PreloadAddon {
             auto_disabled: false,
             events_seen: 0,
             last_cleanup_time: 0,
+            last_skip_stage: None,
             last_skip_reason: None,
             last_skip_package: None,
+            last_discovered_path_count: 0,
             last_warmup_result: None,
             last_warmup_package: None,
         }
@@ -138,6 +144,11 @@ impl Addon for PreloadAddon {
                 if let Some(pid) = self.pending_foreground_pid
                     && now.saturating_sub(self.last_foreground_time) >= self.config.debounce_ms
                 {
+                    reqs.push(self.submit(Intent::AddonLog {
+                        addon_id: 102,
+                        level: LogLevel::Debug,
+                        msg: format!("debounce_expired pid={} -> ResolveIdentity", pid),
+                    }));
                     let payload = serde_json::to_vec(&pid).unwrap_or_default();
                     reqs.push(self.submit(Intent::SystemRequest {
                         request_id: 0,
@@ -162,6 +173,11 @@ impl Addon for PreloadAddon {
                 }
             }
             Event::ForegroundChanged { pid } if *pid != self.last_foreground_pid => {
+                reqs.push(self.submit(Intent::AddonLog {
+                    addon_id: 102,
+                    level: LogLevel::Debug,
+                    msg: format!("foreground_changed pid={} -> debounce_start", pid),
+                }));
                 self.pending_foreground_pid = Some(*pid);
                 self.last_foreground_time = now;
                 self.last_foreground_pid = *pid;
@@ -186,7 +202,14 @@ impl Addon for PreloadAddon {
                                 || package_name == "system"
                                 || package_name.contains("com.android.systemui")
                             {
+                                self.last_skip_stage = Some("identity_resolution".to_string());
                                 self.last_skip_reason = Some("system_package".to_string());
+                                self.last_skip_package = Some(package_name.clone());
+                                reqs.push(self.submit(Intent::AddonLog {
+                                    addon_id: 102,
+                                    level: LogLevel::Debug,
+                                    msg: format!("preload skip package={} stage=identity reason=system_package", package_name),
+                                }));
                                 return reqs;
                             }
 
@@ -195,19 +218,20 @@ impl Addon for PreloadAddon {
                                 addon_id: 102,
                                 level: LogLevel::Debug,
                                 msg: format!(
-                                    "preload foreground pid={} package={}",
+                                    "preload_identity_resolved pid={} package={}",
                                     self.last_foreground_pid, package_name
                                 ),
                             }));
 
                             if self.in_flight.contains(&package_name) {
+                                self.last_skip_stage = Some("identity_resolution".to_string());
                                 self.last_skip_reason = Some("already_in_flight".to_string());
                                 self.last_skip_package = Some(package_name.clone());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Debug,
                                     msg: format!(
-                                        "preload skip package={} reason=already_in_flight",
+                                        "preload skip package={} stage=identity reason=already_in_flight",
                                         package_name
                                     ),
                                 }));
@@ -215,14 +239,15 @@ impl Addon for PreloadAddon {
                             }
 
                             if self.in_flight.len() >= self.config.global_max_in_flight {
+                                self.last_skip_stage = Some("identity_resolution".to_string());
                                 self.last_skip_reason = Some("global_budget_full".to_string());
                                 self.last_skip_package = Some(package_name.clone());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Warn,
                                     msg: format!(
-                                        "preload skip package={} reason=global_budget_full",
-                                        package_name
+                                        "preload skip package={} stage=identity reason=global_budget_full count={}",
+                                        package_name, self.in_flight.len()
                                     ),
                                 }));
                                 return reqs;
@@ -231,12 +256,13 @@ impl Addon for PreloadAddon {
                             if let Some(t) = self.negative_cache.get(&package_name) {
                                 let elapsed = now.saturating_sub(*t);
                                 if elapsed < self.config.per_package_failure_backoff_ms {
+                                    self.last_skip_stage = Some("identity_resolution".to_string());
                                     self.last_skip_reason = Some("failure_backoff".to_string());
                                     self.last_skip_package = Some(package_name.clone());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
                                         level: LogLevel::Debug,
-                                        msg: format!("preload skip package={} reason=failure_backoff remaining_ms={}", package_name, self.config.per_package_failure_backoff_ms - elapsed),
+                                        msg: format!("preload skip package={} stage=identity reason=failure_backoff remaining_ms={}", package_name, self.config.per_package_failure_backoff_ms - elapsed),
                                     }));
                                     return reqs;
                                 }
@@ -245,18 +271,24 @@ impl Addon for PreloadAddon {
                             if let Some(last_warmup) = self.dedup_cache.get(&package_name) {
                                 let elapsed = now.saturating_sub(*last_warmup);
                                 if elapsed < self.config.per_package_warmup_cooldown_ms {
+                                    self.last_skip_stage = Some("identity_resolution".to_string());
                                     self.last_skip_reason = Some("cooldown".to_string());
                                     self.last_skip_package = Some(package_name.clone());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
                                         level: LogLevel::Debug,
-                                        msg: format!("preload skip package={} reason=cooldown remaining_ms={}", package_name, self.config.per_package_warmup_cooldown_ms - elapsed),
+                                        msg: format!("preload skip package={} stage=identity reason=cooldown remaining_ms={}", package_name, self.config.per_package_warmup_cooldown_ms - elapsed),
                                     }));
                                     return reqs;
                                 }
                             }
 
                             if let Some(base_dir) = self.package_map.get(&package_name) {
+                                reqs.push(self.submit(Intent::AddonLog {
+                                    addon_id: 102,
+                                    level: LogLevel::Debug,
+                                    msg: format!("package_map_hit package={} -> DiscoverPaths", package_name),
+                                }));
                                 let payload = serde_json::to_vec(&(
                                     package_name.clone(),
                                     base_dir.to_string_lossy().into_owned(),
@@ -268,6 +300,11 @@ impl Addon for PreloadAddon {
                                     payload,
                                 }));
                             } else {
+                                reqs.push(self.submit(Intent::AddonLog {
+                                    addon_id: 102,
+                                    level: LogLevel::Debug,
+                                    msg: format!("package_map_miss package={} -> ResolveDirectory", package_name),
+                                }));
                                 let payload = package_name.clone().into_bytes();
                                 reqs.push(self.submit(Intent::SystemRequest {
                                     request_id: 0,
@@ -298,18 +335,22 @@ impl Addon for PreloadAddon {
                             serde_json::from_slice::<(String, Vec<String>)>(payload)
                         {
                             if paths.is_empty() {
+                                self.last_skip_stage = Some("path_discovery".to_string());
+                                self.last_skip_reason = Some("no_paths_discovered".to_string());
+                                self.last_skip_package = Some(package_name.clone());
                                 self.negative_cache.insert(package_name.clone(), now);
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Warn,
                                     msg: format!(
-                                        "preload fail package={} reason=no_paths_discovered",
+                                        "preload skip package={} stage=discovery reason=no_paths",
                                         package_name
                                     ),
                                 }));
                                 return reqs;
                             }
 
+                            self.last_discovered_path_count = paths.len();
                             paths.truncate(self.config.max_paths_per_package);
                             self.in_flight.insert(package_name.clone());
 
@@ -325,9 +366,10 @@ impl Addon for PreloadAddon {
                                 addon_id: 102,
                                 level: LogLevel::Info,
                                 msg: format!(
-                                    "preload warmup started: package={} paths={}",
+                                    "preload warmup task queued: package={} paths={} in_flight={}",
                                     package_name,
-                                    paths.len()
+                                    paths.len(),
+                                    self.in_flight.len()
                                 ),
                             }));
                         }
@@ -335,11 +377,13 @@ impl Addon for PreloadAddon {
                 }
             }
             Event::SystemFailure { kind, err, .. } if *kind == SystemService::ResolveIdentity => {
+                self.last_skip_stage = Some("identity_resolution".to_string());
+                self.last_skip_reason = Some(format!("system_failure: {}", err));
                 reqs.push(self.submit(Intent::AddonLog {
                     addon_id: 102,
                     level: LogLevel::Warn,
                     msg: format!(
-                        "package resolution result pid={} err={}",
+                        "identity resolution failed pid={} err={}",
                         self.last_foreground_pid, err
                     ),
                 }));
@@ -364,7 +408,7 @@ impl Addon for PreloadAddon {
                     reqs.push(self.submit(Intent::AddonLog {
                         addon_id: 102,
                         level: LogLevel::Info,
-                        msg: format!("preload done {}", result_summary),
+                        msg: format!("preload_success {}", result_summary),
                     }));
                 }
             }
@@ -382,7 +426,7 @@ impl Addon for PreloadAddon {
                     addon_id: 102,
                     level: LogLevel::Warn,
                     msg: format!(
-                        "preload failed: reason={} package={} err={} total_fails={}",
+                        "preload_task_failed stage={} package={} err={} total_fails={}",
                         key, package, err, self.total_failures
                     ),
                 }));
@@ -413,11 +457,14 @@ impl PreloadAddon {
             dedup_cache_count: self.dedup_cache.len(),
             negative_cache_count: self.negative_cache.len(),
             in_flight_count: self.in_flight.len(),
+            in_flight_packages: self.in_flight.iter().cloned().collect(),
             total_failures: self.total_failures,
             auto_disabled: self.auto_disabled,
             events_seen: self.events_seen,
+            last_skip_stage: self.last_skip_stage.clone(),
             last_skip_reason: self.last_skip_reason.clone(),
             last_skip_package: self.last_skip_package.clone(),
+            last_discovered_path_count: self.last_discovered_path_count,
             last_warmup_result: self.last_warmup_result.clone(),
             last_warmup_package: self.last_warmup_package.clone(),
         }

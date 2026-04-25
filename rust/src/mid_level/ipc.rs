@@ -207,25 +207,23 @@ impl IpcModule {
             let mut buf = [0u8; 4096];
             loop {
                 match conn.fd.read(buf.as_mut_ptr(), buf.len()) {
-                    Ok(0) => {
+                    Ok(Some(0)) => {
                         should_disconnect = true;
                         break;
                     }
-                    Ok(n) => {
+                    Ok(Some(n)) => {
                         conn.read_buf.extend_from_slice(&buf[..n]);
                         if conn.read_buf.len() > MAX_READ_BUF {
                             should_disconnect = true;
                             break;
                         }
                     }
-                    Err(e) => {
-                        let raw_err = e.raw_os_error();
-                        if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
-                            break;
-                        } else {
-                            should_disconnect = true;
-                            break;
-                        }
+                    Ok(None) => {
+                        break;
+                    }
+                    Err(_) => {
+                        should_disconnect = true;
+                        break;
                     }
                 }
             }
@@ -312,21 +310,19 @@ impl IpcModule {
         {
             while !conn.write_buf.is_empty() {
                 match conn.fd.write(conn.write_buf.as_ptr(), conn.write_buf.len()) {
-                    Ok(0) => {
+                    Ok(Some(0)) => {
                         should_disconnect = true;
                         break;
                     }
-                    Ok(n) => {
+                    Ok(Some(n)) => {
                         conn.write_buf.drain(..n);
                     }
-                    Err(e) => {
-                        let raw_err = e.raw_os_error();
-                        if raw_err == Some(libc::EAGAIN) || raw_err == Some(libc::EWOULDBLOCK) {
-                            break;
-                        } else {
-                            should_disconnect = true;
-                            break;
-                        }
+                    Ok(None) => {
+                        break;
+                    }
+                    Err(_) => {
+                        should_disconnect = true;
+                        break;
                     }
                 }
             }

@@ -25,18 +25,19 @@ impl WriterState {
                 let chunk = remaining.min(WRITE_CHUNK);
 
                 match fd.write(buf[self.off..].as_ptr(), chunk) {
-                    Ok(n) if n > 0 => {
+                    Ok(Some(n)) if n > 0 => {
                         self.off += n;
                     }
-                    Ok(_) => {
+                    Ok(Some(_)) => {
                         self.buf = None;
                         return Ok(true); // Done
                     }
+                    Ok(None) => {
+                        return Ok(false); // Would block
+                    }
                     Err(e) => {
                         let SysError::Syscall { code, .. } = &e;
-                        if *code == libc::EAGAIN || *code == libc::EWOULDBLOCK {
-                            return Ok(false); // Would block
-                        } else if *code == libc::EPIPE {
+                        if *code == libc::EPIPE {
                             self.buf = None;
                             return Ok(true); // Broken pipe (treat as end of write stream)
                         } else {
