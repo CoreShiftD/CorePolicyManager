@@ -3,8 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::low_level::inotify::{InotifyEvent, decode_events};
-use crate::low_level::spawn::Process;
-use crate::low_level::sys::{ExecContext, parse_proc_status};
+use crate::low_level::reactor::{Fd, Reactor};
+use crate::low_level::spawn::{Process, SpawnOptions, spawn_start};
+use crate::low_level::sys::{
+    CancelPolicy, ExecContext, ProcessGroup, parse_proc_status, path_exists, path_lstat_exists,
+};
 
 #[test]
 fn test_decode_inotify_events() {
@@ -86,4 +89,93 @@ fn test_process_echild() {
     let res = p.wait_step();
     // Should be an error (ECHILD), not Ok(Some(Exited(0))).
     assert!(res.is_err());
+}
+
+#[test]
+fn test_spawn_start_wait_false_validation() {
+    let ctx = ExecContext::new(
+        vec!["/bin/sh".to_string(), "-c".to_string(), "true".to_string()],
+        None,
+        None,
+    )
+    .unwrap();
+    let mut opts = SpawnOptions {
+        ctx,
+        stdin: None,
+        capture_stdout: false,
+        capture_stderr: false,
+        wait: false,
+        pgroup: ProcessGroup::default(),
+        max_output: 1024,
+        timeout_ms: None,
+        kill_grace_ms: 1000,
+        cancel: CancelPolicy::Kill,
+        backend: crate::low_level::spawn::SpawnBackend::Auto,
+        early_exit: None,
+    };
+
+    // Valid: wait=false, no I/O capture
+    assert!(spawn_start(0, opts.clone()).is_ok());
+
+    // Invalid: wait=false, capture_stdout=true
+    opts.capture_stdout = true;
+    assert!(spawn_start(0, opts.clone()).is_err());
+
+    // Invalid: wait=false, stdin=Some(...)
+    opts.capture_stdout = false;
+    opts.stdin = Some(vec![1, 2, 3].into_boxed_slice());
+    assert!(spawn_start(0, opts.clone()).is_err());
+}
+
+#[test]
+fn test_reactor_wait_zero_events() {
+    let mut reactor = Reactor::new().unwrap();
+    let mut events = Vec::new();
+    let res = reactor.wait(&mut events, 0, 0);
+    assert!(res.is_ok());
+    assert_eq!(res.unwrap(), 0);
+}
+
+#[test]
+fn test_writer_state_epipe() {
+    use crate::low_level::io::writer::WriterState;
+
+    let mut fds = [0; 2];
+    unsafe { libc::pipe(fds.as_mut_ptr()) };
+    let r = Fd::new(fds[0], "pipe").unwrap();
+    let w = Fd::new(fds[1], "pipe").unwrap();
+
+    let mut writer = WriterState::new(Some(vec![0u8; 1024 * 1024].into_boxed_slice()));
+
+    // Close read end to trigger EPIPE on next write
+    drop(r);
+
+    // Some kernels might not trigger EPIPE on the first write if the pipe buffer has space,
+    // but with enough data it will fail.
+    let mut last_res = Ok(false);
+    for _ in 0..100 {
+        last_res = writer.write_to_fd(&w);
+        if last_res.is_err() || (last_res.is_ok() && writer.buf.is_none()) {
+            break;
+        }
+    }
+
+    // EPIPE should be handled as "done" (Ok(true))
+    assert!(last_res.is_ok());
+    assert!(last_res.unwrap());
+    assert!(writer.buf.is_none());
+}
+
+#[test]
+fn test_path_existence() {
+    let temp_file = std::env::temp_dir().join("coreshift_test_path");
+    let path_str = temp_file.to_str().unwrap();
+
+    std::fs::write(&temp_file, "test").unwrap();
+    assert!(path_exists(path_str));
+    assert!(path_lstat_exists(path_str));
+
+    std::fs::remove_file(&temp_file).unwrap();
+    assert!(!path_exists(path_str));
+    assert!(!path_lstat_exists(path_str));
 }

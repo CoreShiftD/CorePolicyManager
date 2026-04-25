@@ -169,10 +169,12 @@ impl ProcessGroup {
 
 use arrayvec::ArrayVec;
 
+#[derive(Clone)]
 pub enum ExecArgv {
     Dynamic(Vec<CString>),
 }
 
+#[derive(Clone)]
 pub struct ExecContext {
     pub argv: ExecArgv,
     pub envp: Option<Vec<CString>>,

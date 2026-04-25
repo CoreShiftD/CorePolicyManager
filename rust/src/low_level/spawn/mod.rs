@@ -371,6 +371,7 @@ impl Process {
     }
 }
 
+#[derive(Clone)]
 pub struct SpawnOptions {
     pub ctx: ExecContext,
     pub stdin: Option<Box<[u8]>>,
