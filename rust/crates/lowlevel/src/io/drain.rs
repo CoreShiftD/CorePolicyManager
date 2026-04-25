@@ -8,10 +8,10 @@
 //! simultaneous reading from process output pipes and writing to process
 //! input pipes.
 
-use crate::low_level::io::buffer::BufferState;
-use crate::low_level::io::writer::WriterState;
-use crate::low_level::reactor::{Fd, Token};
-use crate::low_level::spawn::SysError;
+use crate::io::buffer::BufferState;
+use crate::io::writer::WriterState;
+use crate::reactor::{Fd, Token};
+use crate::spawn::SysError;
 
 /// Associates a file descriptor with an optional reactor token.
 pub struct FdSlot {
@@ -29,8 +29,8 @@ pub struct FdSlot {
 ///
 /// # Example
 /// ```no_run
-/// # use coreshift_policy::low_level::io::DrainState;
-/// # use coreshift_policy::low_level::reactor::Reactor;
+/// # use coreshift_lowlevel::io::DrainState;
+/// # use coreshift_lowlevel::reactor::Reactor;
 /// # fn example(mut drain: DrainState<fn(&[u8]) -> bool>, mut reactor: Reactor) -> Result<(), Box<dyn std::error::Error>> {
 /// while !drain.is_done() {
 ///     let mut events = Vec::new();

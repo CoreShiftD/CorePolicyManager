@@ -11,8 +11,8 @@
 //! Higher-level modules should use these primitives to monitor configuration
 //! files, log directories, or process markers.
 
-use crate::low_level::reactor::Fd;
-use crate::low_level::spawn::SysError;
+use crate::reactor::Fd;
+use crate::spawn::SysError;
 
 /// A decoded inotify event header.
 ///

@@ -7,8 +7,8 @@
 //! This module provides the [`WriterState`] structure which handles
 //! non-blocking writes of stdin buffers to monitored processes.
 
-use crate::low_level::reactor::Fd;
-use crate::low_level::spawn::SysError;
+use crate::reactor::Fd;
+use crate::spawn::SysError;
 
 const WRITE_CHUNK: usize = 65536;
 

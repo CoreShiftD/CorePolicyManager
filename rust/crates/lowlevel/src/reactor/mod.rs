@@ -7,7 +7,7 @@
 //! This module provides a lightweight wrapper around Linux `epoll` for
 //! multiplexing I/O events. It is optimized for edge-triggered monitoring.
 
-use crate::low_level::spawn::{SysError, syscall_ret};
+use crate::spawn::{SysError, syscall_ret};
 use std::io::Error as IoError;
 
 #[inline(always)]
@@ -180,7 +180,7 @@ pub struct Event {
 ///
 /// # Example
 /// ```no_run
-/// # use coreshift_policy::low_level::reactor::{Reactor, Fd, Event};
+/// # use coreshift_lowlevel::reactor::{Reactor, Fd, Event};
 /// # fn example(fd: Fd) -> Result<(), Box<dyn std::error::Error>> {
 /// let mut reactor = Reactor::new()?;
 /// let token = reactor.add(&fd, true, false)?;

@@ -7,8 +7,8 @@
 //! This module provides the [`BufferState`] structure which accumulates
 //! stdout and stderr data from monitored processes.
 
-use crate::low_level::reactor::Fd;
-use crate::low_level::spawn::SysError;
+use crate::reactor::Fd;
+use crate::spawn::SysError;
 
 const READ_CHUNK: usize = 65536;
 

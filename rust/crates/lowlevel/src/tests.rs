@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
-use crate::low_level::inotify::{InotifyEvent, decode_events};
-use crate::low_level::reactor::{Fd, Reactor};
-use crate::low_level::spawn::{Process, SpawnOptions, spawn_start};
-use crate::low_level::sys::{
+use crate::inotify::{InotifyEvent, decode_events};
+use crate::reactor::{Fd, Reactor};
+use crate::spawn::{Process, SpawnOptions, spawn_start};
+use crate::sys::{
     CancelPolicy, ExecContext, ProcessGroup, parse_proc_status, path_exists, path_lstat_exists,
 };
 
@@ -110,7 +110,7 @@ fn test_spawn_start_wait_false_validation() {
         timeout_ms: None,
         kill_grace_ms: 1000,
         cancel: CancelPolicy::Kill,
-        backend: crate::low_level::spawn::SpawnBackend::Auto,
+        backend: crate::spawn::SpawnBackend::Auto,
         early_exit: None,
     };
 
@@ -138,7 +138,7 @@ fn test_reactor_wait_zero_events() {
 
 #[test]
 fn test_writer_state_epipe() {
-    use crate::low_level::io::writer::WriterState;
+    use crate::io::writer::WriterState;
 
     let mut fds = [0; 2];
     unsafe { libc::pipe(fds.as_mut_ptr()) };

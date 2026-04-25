@@ -13,8 +13,8 @@ use std::fmt;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
 
-use crate::low_level::reactor::Fd;
-use crate::low_level::sys::{CancelPolicy, ExecContext, ProcessGroup, SignalRuntime};
+use crate::reactor::Fd;
+use crate::sys::{CancelPolicy, ExecContext, ProcessGroup, SignalRuntime};
 use libc::{
     O_CLOEXEC, O_NONBLOCK, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WTERMSIG, c_char, pid_t, pipe2,
     waitpid,
@@ -495,7 +495,7 @@ fn resolve_backend(opts: &SpawnOptions) -> Backend {
     }
 }
 
-use crate::low_level::io::DrainState;
+use crate::io::DrainState;
 
 /// Specialized drain state for process spawning.
 pub type SpawnDrain = DrainState<fn(&[u8]) -> bool>;
@@ -508,7 +508,7 @@ pub struct RunningProcess {
     pub drain: SpawnDrain,
 }
 
-use crate::low_level::reactor::Reactor;
+use crate::reactor::Reactor;
 
 /// Start spawning a process and return a monitor handle.
 ///
@@ -597,7 +597,7 @@ fn spawn_posix_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, Spawn
     )?;
 
     let exe_ptr = match &opts.ctx.argv {
-        crate::low_level::sys::ExecArgv::Dynamic(v) => v[0].as_ptr(),
+        crate::sys::ExecArgv::Dynamic(v) => v[0].as_ptr(),
     };
 
     let argv = opts.ctx.get_argv_ptrs();
@@ -832,7 +832,7 @@ fn spawn_posix_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, Spawn
     drop(pipes.stdout_w.take());
     drop(pipes.stderr_w.take());
 
-    let drain = crate::low_level::io::DrainState::new(
+    let drain = crate::io::DrainState::new(
         job_id,
         pipes.stdin_w.take().filter(|_| opts.stdin.is_some()),
         opts.stdin,
@@ -853,7 +853,7 @@ fn spawn_fork_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, SpawnD
     )?;
 
     let exe_ptr = match &opts.ctx.argv {
-        crate::low_level::sys::ExecArgv::Dynamic(v) => v[0].as_ptr(),
+        crate::sys::ExecArgv::Dynamic(v) => v[0].as_ptr(),
     };
 
     let argv = opts.ctx.get_argv_ptrs();
@@ -958,7 +958,7 @@ fn spawn_fork_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, SpawnD
     drop(pipes.stdout_w.take());
     drop(pipes.stderr_w.take());
 
-    let drain = crate::low_level::io::DrainState::new(
+    let drain = crate::io::DrainState::new(
         job_id,
         pipes.stdin_w.take().filter(|_| opts.stdin.is_some()),
         opts.stdin,
@@ -979,7 +979,7 @@ enum KillState {
 
 fn wait_loop(
     pid: pid_t,
-    mut drain: crate::low_level::io::DrainState<fn(&[u8]) -> bool>,
+    mut drain: crate::io::DrainState<fn(&[u8]) -> bool>,
     mut reactor: Reactor,
     timeout_ms: Option<u32>,
     kill_grace_ms: u32,

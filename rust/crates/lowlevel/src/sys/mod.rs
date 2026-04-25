@@ -16,7 +16,7 @@
 //! - pointer helpers intentionally cap the pointer array size to keep stack
 //!   usage bounded while preserving null termination
 
-use crate::low_level::spawn::{SysError, syscall_ret};
+use crate::spawn::{SysError, syscall_ret};
 use libc::sigset_t;
 
 /// Probe whether a filesystem path is accessible and exists.
@@ -215,19 +215,16 @@ impl ExecContext {
         argv: Vec<String>,
         env: Option<Vec<String>>,
         cwd: Option<String>,
-    ) -> Result<Self, crate::low_level::spawn::SysError> {
+    ) -> Result<Self, crate::spawn::SysError> {
         if argv.is_empty() {
-            return Err(crate::low_level::spawn::SysError::sys(
-                libc::EINVAL,
-                "exec argv empty",
-            ));
+            return Err(crate::spawn::SysError::sys(libc::EINVAL, "exec argv empty"));
         }
 
         let c_argv: Vec<CString> = argv
             .into_iter()
             .map(|s| {
                 CString::new(s).map_err(|_| {
-                    crate::low_level::spawn::SysError::sys(libc::EINVAL, "exec argv contains nul")
+                    crate::spawn::SysError::sys(libc::EINVAL, "exec argv contains nul")
                 })
             })
             .collect::<Result<_, _>>()?;
@@ -237,10 +234,7 @@ impl ExecContext {
                 vars.into_iter()
                     .map(|s| {
                         CString::new(s).map_err(|_| {
-                            crate::low_level::spawn::SysError::sys(
-                                libc::EINVAL,
-                                "exec env contains nul",
-                            )
+                            crate::spawn::SysError::sys(libc::EINVAL, "exec env contains nul")
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
@@ -248,12 +242,13 @@ impl ExecContext {
             None => None,
         };
 
-        let c_cwd = match cwd {
-            Some(c) => Some(CString::new(c).map_err(|_| {
-                crate::low_level::spawn::SysError::sys(libc::EINVAL, "exec cwd contains nul")
-            })?),
-            None => None,
-        };
+        let c_cwd =
+            match cwd {
+                Some(c) => Some(CString::new(c).map_err(|_| {
+                    crate::spawn::SysError::sys(libc::EINVAL, "exec cwd contains nul")
+                })?),
+                None => None,
+            };
 
         Ok(Self {
             argv: ExecArgv::Dynamic(c_argv),

@@ -19,12 +19,13 @@ This project uses a two-binary model to separate production daemon logic from di
 - **`coredebug`**: Specialized for on-device diagnostics and manual probes that cannot be easily represented in a standard cargo test environment (e.g., specific Android kernel behaviors). It is **not** a replacement for `cargo test`.
 
 ## low_level API stability
-The `low_level` module is the stable, frozen substrate of CoreShift Policy. 
+The `coreshift-lowlevel` crate is the stable, frozen substrate of CoreShift Policy. 
 
-- **Stability Guarantee**: Higher layers (daemon runtime, feature modules) build on this API. Breaking changes to `low_level` are avoided in favor of additive improvements.
+- **Stability Guarantee**: Higher layers (daemon runtime, feature modules) build on this API. Breaking changes to the low-level substrate are avoided in favor of additive improvements.
 - **Scope**: Owns syscalls, FFI, resource ownership (FDs/PIDs), and non-blocking I/O multiplexing.
-- **Policy Neutral**: No business logic or daemon-level policy resides in `low_level`.
+- **Policy Neutral**: No business logic or daemon-level policy resides in the low-level crate.
 - **Validation**: Public APIs should be covered by cargo tests before stabilization.
+
 
 ## Binary Identity (Production)
 - **Product Name**: CoreShift Policy
@@ -57,7 +58,7 @@ coredebug probe spawn       # Probe process spawning primitives (Planned)
 ## Runtime Model (Planned)
 CoreShift Policy follows a lightweight, single-process execution model:
 - **One Process**: Minimal resource footprint.
-- **Main Thread Execution**: Leverages the `low_level` reactor for asynchronous event multiplexing.
+- **Main Thread Execution**: Leverages the `coreshift-lowlevel` reactor for asynchronous event multiplexing.
 - **Tick Scheduler**: A deterministic scheduler drives periodic module tasks.
 - **Autonomous Modules**: Feature modules (like preload) observe the system and act independently.
 

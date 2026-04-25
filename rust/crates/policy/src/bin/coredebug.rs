@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
-use coreshift_policy::low_level::sys::{path_exists, read_proc_cmdline, read_proc_status};
+use coreshift_lowlevel::sys::{path_exists, read_proc_cmdline, read_proc_status};
 use std::process::ExitCode;
 
 fn print_help() {
