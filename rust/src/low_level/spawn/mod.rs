@@ -300,6 +300,7 @@ fn decode_status(status: i32) -> ExitStatus {
     }
 }
 
+#[derive(Clone)]
 pub struct Process {
     pid: pid_t,
 }
@@ -643,6 +644,27 @@ fn spawn_posix_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, Spawn
         }
     }
 
+    // Explicitly tracked FDs that are already handled above.
+    let mut handled_fds = arrayvec::ArrayVec::<i32, 8>::new();
+    if let Some(fd) = &pipes.stdin_r {
+        let _ = handled_fds.try_push(fd.raw());
+    }
+    if let Some(fd) = &pipes.stdin_w {
+        let _ = handled_fds.try_push(fd.raw());
+    }
+    if let Some(fd) = &pipes.stdout_r {
+        let _ = handled_fds.try_push(fd.raw());
+    }
+    if let Some(fd) = &pipes.stdout_w {
+        let _ = handled_fds.try_push(fd.raw());
+    }
+    if let Some(fd) = &pipes.stderr_r {
+        let _ = handled_fds.try_push(fd.raw());
+    }
+    if let Some(fd) = &pipes.stderr_w {
+        let _ = handled_fds.try_push(fd.raw());
+    }
+
     // Prevent FD leaks in posix_spawn by strictly closing open descriptors
     // instead of blindly closing all possible FDs.
     let dir_fd = unsafe {
@@ -664,6 +686,7 @@ fn spawn_posix_internal(job_id: u64, opts: SpawnOptions) -> Result<(pid_t, Spawn
                     && let Ok(fd) = s.parse::<i32>()
                     && fd > 2
                     && fd != dir_fd
+                    && !handled_fds.contains(&fd)
                 {
                     // Note: actions run in the child process, so we close the fd there
                     unsafe {

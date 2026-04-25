@@ -49,7 +49,7 @@ pub fn read_events(fd: &Fd) -> Result<Vec<InotifyEvent>, SysError> {
 
     loop {
         match fd.read(buf.as_mut_ptr(), buf.len()) {
-            Ok(Some(0)) => break, // EOF
+            Ok(Some(0)) => break,
             Ok(Some(n)) => {
                 all_events.extend(decode_events(&buf[..n]));
             }
