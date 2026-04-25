@@ -24,7 +24,7 @@ The `low_level` module is the stable, frozen substrate of CoreShift Policy.
 - **Stability Guarantee**: Higher layers (daemon runtime, feature modules) build on this API. Breaking changes to `low_level` are avoided in favor of additive improvements.
 - **Scope**: Owns syscalls, FFI, resource ownership (FDs/PIDs), and non-blocking I/O multiplexing.
 - **Policy Neutral**: No business logic or daemon-level policy resides in `low_level`.
-- **Validation**: Every public API is verified by `cargo test` and documented with usage examples.
+- **Validation**: Public APIs should be covered by cargo tests before stabilization.
 
 ## Binary Identity (Production)
 - **Product Name**: CoreShift Policy

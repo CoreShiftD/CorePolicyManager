@@ -45,8 +45,11 @@ impl Fd {
     }
 
     /// Access the underlying raw file descriptor.
+    ///
+    /// NOTE: This is an escape hatch for low-level interactions. Prefer using
+    /// the safe methods on `Fd` or implementing `AsRawFd`.
     #[inline(always)]
-    pub fn raw(&self) -> RawFd {
+    pub(crate) fn raw(&self) -> RawFd {
         self.0
     }
 
@@ -191,6 +194,7 @@ pub struct Event {
 ///         }
 ///     }
 /// }
+/// # Ok(())
 /// # }
 /// ```
 pub struct Reactor {
@@ -311,8 +315,11 @@ impl Reactor {
     }
 
     /// Remove a raw descriptor from the reactor.
+    ///
+    /// NOTE: This is an escape hatch for low-level interactions. Prefer using
+    /// [`del`](Self::del).
     #[inline(always)]
-    pub fn del_raw(&self, raw: RawFd) {
+    pub(crate) fn del_raw(&self, raw: RawFd) {
         unsafe {
             let _ = libc::epoll_ctl(self.epfd, libc::EPOLL_CTL_DEL, raw, std::ptr::null_mut());
         }
@@ -384,7 +391,10 @@ impl Reactor {
     }
 
     /// Return the raw epoll file descriptor.
-    pub fn fd(&self) -> RawFd {
+    ///
+    /// NOTE: This is an escape hatch for low-level interactions.
+    #[allow(dead_code)]
+    pub(crate) fn fd(&self) -> RawFd {
         self.epfd
     }
 }
