@@ -110,7 +110,20 @@ impl Drop for Fd {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Token(pub u64);
+pub struct Token(u64);
+
+#[allow(dead_code)]
+impl Token {
+    #[inline(always)]
+    pub(crate) fn new(val: u64) -> Self {
+        Self(val)
+    }
+
+    #[inline(always)]
+    pub(crate) fn val(&self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Event {
@@ -211,7 +224,7 @@ impl Reactor {
     }
 
     #[inline(always)]
-    pub fn add_with_token(
+    pub(crate) fn add_with_token(
         &mut self,
         raw_fd: RawFd,
         token: Token,

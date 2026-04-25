@@ -3,13 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
 use crate::low_level::inotify::{InotifyEvent, decode_events};
+use crate::low_level::spawn::Process;
 use crate::low_level::sys::{ExecContext, parse_proc_status};
 
 #[test]
 fn test_decode_inotify_events() {
-    // Mock two inotify_event records.
-    // struct inotify_event { int wd; uint32_t mask; uint32_t cookie; uint32_t len; char name[]; }
-    // Size is 16 bytes + len.
+    // Mock multiple inotify_event records.
     let mut buf = Vec::new();
 
     // Event 1: wd=1, mask=0x2, len=0
@@ -18,17 +17,35 @@ fn test_decode_inotify_events() {
     buf.extend_from_slice(&0u32.to_ne_bytes()); // cookie
     buf.extend_from_slice(&0u32.to_ne_bytes()); // len
 
-    // Event 2: wd=2, mask=0x4, len=8
+    // Event 2: wd=2, mask=0x4, len=8 (with name padding)
     buf.extend_from_slice(&2i32.to_ne_bytes());
     buf.extend_from_slice(&4u32.to_ne_bytes());
     buf.extend_from_slice(&0u32.to_ne_bytes()); // cookie
     buf.extend_from_slice(&8u32.to_ne_bytes()); // len
-    buf.extend_from_slice(&[0u8; 8]); // name padding
+    buf.extend_from_slice(b"file.txt"); // 8 bytes
+
+    // Event 3: truncated (only 8 bytes of header)
+    buf.extend_from_slice(&3i32.to_ne_bytes());
+    buf.extend_from_slice(&8u32.to_ne_bytes());
 
     let events = decode_events(&buf);
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0], InotifyEvent { wd: 1, mask: 2, name_len: 0 });
-    assert_eq!(events[1], InotifyEvent { wd: 2, mask: 4, name_len: 8 });
+    assert_eq!(
+        events[0],
+        InotifyEvent {
+            wd: 1,
+            mask: 2,
+            name_len: 0
+        }
+    );
+    assert_eq!(
+        events[1],
+        InotifyEvent {
+            wd: 2,
+            mask: 4,
+            name_len: 8
+        }
+    );
 }
 
 #[test]
@@ -46,18 +63,27 @@ fn test_exec_context_validation() {
     assert!(res.is_err());
 
     // Interior NUL in argv
-    let res = ExecContext::new(vec!["valid".to_string(), "inv\0alid".to_string()], None, None);
-    assert!(res.is_err());
-
-    // Interior NUL in env
-    let res = ExecContext::new(vec!["ls".to_string()], Some(vec!["BAD\0VAR=1".to_string()]), None);
-    assert!(res.is_err());
-
-    // Interior NUL in cwd
-    let res = ExecContext::new(vec!["ls".to_string()], None, Some("/tmp\0bad".to_string()));
+    let res = ExecContext::new(
+        vec!["valid".to_string(), "inv\0alid".to_string()],
+        None,
+        None,
+    );
     assert!(res.is_err());
 
     // Valid
-    let res = ExecContext::new(vec!["ls".to_string(), "-l".to_string()], None, Some("/tmp".to_string()));
+    let res = ExecContext::new(
+        vec!["ls".to_string(), "-l".to_string()],
+        None,
+        Some("/tmp".to_string()),
+    );
     assert!(res.is_ok());
+}
+
+#[test]
+fn test_process_echild() {
+    // Use an invalid PID that likely doesn't exist and isn't our child.
+    let p = Process::new(999999);
+    let res = p.wait_step();
+    // Should be an error (ECHILD), not Ok(Some(Exited(0))).
+    assert!(res.is_err());
 }

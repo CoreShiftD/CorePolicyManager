@@ -325,10 +325,7 @@ impl Process {
                 if e == libc::EINTR {
                     continue;
                 }
-                if e == libc::ECHILD {
-                    return Ok(Some(ExitStatus::Exited(0)));
-                }
-                syscall_ret(-1, "waitpid_step")?;
+                return Err(SysError::sys(e, "waitpid_step"));
             }
             return Ok(Some(decode_status(status)));
         }
@@ -343,10 +340,7 @@ impl Process {
                 if e == libc::EINTR {
                     continue;
                 }
-                if e == libc::ECHILD {
-                    return Ok(ExitStatus::Exited(0));
-                }
-                syscall_ret(-1, "waitpid_blocking")?;
+                return Err(SysError::sys(e, "waitpid_blocking"));
             }
             return Ok(decode_status(status));
         }
@@ -473,6 +467,13 @@ pub struct RunningProcess {
 use crate::low_level::reactor::Reactor;
 
 pub fn spawn_start(job_id: u64, opts: SpawnOptions) -> Result<RunningProcess, SysError> {
+    if !opts.wait && (opts.stdin.is_some() || opts.capture_stdout || opts.capture_stderr) {
+        return Err(SysError::sys(
+            libc::EINVAL,
+            "background I/O capture not supported (wait must be true)",
+        ));
+    }
+
     let backend = resolve_backend(&opts);
 
     let (pid, drain) = match backend {
@@ -503,15 +504,15 @@ pub fn spawn(opts: SpawnOptions) -> Result<Output, SysError> {
     // Wait, wait_loop expects `drain` to still have slots!
     // But `take_all_slots` empties them. We should iterate mutably, or reassign tokens if we keep them in `drain`.
     if let Some(mut slot) = drain.stdin_slot.take() {
-        slot.token = Some(reactor.add(&slot.fd, true, true)?);
+        slot.token = Some(reactor.add(&slot.fd, false, true)?);
         drain.stdin_slot = Some(slot);
     }
     if let Some(mut slot) = drain.stdout_slot.take() {
-        slot.token = Some(reactor.add(&slot.fd, true, true)?);
+        slot.token = Some(reactor.add(&slot.fd, true, false)?);
         drain.stdout_slot = Some(slot);
     }
     if let Some(mut slot) = drain.stderr_slot.take() {
-        slot.token = Some(reactor.add(&slot.fd, true, true)?);
+        slot.token = Some(reactor.add(&slot.fd, true, false)?);
         drain.stderr_slot = Some(slot);
     }
 

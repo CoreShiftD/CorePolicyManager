@@ -72,11 +72,18 @@ pub fn decode_events(buf: &[u8]) -> Vec<InotifyEvent> {
     let base = std::mem::size_of::<libc::inotify_event>();
 
     while offset + base <= buf.len() {
-        let event = unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
+        // SAFETY: We have at least 'base' bytes. We use read_unaligned to
+        // handle potential alignment issues in the raw buffer.
+        let event: libc::inotify_event = unsafe {
+            std::ptr::read_unaligned(buf.as_ptr().add(offset) as *const libc::inotify_event)
+        };
+
         let size = base + event.len as usize;
         if offset + size > buf.len() {
+            // Truncated event at the end of the buffer; ignore it.
             break;
         }
+
         events.push(InotifyEvent {
             wd: event.wd,
             mask: event.mask,
