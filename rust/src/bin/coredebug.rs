@@ -99,7 +99,7 @@ fn main() -> ExitCode {
 
             match cat.as_deref() {
                 None => {
-                    println!("Running all planned substrate diagnostic probes...");
+                    println!("Running available substrate diagnostic probes...");
                     let p1 = probe_paths();
                     if p1 {
                         ExitCode::SUCCESS

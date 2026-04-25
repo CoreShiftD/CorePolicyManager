@@ -2,15 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
-use std::process::Command;
-
 #[test]
 #[cfg(feature = "debug-cli")]
 fn test_coredebug_help() {
     let bin = env!("CARGO_BIN_EXE_coredebug");
 
     for arg in &["help", "--help", "-h"] {
-        let output = Command::new(bin)
+        let output = std::process::Command::new(bin)
             .arg(arg)
             .output()
             .expect("failed to execute coredebug");
@@ -26,22 +24,39 @@ fn test_coredebug_help() {
 #[cfg(feature = "debug-cli")]
 fn test_coredebug_probe_placeholder() {
     let bin = env!("CARGO_BIN_EXE_coredebug");
-    let output = Command::new(bin)
+    let output = std::process::Command::new(bin)
         .arg("probe")
         .output()
         .expect("failed to execute coredebug");
 
     // This might succeed or fail depending on environment, but it should
-    // contain the "Running all planned" message.
+    // contain the "available" message.
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Running all planned substrate diagnostic probes"));
+    assert!(stdout.contains("Running available substrate diagnostic probes"));
+}
+
+#[test]
+#[cfg(feature = "debug-cli")]
+fn test_coredebug_probe_paths_exit_status() {
+    let bin = env!("CARGO_BIN_EXE_coredebug");
+    let output = std::process::Command::new(bin)
+        .args(["probe", "paths"])
+        .output()
+        .expect("failed to execute coredebug");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.contains("RESULT: PASS") {
+        assert!(output.status.success());
+    } else if stdout.contains("RESULT: FAIL") {
+        assert!(!output.status.success());
+    }
 }
 
 #[test]
 #[cfg(feature = "debug-cli")]
 fn test_coredebug_probe_paths() {
     let bin = env!("CARGO_BIN_EXE_coredebug");
-    let output = Command::new(bin)
+    let output = std::process::Command::new(bin)
         .args(["probe", "paths"])
         .output()
         .expect("failed to execute coredebug");
@@ -57,7 +72,7 @@ fn test_coredebug_probe_paths() {
 #[cfg(feature = "debug-cli")]
 fn test_coredebug_unknown_arg() {
     let bin = env!("CARGO_BIN_EXE_coredebug");
-    let output = Command::new(bin)
+    let output = std::process::Command::new(bin)
         .arg("--unknown-flag")
         .output()
         .expect("failed to execute coredebug");

@@ -40,10 +40,10 @@ The diagnostics binary is used for low-level substrate probes on Android devices
 
 ```bash
 # Build with: cargo build --features debug-cli --bin coredebug
-coredebug probe procfs      # Probe procfs helper behavior
-coredebug probe inotify     # Probe inotify substrate
-coredebug probe paths       # Probe path existence/visibility
-coredebug probe spawn       # Probe process spawning primitives
+coredebug probe paths       # Probe path existence/visibility (Implemented)
+coredebug probe procfs      # Probe procfs helper behavior (Planned)
+coredebug probe inotify     # Probe inotify substrate (Planned)
+coredebug probe spawn       # Probe process spawning primitives (Planned)
 ```
 
 ## Runtime Model (Planned)
