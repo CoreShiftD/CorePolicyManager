@@ -10,10 +10,16 @@ path = "src/lib.rs"
 name = "corepolicy"
 path = "src/main.rs"
 
+[[bin]]
+name = "coredebug"
+path = "src/bin/coredebug.rs"
+required-features = ["debug-cli"]
+
 [features]
 default = ["std"]
 std = ["blake3/std"]
 pure = ["blake3/pure"]
+debug-cli = ["std"]
 
 [dependencies]
 blake3 = { version = "1.8", default-features = false }

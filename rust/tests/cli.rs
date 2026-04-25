@@ -84,3 +84,32 @@ fn test_cli_unknown_arg() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown argument '--unknown-feature'"));
 }
+
+#[test]
+#[cfg(feature = "debug-cli")]
+fn test_coredebug_help() {
+    let bin = env!("CARGO_BIN_EXE_coredebug");
+    let output = std::process::Command::new(bin)
+        .arg("help")
+        .output()
+        .expect("failed to execute coredebug");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("CoreShift Policy Diagnostics"));
+}
+
+#[test]
+#[cfg(feature = "debug-cli")]
+fn test_coredebug_test_low_level_placeholder() {
+    let bin = env!("CARGO_BIN_EXE_coredebug");
+    let output = std::process::Command::new(bin)
+        .args(&["test", "low_level"])
+        .output()
+        .expect("failed to execute coredebug");
+
+    assert!(!output.status.success()); // Currently planned but not implemented returns 1
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Running low_level diagnostic probes"));
+    assert!(stdout.contains("Not implemented yet"));
+}

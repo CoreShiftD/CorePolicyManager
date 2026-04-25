@@ -2,14 +2,18 @@
 
 CoreShift Policy is an Android-oriented autonomous daemon for lightweight system policy decisions. It provides a high-performance native execution engine designed to optimize system behavior with minimal overhead.
 
-The executable binary is named `corepolicy`.
+This project uses a two-binary model to separate production daemon logic from diagnostic tools.
 
-## Binary Identity
+## Binary Model
+- **`corepolicy`**: The production daemon and primary CLI. This is the only binary required for normal operation.
+- **`coredebug`**: An optional diagnostics binary for on-device substrate probes and manual verification. It is feature-gated (`debug-cli`) and not included in standard production builds.
+
+## Binary Identity (Production)
 - **Product Name**: CoreShift Policy
 - **Executable**: `corepolicy`
 - **Daemon Identity**: CoreShift Policy Daemon (displayed in logs and help text)
 
-## Planned CLI Model
+## Planned CLI Model (`corepolicy`)
 The `corepolicy` CLI is designed for simplicity and directness. 
 
 **NOTE: Only help/placeholder behavior is currently implemented. All other commands are PLANNED.**
@@ -19,6 +23,15 @@ corepolicy           # Placeholder: prints implementation status
 corepolicy -p        # (Planned) Preload mode: starts the autonomous loop with preload enabled
 corepolicy status    # (Planned) Reads local status from /data/local/tmp/coreshift/status.json
 corepolicy help      # Prints help and usage information (Implemented)
+```
+
+## Diagnostics CLI (`coredebug`)
+The diagnostics binary is used for low-level system checks on Android devices.
+
+```bash
+# Build with: cargo build --features debug-cli
+coredebug test              # Run all diagnostic probes
+coredebug test low_level    # Probe low-level substrate specifically
 ```
 
 ## Runtime Model (Planned)
