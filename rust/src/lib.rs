@@ -400,12 +400,12 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             let wd_pkg_xml = crate::low_level::inotify::add_watch(
                 &fd_obj,
                 crate::runtime::PACKAGES_XML_PATH,
-                crate::low_level::inotify::MODIFY_MASK,
+                crate::low_level::inotify::PACKAGE_FILE_MASK,
             );
             let wd_pkg_list = crate::low_level::inotify::add_watch(
                 &fd_obj,
                 crate::runtime::PACKAGES_LIST_PATH,
-                crate::low_level::inotify::MODIFY_MASK,
+                crate::low_level::inotify::PACKAGE_FILE_MASK,
             );
 
             daemon_watch_registrations = vec![
@@ -633,6 +633,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             paths::SOCKET_PATH,
                             preload_ref,
                             &daemon_watch_registrations,
+                            preload_inotify.as_ref().map(|watcher| watcher.status()),
                         );
                         let json = serde_json::to_string(&report).unwrap_or_else(|e| {
                             format!("{{\"error\":\"serialization failed: {}\"}}", e)
@@ -755,6 +756,27 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                                         )),
                                     });
                                     sys_events.push(crate::core::Event::PackagesChanged);
+                                }
+                                crate::runtime::PreloadInotifyEvent::Exceptional {
+                                    source,
+                                    description,
+                                    mask,
+                                } => {
+                                    let level = if description == "queue_overflow" {
+                                        crate::core::LogLevel::Warn
+                                    } else {
+                                        crate::core::LogLevel::Info
+                                    };
+                                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                                        owner: 102,
+                                        level,
+                                        event: crate::core::LogEvent::Generic(format!(
+                                            "inotify special event source={} event={} mask=0x{:x}",
+                                            source.as_str(),
+                                            description,
+                                            mask
+                                        )),
+                                    });
                                 }
                             }
                         }

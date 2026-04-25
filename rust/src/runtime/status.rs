@@ -16,7 +16,7 @@
 //! internals.  The CLI only pretty-prints the typed report.
 
 use crate::high_level::addon::Addon;
-use crate::high_level::api::{DaemonStatusReport, WatchedPathStatus};
+use crate::high_level::api::{DaemonStatusReport, InotifyStatus, WatchedPathStatus};
 use crate::low_level::sys::path_exists;
 
 /// Assemble a [`DaemonStatusReport`] from live daemon state.
@@ -36,6 +36,7 @@ pub fn assemble_daemon_status(
     socket_path: &str,
     preload_addon: Option<&dyn Addon>,
     watch_registrations: &[WatchedPathStatus],
+    inotify: Option<InotifyStatus>,
 ) -> DaemonStatusReport {
     let enable_preload_file_exists = path_exists(crate::paths::ENABLE_PRELOAD_PATH);
     let foreground_path_exists = path_exists("/dev/cpuset/top-app/cgroup.procs");
@@ -48,6 +49,7 @@ pub fn assemble_daemon_status(
         enable_preload_path: crate::paths::ENABLE_PRELOAD_PATH.to_string(),
         foreground_path_exists,
         watched_paths: watch_registrations.to_vec(),
+        inotify,
         preload: preload_addon.and_then(|a| a.preload_snapshot()),
     }
 }

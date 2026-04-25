@@ -54,8 +54,35 @@ pub struct DaemonStatusReport {
     pub foreground_path_exists: bool,
     /// Watched inotify paths and their registration status.
     pub watched_paths: Vec<WatchedPathStatus>,
+    /// Live inotify runtime state, if inotify setup reached the runtime path.
+    pub inotify: Option<InotifyStatus>,
     /// Preload addon policy state snapshot, if the addon is loaded.
     pub preload: Option<PreloadSnapshot>,
+}
+
+/// Runtime-owned inotify diagnostics returned by `preload-status`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InotifyStatus {
+    /// Whether the inotify file descriptor is active in the runtime.
+    pub fd_active: bool,
+    /// Current cgroup watch descriptor, if registered.
+    pub wd_cgroup: Option<i32>,
+    /// Current packages.xml watch descriptor, if registered.
+    pub wd_pkg_xml: Option<i32>,
+    /// Current packages.list watch descriptor, if registered.
+    pub wd_pkg_list: Option<i32>,
+    /// Number of raw inotify records decoded since startup.
+    pub events_seen: u64,
+    /// Last raw kernel mask observed.
+    pub last_raw_mask: Option<u32>,
+    /// Last semantic source mapped from a watch descriptor.
+    pub last_source: Option<String>,
+    /// Last foreground PID emitted to core, if any.
+    pub last_foreground_pid: Option<i32>,
+    /// Whether package resolution state must be refreshed lazily.
+    pub package_cache_dirty: bool,
+    /// Last exceptional event such as queue overflow, ignored watch, or unmount.
+    pub last_exception: Option<String>,
 }
 
 /// Pure policy-state snapshot from the PreloadAddon.
@@ -72,6 +99,8 @@ pub struct PreloadSnapshot {
     pub last_foreground_package: Option<String>,
     /// Number of packages in the resolved package map.
     pub package_cache_count: usize,
+    /// Whether the addon must refresh package mappings before resolution.
+    pub package_cache_dirty: bool,
     /// Number of entries in the warmup dedup cache.
     pub dedup_cache_count: usize,
     /// Number of entries in the failure negative cache.

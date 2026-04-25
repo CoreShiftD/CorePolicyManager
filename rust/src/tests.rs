@@ -644,6 +644,54 @@ mod tests_internal {
     }
 
     #[test]
+    fn inotify_decode_handles_multiple_packed_events_and_empty_name() {
+        use crate::low_level::inotify::{InotifyEvent, decode_events};
+
+        fn push_event(buf: &mut Vec<u8>, wd: i32, mask: u32, name: &[u8]) {
+            let event = libc::inotify_event {
+                wd,
+                mask,
+                cookie: 0,
+                len: name.len() as u32,
+            };
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    (&event as *const libc::inotify_event).cast::<u8>(),
+                    std::mem::size_of::<libc::inotify_event>(),
+                )
+            };
+            buf.extend_from_slice(bytes);
+            buf.extend_from_slice(name);
+        }
+
+        let mut buf = Vec::new();
+        push_event(&mut buf, 10, crate::low_level::inotify::MODIFY_MASK, &[]);
+        push_event(
+            &mut buf,
+            11,
+            crate::low_level::inotify::PACKAGE_FILE_MASK,
+            b"child\0\0\0",
+        );
+
+        let events = decode_events(&buf);
+        assert_eq!(
+            events,
+            vec![
+                InotifyEvent {
+                    wd: 10,
+                    mask: crate::low_level::inotify::MODIFY_MASK,
+                    name_len: 0,
+                },
+                InotifyEvent {
+                    wd: 11,
+                    mask: crate::low_level::inotify::PACKAGE_FILE_MASK,
+                    name_len: 8,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn inotify_pid_change_detection_emits_only_on_change() {
         use crate::low_level::inotify::InotifyEvent;
         use crate::low_level::reactor::Fd;
@@ -659,6 +707,7 @@ mod tests_internal {
             &[InotifyEvent {
                 wd: 10,
                 mask: crate::low_level::inotify::MODIFY_MASK,
+                name_len: 0,
             }],
             || Ok("100\n".to_string()),
         );
@@ -674,6 +723,7 @@ mod tests_internal {
             &[InotifyEvent {
                 wd: 10,
                 mask: crate::low_level::inotify::MODIFY_MASK,
+                name_len: 0,
             }],
             || Ok("100\n".to_string()),
         );
@@ -683,6 +733,7 @@ mod tests_internal {
             &[InotifyEvent {
                 wd: 10,
                 mask: crate::low_level::inotify::MODIFY_MASK,
+                name_len: 0,
             }],
             || Ok("200\n".to_string()),
         );
@@ -712,6 +763,7 @@ mod tests_internal {
             &[InotifyEvent {
                 wd: 11,
                 mask: crate::low_level::inotify::MODIFY_MASK,
+                name_len: 0,
             }],
             || {
                 cgroup_reads += 1;
@@ -726,7 +778,46 @@ mod tests_internal {
             }]
         );
         assert!(watcher.packages_dirty());
+        let status = watcher.status();
+        assert_eq!(status.events_seen, 1);
+        assert_eq!(status.last_source.as_deref(), Some("packages_xml"));
         assert_eq!(cgroup_reads, 0);
+    }
+
+    #[test]
+    fn inotify_queue_overflow_marks_state_uncertain() {
+        use crate::low_level::inotify::InotifyEvent;
+        use crate::low_level::reactor::Fd;
+        use crate::runtime::{InotifySource, PreloadInotify, PreloadInotifyEvent};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (fd, _peer) = UnixStream::pair().unwrap();
+        let mut watcher =
+            PreloadInotify::new(Fd::new(fd.into_raw_fd(), "test").unwrap(), 10, 11, 12);
+
+        let events = watcher.handle_decoded_events(
+            &[InotifyEvent {
+                wd: -1,
+                mask: crate::low_level::inotify::QUEUE_OVERFLOW_MASK,
+                name_len: 0,
+            }],
+            || Ok("100\n".to_string()),
+        );
+
+        assert_eq!(
+            events,
+            vec![PreloadInotifyEvent::Exceptional {
+                source: InotifySource::Unknown,
+                description: "queue_overflow",
+                mask: crate::low_level::inotify::QUEUE_OVERFLOW_MASK,
+            }]
+        );
+        let status = watcher.status();
+        assert_eq!(status.events_seen, 1);
+        assert_eq!(status.last_source.as_deref(), Some("unknown"));
+        assert_eq!(status.last_exception.as_deref(), Some("queue_overflow"));
+        assert!(status.package_cache_dirty);
     }
 
     #[test]
@@ -783,6 +874,7 @@ mod tests_internal {
         assert_eq!(snap.last_foreground_pid, -1);
         assert!(snap.last_foreground_package.is_none());
         assert_eq!(snap.package_cache_count, 0);
+        assert!(!snap.package_cache_dirty);
         assert_eq!(snap.dedup_cache_count, 0);
         assert_eq!(snap.negative_cache_count, 0);
         assert_eq!(snap.in_flight_count, 0);
@@ -805,6 +897,7 @@ mod tests_internal {
             last_foreground_pid: 1234,
             last_foreground_package: Some("com.example.app".to_string()),
             package_cache_count: 3,
+            package_cache_dirty: true,
             dedup_cache_count: 1,
             negative_cache_count: 0,
             in_flight_count: 0,
@@ -849,11 +942,13 @@ mod tests_internal {
                     registered: false,
                 },
             ],
+            inotify: None,
             preload: Some(PreloadSnapshot {
                 enabled: true,
                 last_foreground_pid: 42,
                 last_foreground_package: Some("com.test".to_string()),
                 package_cache_count: 1,
+                package_cache_dirty: false,
                 dedup_cache_count: 0,
                 negative_cache_count: 0,
                 in_flight_count: 0,
@@ -897,6 +992,7 @@ mod tests_internal {
             "/data/local/tmp/coreshift/coreshift.sock",
             Some(&addon as &dyn Addon),
             &watches,
+            None,
         );
 
         assert_eq!(report.mode, "preload");
@@ -923,11 +1019,12 @@ mod tests_internal {
     fn runtime_assembler_without_preload_addon() {
         use crate::runtime::assemble_daemon_status;
 
-        let report = assemble_daemon_status("normal", "/tmp/test.sock", None, &[]);
+        let report = assemble_daemon_status("normal", "/tmp/test.sock", None, &[], None);
 
         assert_eq!(report.mode, "normal");
         assert!(!report.preload_addon_loaded);
         assert!(report.preload.is_none());
+        assert!(report.inotify.is_none());
         assert!(report.watched_paths.is_empty());
     }
 
@@ -1095,8 +1192,13 @@ mod tests_internal {
 
         // The runtime passes watch registrations directly; the addon snapshot
         // does not carry them.
-        let report =
-            assemble_daemon_status("preload", "/tmp/s.sock", Some(&addon as &dyn Addon), &regs);
+        let report = assemble_daemon_status(
+            "preload",
+            "/tmp/s.sock",
+            Some(&addon as &dyn Addon),
+            &regs,
+            None,
+        );
         assert_eq!(report.watched_paths, regs);
         assert!(report.watched_paths[0].registered);
         assert!(!report.watched_paths[1].registered);

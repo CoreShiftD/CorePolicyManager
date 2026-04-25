@@ -368,6 +368,7 @@ impl PreloadAddon {
             last_foreground_pid: self.last_foreground_pid,
             last_foreground_package: self.last_foreground_package.clone(),
             package_cache_count: self.package_map.len(),
+            package_cache_dirty: self.package_cache_dirty,
             dedup_cache_count: self.dedup_cache.len(),
             negative_cache_count: self.negative_cache.len(),
             in_flight_count: self.in_flight.len(),
