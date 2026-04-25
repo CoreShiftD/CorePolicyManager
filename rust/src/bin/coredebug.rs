@@ -9,8 +9,9 @@ fn print_help() {
     println!("Usage: coredebug [command] [args]");
     println!();
     println!("Commands:");
-    println!("  test           Run all substrate diagnostic probes (Planned)");
-    println!("  test <cat>     Run diagnostics for a specific category (e.g. low_level)");
+    println!(
+        "  probe <cat>    Run diagnostic substrate probes (e.g. procfs, inotify, paths, spawn)"
+    );
     println!("  help           Show this help");
 }
 
@@ -26,27 +27,36 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
-        Some("test") => {
+        Some("probe") => {
             let cat = args.next();
-            let subcat = args.next();
 
-            match (cat.as_deref(), subcat.as_deref()) {
-                (None, _) => {
+            match cat.as_deref() {
+                None => {
                     println!("Running all planned substrate diagnostic probes...");
                     println!("Status: Not implemented yet.");
                     ExitCode::from(1)
                 }
-                (Some("low_level"), None) => {
-                    println!("Running low_level diagnostic probes...");
+                Some("procfs") => {
+                    println!("Probing procfs helper behavior...");
                     println!("Status: Not implemented yet.");
                     ExitCode::from(1)
                 }
-                (Some("low_level"), Some("spawn")) => {
-                    println!("Running low_level::spawn diagnostic probes...");
+                Some("inotify") => {
+                    println!("Probing inotify substrate...");
                     println!("Status: Not implemented yet.");
                     ExitCode::from(1)
                 }
-                (Some(c), _) => {
+                Some("paths") => {
+                    println!("Probing path existence/visibility...");
+                    println!("Status: Not implemented yet.");
+                    ExitCode::from(1)
+                }
+                Some("spawn") => {
+                    println!("Probing process spawning primitives...");
+                    println!("Status: Not implemented yet.");
+                    ExitCode::from(1)
+                }
+                Some(c) => {
                     eprintln!("error: unknown diagnostic category '{}'", c);
                     ExitCode::from(2)
                 }

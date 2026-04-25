@@ -6,7 +6,17 @@ This project uses a two-binary model to separate production daemon logic from di
 
 ## Binary Model
 - **`corepolicy`**: The production daemon and primary CLI. This is the only binary required for normal operation.
-- **`coredebug`**: An optional diagnostics binary for on-device substrate probes and manual verification. It is feature-gated (`debug-cli`) and not included in standard production builds.
+- **`coredebug`**: An optional diagnostics binary for on-device substrate probes and manual verification.
+
+## Build Commands
+| Target | Command |
+| :--- | :--- |
+| **Production** | `cargo build --bin corepolicy` |
+| **Debug Tool** | `cargo build --features debug-cli --bin coredebug` |
+
+## Validation Model
+- **`cargo test`**: The primary source of truth for development validation. All logic should be verified here using unit and integration tests.
+- **`coredebug`**: Specialized for on-device diagnostics and manual probes that cannot be easily represented in a standard cargo test environment (e.g., specific Android kernel behaviors). It is **not** a replacement for `cargo test`.
 
 ## Binary Identity (Production)
 - **Product Name**: CoreShift Policy
@@ -26,12 +36,14 @@ corepolicy help      # Prints help and usage information (Implemented)
 ```
 
 ## Diagnostics CLI (`coredebug`)
-The diagnostics binary is used for low-level system checks on Android devices.
+The diagnostics binary is used for low-level substrate probes on Android devices.
 
 ```bash
-# Build with: cargo build --features debug-cli
-coredebug test              # Run all diagnostic probes
-coredebug test low_level    # Probe low-level substrate specifically
+# Build with: cargo build --features debug-cli --bin coredebug
+coredebug probe procfs      # Probe procfs helper behavior
+coredebug probe inotify     # Probe inotify substrate
+coredebug probe paths       # Probe path existence/visibility
+coredebug probe spawn       # Probe process spawning primitives
 ```
 
 ## Runtime Model (Planned)

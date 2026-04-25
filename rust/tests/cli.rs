@@ -101,15 +101,15 @@ fn test_coredebug_help() {
 
 #[test]
 #[cfg(feature = "debug-cli")]
-fn test_coredebug_test_low_level_placeholder() {
+fn test_coredebug_probe_low_level_placeholder() {
     let bin = env!("CARGO_BIN_EXE_coredebug");
     let output = std::process::Command::new(bin)
-        .args(&["test", "low_level"])
+        .args(["probe", "procfs"])
         .output()
         .expect("failed to execute coredebug");
 
     assert!(!output.status.success()); // Currently planned but not implemented returns 1
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Running low_level diagnostic probes"));
+    assert!(stdout.contains("Probing procfs helper behavior"));
     assert!(stdout.contains("Not implemented yet"));
 }
