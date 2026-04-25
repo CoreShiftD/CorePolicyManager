@@ -91,6 +91,42 @@ fn compute_reactor_timeout_ms(policy_timeout_ms: i32, elapsed_ms: u64) -> i32 {
     }
 }
 
+/// Create the `enable_preload` control file at `path` if it does not already
+/// exist.  Returns `true` if the file was created, `false` if it was already
+/// present, and logs a warning (without returning an error) if creation fails.
+///
+/// Extracted so the preload auto-enable behavior can be tested independently
+/// of the full daemon startup sequence.
+pub fn ensure_preload_control_file(path: &str) -> bool {
+    if crate::low_level::sys::path_exists(path) {
+        return false;
+    }
+    match std::fs::write(path, b"") {
+        Ok(()) => {
+            crate::runtime::log_runtime_event(
+                crate::core::CORE_OWNER,
+                crate::core::LogLevel::Info,
+                crate::core::LogEvent::Generic(format!(
+                    "preload: created enable_preload control file path={}",
+                    path
+                )),
+            );
+            true
+        }
+        Err(e) => {
+            crate::runtime::log_runtime_event(
+                crate::core::CORE_OWNER,
+                crate::core::LogLevel::Warn,
+                crate::core::LogEvent::Generic(format!(
+                    "preload: failed to create enable_preload path={} err={}",
+                    path, e
+                )),
+            );
+            false
+        }
+    }
+}
+
 pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::SysError> {
     const MAX_ACTIONS_PER_TICK: usize = 10_000;
 
@@ -211,31 +247,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         // toggle.  We create it here (before the addon's first tick) so that
         // `PreloadAddon::on_core_event` sees it on the very first `Tick`.
         // `ensure_dirs()` already ran successfully above; no need to repeat it.
-        if !crate::low_level::sys::path_exists(paths::ENABLE_PRELOAD_PATH) {
-            match std::fs::write(paths::ENABLE_PRELOAD_PATH, b"") {
-                Ok(()) => {
-                    crate::runtime::log_runtime_event(
-                        crate::core::CORE_OWNER,
-                        crate::core::LogLevel::Info,
-                        crate::core::LogEvent::Generic(format!(
-                            "preload: created enable_preload control file path={}",
-                            paths::ENABLE_PRELOAD_PATH
-                        )),
-                    );
-                }
-                Err(e) => {
-                    crate::runtime::log_runtime_event(
-                        crate::core::CORE_OWNER,
-                        crate::core::LogLevel::Warn,
-                        crate::core::LogEvent::Generic(format!(
-                            "preload: failed to create enable_preload path={} err={}",
-                            paths::ENABLE_PRELOAD_PATH,
-                            e
-                        )),
-                    );
-                }
-            }
-        }
+        ensure_preload_control_file(paths::ENABLE_PRELOAD_PATH);
 
         addons.push((
             Box::new(PreloadAddon::new(
@@ -318,7 +330,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
     let mut ipc = IpcModule::new(ipc_fd, ipc_token);
 
-    let mut inotify_fd_opt = None;
+    let mut preload_inotify = None;
     // Watch registration results kept here so the IPC status handler can
     // include them in the assembled DaemonStatusReport without re-probing.
     let mut daemon_watch_registrations: Vec<crate::high_level::api::WatchedPathStatus> = Vec::new();
@@ -364,12 +376,6 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
         }
 
         if let Ok(fd_obj) = effect_executor.reactor.setup_inotify() {
-            let inotify_fd = fd_obj.raw();
-
-            let cgroup_path = std::ffi::CString::new("/dev/cpuset/top-app/cgroup.procs");
-            let pkg_xml_path = std::ffi::CString::new("/data/system/packages.xml");
-            let pkg_list_path = std::ffi::CString::new("/data/system/packages.list");
-
             let _ = effect_executor.apply(crate::core::Effect::Log {
                 owner: 102,
                 level: crate::core::LogLevel::Info,
@@ -386,83 +392,67 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 ),
             });
 
-            match (cgroup_path, pkg_xml_path, pkg_list_path) {
-                (Ok(cgroup_path), Ok(pkg_xml_path), Ok(pkg_list_path)) => {
-                    let wd_cgroup = unsafe {
-                        libc::inotify_add_watch(
-                            inotify_fd,
-                            cgroup_path.as_ptr(),
-                            libc::IN_CLOSE_WRITE | libc::IN_MODIFY,
-                        )
-                    };
+            let wd_cgroup = crate::low_level::inotify::add_watch(
+                &fd_obj,
+                crate::runtime::CGROUP_PROCS_PATH,
+                crate::low_level::inotify::MODIFY_MASK,
+            );
+            let wd_pkg_xml = crate::low_level::inotify::add_watch(
+                &fd_obj,
+                crate::runtime::PACKAGES_XML_PATH,
+                crate::low_level::inotify::MODIFY_MASK,
+            );
+            let wd_pkg_list = crate::low_level::inotify::add_watch(
+                &fd_obj,
+                crate::runtime::PACKAGES_LIST_PATH,
+                crate::low_level::inotify::MODIFY_MASK,
+            );
 
-                    let wd_pkg_xml = unsafe {
-                        libc::inotify_add_watch(
-                            inotify_fd,
-                            pkg_xml_path.as_ptr(),
-                            libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
-                        )
-                    };
+            daemon_watch_registrations = vec![
+                crate::high_level::api::WatchedPathStatus {
+                    path: crate::runtime::CGROUP_PROCS_PATH.to_string(),
+                    registered: wd_cgroup.is_ok(),
+                },
+                crate::high_level::api::WatchedPathStatus {
+                    path: crate::runtime::PACKAGES_XML_PATH.to_string(),
+                    registered: wd_pkg_xml.is_ok(),
+                },
+                crate::high_level::api::WatchedPathStatus {
+                    path: crate::runtime::PACKAGES_LIST_PATH.to_string(),
+                    registered: wd_pkg_list.is_ok(),
+                },
+            ];
 
-                    let wd_pkg_list = unsafe {
-                        libc::inotify_add_watch(
-                            inotify_fd,
-                            pkg_list_path.as_ptr(),
-                            libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
-                        )
-                    };
-
-                    // Build watch registration results using the api type.
-                    // Stored in daemon_watch_registrations so the runtime
-                    // status assembler can include them in DaemonStatusReport
-                    // without re-probing inotify on every status request.
-                    daemon_watch_registrations = vec![
-                        crate::high_level::api::WatchedPathStatus {
-                            path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
-                            registered: wd_cgroup >= 0,
-                        },
-                        crate::high_level::api::WatchedPathStatus {
-                            path: "/data/system/packages.xml".to_string(),
-                            registered: wd_pkg_xml >= 0,
-                        },
-                        crate::high_level::api::WatchedPathStatus {
-                            path: "/data/system/packages.list".to_string(),
-                            registered: wd_pkg_list >= 0,
-                        },
-                    ];
-
-                    if wd_cgroup >= 0 && wd_pkg_xml >= 0 && wd_pkg_list >= 0 {
-                        let _ = effect_executor.apply(crate::core::Effect::Log {
-                            owner: 102,
-                            level: crate::core::LogLevel::Info,
-                            event: crate::core::LogEvent::Generic(
-                                "watched paths registered".to_string(),
-                            ),
-                        });
-                        let _ = effect_executor.apply(crate::core::Effect::Log {
-                            owner: 102,
-                            level: crate::core::LogLevel::Info,
-                            event: crate::core::LogEvent::Generic(
-                                "waiting_for_foreground_event".to_string(),
-                            ),
-                        });
-                        inotify_fd_opt = Some((fd_obj, wd_cgroup, wd_pkg_xml, wd_pkg_list));
-                    } else {
-                        let _ = effect_executor.apply(crate::core::Effect::Log {
-                            owner: 102,
-                            level: crate::core::LogLevel::Warn,
-                            event: crate::core::LogEvent::Generic(
-                                "watched paths unavailable: inotify_add_watch failed".to_string(),
-                            ),
-                        });
-                    }
+            match (wd_cgroup, wd_pkg_xml, wd_pkg_list) {
+                (Ok(wd_cgroup), Ok(wd_pkg_xml), Ok(wd_pkg_list)) => {
+                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                        owner: 102,
+                        level: crate::core::LogLevel::Info,
+                        event: crate::core::LogEvent::Generic(format!(
+                            "inotify watch registered cgroup_wd={} packages_xml_wd={} packages_list_wd={}",
+                            wd_cgroup, wd_pkg_xml, wd_pkg_list
+                        )),
+                    });
+                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                        owner: 102,
+                        level: crate::core::LogLevel::Info,
+                        event: crate::core::LogEvent::Generic(
+                            "waiting_for_foreground_event".to_string(),
+                        ),
+                    });
+                    preload_inotify = Some(crate::runtime::PreloadInotify::new(
+                        fd_obj,
+                        wd_cgroup,
+                        wd_pkg_xml,
+                        wd_pkg_list,
+                    ));
                 }
                 _ => {
                     let _ = effect_executor.apply(crate::core::Effect::Log {
                         owner: 102,
                         level: crate::core::LogLevel::Warn,
                         event: crate::core::LogEvent::Generic(
-                            "watched paths unavailable: invalid CString path".to_string(),
+                            "watched paths unavailable: inotify_add_watch failed".to_string(),
                         ),
                     });
                 }
@@ -731,72 +721,53 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                 }
             }
 
-            if let Some((inotify_fd_obj, wd_cgroup, wd_pkg_xml, wd_pkg_list)) = &inotify_fd_opt
+            if let Some(inotify) = &mut preload_inotify
                 && Some(rev.token) == effect_executor.reactor.inotify_token
                 && rev.readable
             {
-                let mut fds = libc::pollfd {
-                    fd: inotify_fd_obj.raw(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-
-                let ret = unsafe { libc::poll(&mut fds, 1, 0) };
-                if ret > 0 {
-                    let mut len: libc::c_int = 0;
-                    if unsafe { libc::ioctl(inotify_fd_obj.raw(), libc::FIONREAD, &mut len) } >= 0
-                        && len > 0
-                    {
-                        let mut buf = vec![0u8; len as usize];
-                        let n = unsafe {
-                            libc::read(
-                                inotify_fd_obj.raw(),
-                                buf.as_mut_ptr() as *mut libc::c_void,
-                                len as usize,
-                            )
-                        };
-
-                        if n > 0 {
-                            let mut offset = 0;
-                            let mut cgroup_changed = false;
-                            let mut packages_changed = false;
-                            let base = std::mem::size_of::<libc::inotify_event>();
-
-                            while offset + base <= n as usize {
-                                let event = unsafe {
-                                    &*(buf.as_ptr().add(offset) as *const libc::inotify_event)
-                                };
-                                let size = base + event.len as usize;
-
-                                if offset + size > n as usize {
-                                    break;
+                match inotify.handle_readable() {
+                    Ok(events) => {
+                        for event in events {
+                            match event {
+                                crate::runtime::PreloadInotifyEvent::ForegroundChanged {
+                                    old_pid,
+                                    new_pid,
+                                } => {
+                                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                                        owner: 102,
+                                        level: crate::core::LogLevel::Info,
+                                        event: crate::core::LogEvent::Generic(format!(
+                                            "cgroup event received old_pid={:?} new_pid={}",
+                                            old_pid, new_pid
+                                        )),
+                                    });
+                                    sys_events.push(crate::core::Event::ForegroundChanged {
+                                        pid: new_pid,
+                                    });
                                 }
-
-                                if event.wd == *wd_pkg_xml || event.wd == *wd_pkg_list {
-                                    packages_changed = true;
-                                } else if event.wd == *wd_cgroup {
-                                    cgroup_changed = true;
-                                }
-
-                                offset += size;
-                            }
-
-                            if packages_changed {
-                                sys_events.push(crate::core::Event::PackagesChanged);
-                            }
-
-                            if cgroup_changed
-                                && let Ok(cgroup_content) =
-                                    std::fs::read_to_string("/dev/cpuset/top-app/cgroup.procs")
-                            {
-                                for pid_str in cgroup_content.split_whitespace() {
-                                    if let Ok(pid) = pid_str.parse::<i32>() {
-                                        sys_events
-                                            .push(crate::core::Event::ForegroundChanged { pid });
-                                    }
+                                crate::runtime::PreloadInotifyEvent::PackagesChanged { path } => {
+                                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                                        owner: 102,
+                                        level: crate::core::LogLevel::Info,
+                                        event: crate::core::LogEvent::Generic(format!(
+                                            "packages_changed marker path={}",
+                                            path
+                                        )),
+                                    });
+                                    sys_events.push(crate::core::Event::PackagesChanged);
                                 }
                             }
                         }
+                    }
+                    Err(e) => {
+                        let _ = effect_executor.apply(crate::core::Effect::Log {
+                            owner: 102,
+                            level: crate::core::LogLevel::Warn,
+                            event: crate::core::LogEvent::Generic(format!(
+                                "inotify read failed err={}",
+                                e
+                            )),
+                        });
                     }
                 }
             }

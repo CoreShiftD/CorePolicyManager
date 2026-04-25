@@ -6,10 +6,15 @@
 
 mod control;
 mod effects;
+mod inotify;
 mod logging;
 pub mod status;
 mod system_services;
 
 pub use effects::{EffectExecutor, RuntimeDrain, RuntimeProcess};
+pub use inotify::{
+    CGROUP_PROCS_PATH, PACKAGES_LIST_PATH, PACKAGES_XML_PATH, PreloadInotify, PreloadInotifyEvent,
+    parse_top_app_pid,
+};
 pub use logging::{LogRouter, log_runtime_event};
 pub use status::assemble_daemon_status;

@@ -34,6 +34,10 @@ pub fn path_exists(path: &str) -> bool {
     }
 }
 
+pub fn read_to_string(path: &str) -> Result<String, std::io::Error> {
+    std::fs::read_to_string(path)
+}
+
 pub struct SignalRuntime;
 
 #[inline(always)]

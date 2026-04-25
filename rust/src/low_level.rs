@@ -4,6 +4,7 @@
 
 //! `low_level` contains the sys/reactor/io primitives the runtime builds on.
 
+pub mod inotify;
 pub mod io;
 pub mod reactor;
 pub mod spawn;

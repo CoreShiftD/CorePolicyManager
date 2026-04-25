@@ -40,6 +40,7 @@ pub struct PreloadAddon {
     pub dedup_cache: BTreeMap<String, u64>,
     pub negative_cache: BTreeMap<String, u64>,
     pub package_map: BTreeMap<String, std::path::PathBuf>,
+    pub package_cache_dirty: bool,
     pub in_flight: BTreeSet<String>,
 
     last_foreground_pid: i32,
@@ -63,6 +64,7 @@ impl PreloadAddon {
             dedup_cache: BTreeMap::new(),
             negative_cache: BTreeMap::new(),
             package_map: BTreeMap::new(),
+            package_cache_dirty: false,
             in_flight: BTreeSet::new(),
             last_foreground_pid: -1,
             last_foreground_time: 0,
@@ -139,6 +141,7 @@ impl Addon for PreloadAddon {
             }
             Event::PackagesChanged => {
                 self.package_map.clear();
+                self.package_cache_dirty = true;
                 self.dedup_cache.clear();
                 self.negative_cache.clear();
                 reqs.push(self.submit(Intent::AddonLog {
@@ -240,6 +243,7 @@ impl Addon for PreloadAddon {
                         {
                             self.package_map
                                 .insert(package_name.clone(), std::path::PathBuf::from(&base_dir));
+                            self.package_cache_dirty = false;
                             let payload =
                                 serde_json::to_vec(&(package_name, base_dir)).unwrap_or_default();
                             reqs.push(self.submit(Intent::SystemRequest {
@@ -289,6 +293,16 @@ impl Addon for PreloadAddon {
                         }
                     }
                 }
+            }
+            Event::SystemFailure { kind, err, .. } if *kind == SystemService::ResolveIdentity => {
+                reqs.push(self.submit(Intent::AddonLog {
+                    addon_id: 102,
+                    level: LogLevel::Warn,
+                    msg: format!(
+                        "package resolution result pid={} err={}",
+                        self.last_foreground_pid, err
+                    ),
+                }));
             }
             Event::AddonCompleted {
                 addon_id,

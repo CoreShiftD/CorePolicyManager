@@ -630,7 +630,103 @@ mod tests_internal {
         let _ = addon.on_core_event(&state, &Event::PackagesChanged);
 
         assert!(addon.package_map.is_empty());
+        assert!(addon.package_cache_dirty);
         assert!(addon.dedup_cache.is_empty());
+    }
+
+    #[test]
+    fn cgroup_content_parser_uses_first_positive_pid() {
+        assert_eq!(crate::runtime::parse_top_app_pid("1234\n"), Some(1234));
+        assert_eq!(crate::runtime::parse_top_app_pid("  42 99\n"), Some(42));
+        assert_eq!(crate::runtime::parse_top_app_pid("bad\n77\n"), Some(77));
+        assert_eq!(crate::runtime::parse_top_app_pid("-1\n0\n"), None);
+        assert_eq!(crate::runtime::parse_top_app_pid(""), None);
+    }
+
+    #[test]
+    fn inotify_pid_change_detection_emits_only_on_change() {
+        use crate::low_level::inotify::InotifyEvent;
+        use crate::low_level::reactor::Fd;
+        use crate::runtime::{PreloadInotify, PreloadInotifyEvent};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (fd, _peer) = UnixStream::pair().unwrap();
+        let mut watcher =
+            PreloadInotify::new(Fd::new(fd.into_raw_fd(), "test").unwrap(), 10, 11, 12);
+
+        let first = watcher.handle_decoded_events(
+            &[InotifyEvent {
+                wd: 10,
+                mask: crate::low_level::inotify::MODIFY_MASK,
+            }],
+            || Ok("100\n".to_string()),
+        );
+        assert_eq!(
+            first,
+            vec![PreloadInotifyEvent::ForegroundChanged {
+                old_pid: None,
+                new_pid: 100
+            }]
+        );
+
+        let duplicate = watcher.handle_decoded_events(
+            &[InotifyEvent {
+                wd: 10,
+                mask: crate::low_level::inotify::MODIFY_MASK,
+            }],
+            || Ok("100\n".to_string()),
+        );
+        assert!(duplicate.is_empty());
+
+        let changed = watcher.handle_decoded_events(
+            &[InotifyEvent {
+                wd: 10,
+                mask: crate::low_level::inotify::MODIFY_MASK,
+            }],
+            || Ok("200\n".to_string()),
+        );
+        assert_eq!(
+            changed,
+            vec![PreloadInotifyEvent::ForegroundChanged {
+                old_pid: Some(100),
+                new_pid: 200
+            }]
+        );
+    }
+
+    #[test]
+    fn package_change_marks_dirty_without_reading_cgroup() {
+        use crate::low_level::inotify::InotifyEvent;
+        use crate::low_level::reactor::Fd;
+        use crate::runtime::{PreloadInotify, PreloadInotifyEvent};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (fd, _peer) = UnixStream::pair().unwrap();
+        let mut watcher =
+            PreloadInotify::new(Fd::new(fd.into_raw_fd(), "test").unwrap(), 10, 11, 12);
+        let mut cgroup_reads = 0;
+
+        let events = watcher.handle_decoded_events(
+            &[InotifyEvent {
+                wd: 11,
+                mask: crate::low_level::inotify::MODIFY_MASK,
+            }],
+            || {
+                cgroup_reads += 1;
+                Ok("100\n".to_string())
+            },
+        );
+
+        assert_eq!(
+            events,
+            vec![PreloadInotifyEvent::PackagesChanged {
+                path: crate::runtime::PACKAGES_XML_PATH
+            }]
+        );
+        assert!(watcher.packages_dirty());
+        assert_eq!(cgroup_reads, 0);
     }
 
     #[test]
@@ -948,22 +1044,31 @@ mod tests_internal {
         assert_eq!(decoded, status_json);
     }
 
-    /// Verify that run_daemon's preload-mode logic creates the control file
-    /// when it does not exist (simulated with a temp path).
+    /// ensure_preload_control_file creates the file when absent and returns
+    /// true; returns false without touching the filesystem when already present.
     #[test]
-    fn preload_cli_auto_enable_creates_control_file() {
-        use std::path::Path;
+    fn ensure_preload_control_file_creates_when_absent() {
+        use crate::ensure_preload_control_file;
+        use crate::low_level::sys::path_exists;
 
-        let tmp = std::env::temp_dir().join("coreshift_test_enable_preload");
-        let _ = std::fs::remove_file(&tmp);
+        let tmp = std::env::temp_dir().join("coreshift_test_ensure_preload");
+        let path = tmp.to_str().expect("valid temp path");
 
-        // Simulate what run_daemon does: write the file if it doesn't exist.
-        if !crate::low_level::sys::path_exists(tmp.to_str().unwrap_or("")) {
-            std::fs::write(&tmp, b"").expect("write must succeed");
-        }
-        assert!(Path::new(&tmp).exists(), "control file must be created");
+        // Start clean.
+        let _ = std::fs::remove_file(path);
+        assert!(!path_exists(path), "precondition: file must not exist");
 
-        let _ = std::fs::remove_file(&tmp);
+        // First call: file is absent, must be created, returns true.
+        let created = ensure_preload_control_file(path);
+        assert!(created, "must return true when file was created");
+        assert!(path_exists(path), "file must exist after creation");
+
+        // Second call: file already present, must return false without error.
+        let created_again = ensure_preload_control_file(path);
+        assert!(!created_again, "must return false when file already exists");
+        assert!(path_exists(path), "file must still exist");
+
+        let _ = std::fs::remove_file(path);
     }
 
     /// Watch registrations are owned by the runtime (daemon_watch_registrations),
