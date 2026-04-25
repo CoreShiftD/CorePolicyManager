@@ -1,21 +1,22 @@
-# Agent Guidelines for CoreShift
+# Agent Guidelines for CoreShift Policy
 
-This document provides instructions for AI agents working on this codebase.
+This document defines the constraints and conventions for AI agents and contributors working on the **CoreShift Policy** daemon.
 
-## Stable Substrate: rust/src/low_level
+## Core Identity
+- **Product Name**: CoreShift Policy
+- **Executable Name**: `corepolicy`
+- **Daemon Name**: CoreShift Policy Daemon
 
-The `rust/src/low_level` directory contains mature OS-boundary code (reactor, inotify, syscalls, process primitives).
+Contributors must use the `corepolicy` executable name in all new CLI documentation, examples, and scripts.
 
-**Mandate:**
-- Treat `low_level` as a stable substrate.
-- Do NOT rewrite or broad-refactor components in this directory.
-- Prefer making changes in the `runtime` or `high_level` layers.
-- Wrap awkward `low_level` APIs in runtime adapters rather than modifying the internals.
+## CLI and Runtime Model
+- **Autonomous Operation**: The daemon is designed to be autonomous. It observes system state and decides on actions locally. The Android application should not need to command it continuously.
+- **Compact Flags**: Use compact, single-letter flags for features (e.g., `-p` for preload).
+- **No IPC for Status**: Basic status reporting must not depend on IPC. The `corepolicy status` command reads from `/data/local/tmp/coreshift/status.json` directly.
+- **Stable Substrate**: Keep the `low_level` module stable. It acts as the trusted OS boundary.
+- **Implementation Status**: Only document and implement flags for features that are actually available. Future flags should be marked as **reserved** or **proposed**, not available.
 
-**Modification Criteria:**
-Modify `low_level` ONLY for:
-1. Correctness bugs.
-2. Android compatibility issues.
-3. Safety issues.
-4. Measurable performance bottlenecks.
-5. Missing OS primitives needed by higher layers.
+## Implementation Priorities
+1. **Correctness**: Ensure syscalls and resource ownership are handled safely in `low_level`.
+2. **Minimalism**: Avoid complex IPC or heavy dependencies unless explicitly required.
+3. **Transparency**: Use structured logging and the `status.json` file for observability.
