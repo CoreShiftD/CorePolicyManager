@@ -19,6 +19,21 @@
 use crate::low_level::spawn::{SysError, syscall_ret};
 use libc::sigset_t;
 
+/// Probe whether a filesystem path exists without following symlinks.
+///
+/// Uses `libc::access` with `F_OK` so the check is a single syscall with no
+/// Rust allocator involvement.  Returns `true` if the path is accessible,
+/// `false` on any error (including `ENOENT`, `EACCES`, etc.).
+///
+/// This is the canonical low-level path-existence helper.  Higher layers
+/// (runtime, addons) must call this instead of `std::path::Path::exists()`.
+pub fn path_exists(path: &str) -> bool {
+    match std::ffi::CString::new(path) {
+        Ok(c) => unsafe { libc::access(c.as_ptr(), libc::F_OK) == 0 },
+        Err(_) => false,
+    }
+}
+
 pub struct SignalRuntime;
 
 #[inline(always)]

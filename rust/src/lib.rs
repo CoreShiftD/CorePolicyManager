@@ -219,7 +219,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     e
                 )),
             );
-        } else if !std::path::Path::new(paths::ENABLE_PRELOAD_PATH).exists() {
+        } else if !crate::low_level::sys::path_exists(paths::ENABLE_PRELOAD_PATH) {
             match std::fs::write(paths::ENABLE_PRELOAD_PATH, b"") {
                 Ok(()) => {
                     crate::runtime::log_runtime_event(
@@ -327,6 +327,9 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut ipc = IpcModule::new(ipc_fd, ipc_token);
 
     let mut inotify_fd_opt = None;
+    // Watch registration results kept here so the IPC status handler can
+    // include them in the assembled DaemonStatusReport without re-probing.
+    let mut daemon_watch_registrations: Vec<crate::high_level::api::WatchedPathStatus> = Vec::new();
     if config.enable_warmup {
         let _ = effect_executor.apply(crate::core::Effect::Log {
             owner: 102,
@@ -334,8 +337,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
             event: crate::core::LogEvent::Generic("preload initialized".to_string()),
         });
 
-        let enable_path = std::path::Path::new(crate::paths::ENABLE_PRELOAD_PATH);
-        if enable_path.exists() {
+        if crate::low_level::sys::path_exists(crate::paths::ENABLE_PRELOAD_PATH) {
             let _ = effect_executor.apply(crate::core::Effect::Log {
                 owner: 102,
                 level: crate::core::LogLevel::Info,
@@ -420,23 +422,25 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
 
                     // Record watch registration results on the PreloadAddon so
                     // `preload-status` can report them accurately.  The addon
-                    // exposes `watch_registrations` as a public field; we set
-                    // it here via the `set_watch_registrations` helper on the
-                    // Addon trait so we don't need downcasting.
+                    // Build watch registration results using the api type so
+                    // the runtime status assembler can include them directly.
                     let watch_results = vec![
-                        crate::high_level::addons::preload::WatchedPath {
+                        crate::high_level::api::WatchedPathStatus {
                             path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
                             registered: wd_cgroup >= 0,
                         },
-                        crate::high_level::addons::preload::WatchedPath {
+                        crate::high_level::api::WatchedPathStatus {
                             path: "/data/system/packages.xml".to_string(),
                             registered: wd_pkg_xml >= 0,
                         },
-                        crate::high_level::addons::preload::WatchedPath {
+                        crate::high_level::api::WatchedPathStatus {
                             path: "/data/system/packages.list".to_string(),
                             registered: wd_pkg_list >= 0,
                         },
                     ];
+                    // Store on the addon (for snapshot) and in the daemon-level
+                    // variable (for status assembly without addon access).
+                    daemon_watch_registrations = watch_results.clone();
                     for (addon, spec, _) in &mut addons {
                         if spec.id == 102 {
                             addon.set_watch_registrations(watch_results.clone());
@@ -639,14 +643,28 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         })
                     }
                     crate::high_level::api::Command::PreloadStatus => {
-                        let mut status_str = "Preload Addon not loaded".to_string();
-                        for (addon, spec, _) in &mut addons {
-                            if spec.id == 102 {
-                                status_str = addon.get_status();
-                                break;
-                            }
-                        }
-                        ipc.send_preload_status(client_id, status_str);
+                        // Find the PreloadAddon trait object (id 102) to pass
+                        // to the runtime assembler.  The assembler calls
+                        // `preload_snapshot()` on the trait object; no unsafe
+                        // code or downcasting is needed.
+                        let preload_ref: Option<&dyn crate::high_level::addon::Addon> =
+                            addons.iter().find_map(|(addon, spec, _)| {
+                                if spec.id == 102 {
+                                    Some(addon.as_ref())
+                                } else {
+                                    None
+                                }
+                            });
+                        let report = crate::runtime::assemble_daemon_status(
+                            mode,
+                            paths::SOCKET_PATH,
+                            preload_ref,
+                            &daemon_watch_registrations,
+                        );
+                        let json = serde_json::to_string(&report).unwrap_or_else(|e| {
+                            format!("{{\"error\":\"serialization failed: {}\"}}", e)
+                        });
+                        ipc.send_preload_status(client_id, json);
                         None
                     }
                 };

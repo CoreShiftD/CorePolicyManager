@@ -666,21 +666,46 @@ mod tests_internal {
     }
 
     // -------------------------------------------------------------------------
-    // Preload status model tests
+    // Preload status layer-boundary tests
     // -------------------------------------------------------------------------
 
+    /// PreloadSnapshot is a pure policy snapshot: no filesystem probes, no
+    /// daemon context, no serialization logic inside the addon.
     #[test]
-    fn preload_status_report_serializes_and_deserializes() {
-        use crate::high_level::addons::preload::{PreloadStatusReport, WatchedPath};
+    fn preload_snapshot_is_pure_policy_state() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
 
-        let report = PreloadStatusReport {
+        let config = PreloadConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let addon = PreloadAddon::new(config);
+        let snap = addon.status_snapshot();
+
+        // Snapshot contains only addon-owned policy fields.
+        assert!(!snap.enabled);
+        assert_eq!(snap.last_foreground_pid, -1);
+        assert!(snap.last_foreground_package.is_none());
+        assert_eq!(snap.package_cache_count, 0);
+        assert_eq!(snap.dedup_cache_count, 0);
+        assert_eq!(snap.negative_cache_count, 0);
+        assert_eq!(snap.in_flight_count, 0);
+        assert_eq!(snap.total_failures, 0);
+        assert!(!snap.auto_disabled);
+        assert!(snap.last_skip_reason.is_none());
+        assert!(snap.last_warmup_result.is_none());
+        // Snapshot must NOT contain daemon-level fields (socket_path, mode,
+        // enable_preload_path, foreground_path_exists) - those live in
+        // DaemonStatusReport assembled by the runtime.
+    }
+
+    /// PreloadSnapshot serializes and deserializes correctly via api types.
+    #[test]
+    fn preload_snapshot_serializes_and_deserializes() {
+        use crate::high_level::api::PreloadSnapshot;
+
+        let snap = PreloadSnapshot {
             enabled: true,
-            warmup_mode_active: true,
-            socket_path: "/data/local/tmp/coreshift/coreshift.sock".to_string(),
-            mode: "preload".to_string(),
-            enable_preload_file_exists: false,
-            enable_preload_path: "/data/local/tmp/coreshift/control/enable_preload".to_string(),
-            foreground_path_exists: false,
             last_foreground_pid: 1234,
             last_foreground_package: Some("com.example.app".to_string()),
             package_cache_count: 3,
@@ -689,66 +714,130 @@ mod tests_internal {
             in_flight_count: 0,
             total_failures: 2,
             auto_disabled: false,
-            watched_paths: vec![
-                WatchedPath {
-                    path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
-                    registered: true,
-                },
-                WatchedPath {
-                    path: "/data/system/packages.xml".to_string(),
-                    registered: false,
-                },
-            ],
             last_skip_reason: Some("cooldown".to_string()),
             last_warmup_result: Some(
                 "package=com.example.app bytes=4096 duration_ms=12".to_string(),
             ),
         };
 
-        let json = serde_json::to_string(&report).expect("serialization must succeed");
-        let decoded: PreloadStatusReport =
+        let json = serde_json::to_string(&snap).expect("serialization must succeed");
+        let decoded: PreloadSnapshot =
             serde_json::from_str(&json).expect("deserialization must succeed");
 
-        assert_eq!(report, decoded);
+        assert_eq!(snap, decoded);
         assert!(json.contains("\"enabled\":true"));
         assert!(json.contains("\"last_foreground_pid\":1234"));
         assert!(json.contains("com.example.app"));
         assert!(json.contains("cooldown"));
     }
 
+    /// DaemonStatusReport (assembled by runtime) serializes and deserializes.
     #[test]
-    fn preload_status_report_default_fields() {
+    fn daemon_status_report_serializes_and_deserializes() {
+        use crate::high_level::api::{DaemonStatusReport, PreloadSnapshot, WatchedPathStatus};
+
+        let report = DaemonStatusReport {
+            mode: "preload".to_string(),
+            socket_path: "/data/local/tmp/coreshift/coreshift.sock".to_string(),
+            preload_addon_loaded: true,
+            enable_preload_file_exists: false,
+            enable_preload_path: "/data/local/tmp/coreshift/control/enable_preload".to_string(),
+            foreground_path_exists: false,
+            watched_paths: vec![
+                WatchedPathStatus {
+                    path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
+                    registered: true,
+                },
+                WatchedPathStatus {
+                    path: "/data/system/packages.xml".to_string(),
+                    registered: false,
+                },
+            ],
+            preload: Some(PreloadSnapshot {
+                enabled: true,
+                last_foreground_pid: 42,
+                last_foreground_package: Some("com.test".to_string()),
+                package_cache_count: 1,
+                dedup_cache_count: 0,
+                negative_cache_count: 0,
+                in_flight_count: 0,
+                total_failures: 0,
+                auto_disabled: false,
+                last_skip_reason: None,
+                last_warmup_result: None,
+            }),
+        };
+
+        let json = serde_json::to_string(&report).expect("serialization must succeed");
+        let decoded: DaemonStatusReport =
+            serde_json::from_str(&json).expect("deserialization must succeed");
+
+        assert_eq!(report, decoded);
+        assert!(json.contains("\"mode\":\"preload\""));
+        assert!(json.contains("com.test"));
+    }
+
+    /// Runtime assembler produces a DaemonStatusReport without touching addon
+    /// internals beyond the snapshot method.
+    #[test]
+    fn runtime_assembler_produces_report_from_snapshot() {
+        use crate::high_level::addon::Addon;
         use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use crate::high_level::api::WatchedPathStatus;
+        use crate::runtime::assemble_daemon_status;
 
         let config = PreloadConfig {
-            enabled: false,
+            enabled: true,
             ..Default::default()
         };
         let addon = PreloadAddon::new(config);
-        let report = addon.status_report();
+        let watches = vec![WatchedPathStatus {
+            path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
+            registered: true,
+        }];
 
-        assert!(!report.enabled);
-        assert!(report.warmup_mode_active);
-        assert_eq!(report.last_foreground_pid, -1);
-        assert!(report.last_foreground_package.is_none());
-        assert_eq!(report.package_cache_count, 0);
-        assert_eq!(report.dedup_cache_count, 0);
-        assert_eq!(report.negative_cache_count, 0);
-        assert_eq!(report.in_flight_count, 0);
-        assert_eq!(report.total_failures, 0);
-        assert!(!report.auto_disabled);
-        assert!(report.watched_paths.is_empty());
-        assert!(report.last_skip_reason.is_none());
-        assert!(report.last_warmup_result.is_none());
-        assert_eq!(report.socket_path, crate::paths::SOCKET_PATH);
+        let report = assemble_daemon_status(
+            "preload",
+            "/data/local/tmp/coreshift/coreshift.sock",
+            Some(&addon as &dyn Addon),
+            &watches,
+        );
+
+        assert_eq!(report.mode, "preload");
+        assert_eq!(
+            report.socket_path,
+            "/data/local/tmp/coreshift/coreshift.sock"
+        );
+        assert!(report.preload_addon_loaded);
+        assert_eq!(report.watched_paths.len(), 1);
+        assert!(report.watched_paths[0].registered);
+        // Filesystem fields are probed by the runtime, not the addon.
         assert_eq!(
             report.enable_preload_path,
             crate::paths::ENABLE_PRELOAD_PATH
         );
+        let snap = report.preload.expect("preload snapshot must be present");
+        assert!(snap.enabled);
+        assert_eq!(snap.last_foreground_pid, -1);
     }
 
+    /// Runtime assembler with no preload addon produces a report with
+    /// preload_addon_loaded=false and preload=None.
     #[test]
-    fn preload_status_report_tracks_skip_reason() {
+    fn runtime_assembler_without_preload_addon() {
+        use crate::runtime::assemble_daemon_status;
+
+        let report = assemble_daemon_status("normal", "/tmp/test.sock", None, &[]);
+
+        assert_eq!(report.mode, "normal");
+        assert!(!report.preload_addon_loaded);
+        assert!(report.preload.is_none());
+        assert!(report.watched_paths.is_empty());
+    }
+
+    /// Snapshot tracks skip reason correctly (policy state, no FS).
+    #[test]
+    fn preload_snapshot_tracks_skip_reason() {
         use crate::core::{Event, ExecutionState, SystemService};
         use crate::high_level::addon::Addon;
         use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
@@ -761,7 +850,6 @@ mod tests_internal {
         let mut addon = PreloadAddon::new(config);
         let state = ExecutionState::new();
 
-        // Put one package in-flight to trigger global_budget_full on the next.
         addon.in_flight.insert("com.first".to_string());
 
         let _ = addon.on_core_event(
@@ -773,19 +861,14 @@ mod tests_internal {
             },
         );
 
-        let report = addon.status_report();
-        assert_eq!(
-            report.last_skip_reason.as_deref(),
-            Some("global_budget_full")
-        );
-        assert_eq!(
-            report.last_foreground_package.as_deref(),
-            Some("com.second")
-        );
+        let snap = addon.status_snapshot();
+        assert_eq!(snap.last_skip_reason.as_deref(), Some("global_budget_full"));
+        assert_eq!(snap.last_foreground_package.as_deref(), Some("com.second"));
     }
 
+    /// Snapshot tracks warmup result correctly (policy state, no FS).
     #[test]
-    fn preload_status_report_tracks_warmup_result() {
+    fn preload_snapshot_tracks_warmup_result() {
         use crate::core::{Event, ExecutionState};
         use crate::high_level::addon::Addon;
         use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
@@ -809,16 +892,17 @@ mod tests_internal {
             },
         );
 
-        let report = addon.status_report();
-        let result = report
-            .last_warmup_result
-            .expect("warmup result must be set");
+        let snap = addon.status_snapshot();
+        let result = snap.last_warmup_result.expect("warmup result must be set");
         assert!(result.contains("com.warmup"));
         assert!(result.contains("bytes=8192"));
         assert!(result.contains("duration_ms=25"));
         assert!(!addon.in_flight.contains("com.warmup"));
     }
 
+    /// IPC layer frames the JSON status string correctly (type byte 5).
+    /// The IPC module receives an opaque string; it does not parse preload
+    /// internals.
     #[test]
     fn ipc_preload_status_response_encodes_and_decodes() {
         use crate::low_level::reactor::Token;
@@ -849,7 +933,8 @@ mod tests_internal {
         );
         ipc.client_tokens.insert(token, client_id);
 
-        let status_json = r#"{"enabled":true,"mode":"preload"}"#.to_string();
+        // IPC receives an opaque JSON string; it does not know preload types.
+        let status_json = r#"{"mode":"preload","preload_addon_loaded":true}"#.to_string();
         ipc.send_preload_status(client_id, status_json.clone());
 
         let conn = ipc.clients.get(&client_id).expect("client must remain");
@@ -863,52 +948,41 @@ mod tests_internal {
         assert_eq!(decoded, status_json);
     }
 
+    /// Verify that run_daemon's preload-mode logic creates the control file
+    /// when it does not exist (simulated with a temp path).
     #[test]
     fn preload_cli_auto_enable_creates_control_file() {
-        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
         use std::path::Path;
 
-        // Use a temp dir to avoid touching real /data paths.
         let tmp = std::env::temp_dir().join("coreshift_test_enable_preload");
         let _ = std::fs::remove_file(&tmp);
 
         // Simulate what run_daemon does: write the file if it doesn't exist.
-        if !tmp.exists() {
+        if !crate::low_level::sys::path_exists(tmp.to_str().unwrap_or("")) {
             std::fs::write(&tmp, b"").expect("write must succeed");
         }
         assert!(Path::new(&tmp).exists(), "control file must be created");
 
-        // Verify the addon picks it up on the next tick when the path exists.
-        // We can't use the real ENABLE_PRELOAD_PATH in tests, so we verify the
-        // logic by checking that a newly-created PreloadAddon with enabled=false
-        // activates when the override file is present (using the real path check
-        // in on_core_event, which we skip here since we can't write to /data).
-        // Instead, verify the status_report reflects the field correctly.
-        let config = PreloadConfig {
-            enabled: true,
-            ..Default::default()
-        };
-        let addon = PreloadAddon::new(config);
-        let report = addon.status_report();
-        assert!(report.enabled);
-
         let _ = std::fs::remove_file(&tmp);
     }
 
+    /// set_watch_registrations stores results on the addon; status_snapshot
+    /// does not include them (they belong in DaemonStatusReport via runtime).
     #[test]
-    fn preload_addon_set_watch_registrations() {
+    fn preload_addon_set_watch_registrations_stored_on_addon() {
         use crate::high_level::addon::Addon;
-        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig, WatchedPath};
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use crate::high_level::api::WatchedPathStatus;
 
         let mut addon = PreloadAddon::new(PreloadConfig::default());
         assert!(addon.watch_registrations.is_empty());
 
         let regs = vec![
-            WatchedPath {
+            WatchedPathStatus {
                 path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
                 registered: true,
             },
-            WatchedPath {
+            WatchedPathStatus {
                 path: "/data/system/packages.xml".to_string(),
                 registered: false,
             },
@@ -919,7 +993,17 @@ mod tests_internal {
         assert!(addon.watch_registrations[0].registered);
         assert!(!addon.watch_registrations[1].registered);
 
-        let report = addon.status_report();
+        // The snapshot itself does not carry watch_registrations - those are
+        // assembled by the runtime into DaemonStatusReport.watched_paths.
+        // Verify the runtime assembler picks them up correctly.
+        use crate::high_level::addon::Addon as AddonTrait;
+        use crate::runtime::assemble_daemon_status;
+        let report = assemble_daemon_status(
+            "preload",
+            "/tmp/s.sock",
+            Some(&addon as &dyn AddonTrait),
+            &regs,
+        );
         assert_eq!(report.watched_paths, regs);
     }
 

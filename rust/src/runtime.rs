@@ -7,7 +7,9 @@
 mod control;
 mod effects;
 mod logging;
+pub mod status;
 mod system_services;
 
 pub use effects::{EffectExecutor, RuntimeDrain, RuntimeProcess};
 pub use logging::{LogRouter, log_runtime_event};
+pub use status::assemble_daemon_status;

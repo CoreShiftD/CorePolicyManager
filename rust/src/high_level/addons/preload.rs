@@ -5,61 +5,10 @@
 use crate::core::state_view::StateView;
 use crate::core::{Event, Intent, LogLevel, SystemService};
 use crate::high_level::addon::Addon;
+use crate::high_level::api::{PreloadSnapshot, WatchedPathStatus};
 use crate::high_level::identity::{Principal, Request};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
-
-/// Structured diagnostic snapshot emitted by `preload-status`.
-///
-/// All fields are observable without daemon restart. The report is
-/// JSON-encoded and sent over IPC as a `WireResponse::PreloadStatus` frame.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PreloadStatusReport {
-    /// Whether the preload addon is currently enabled (override file present
-    /// and config flag set).
-    pub enabled: bool,
-    /// Whether the daemon was started with `--enable-warmup` / `preload` mode.
-    pub warmup_mode_active: bool,
-    /// Path of the Unix-domain socket the daemon is listening on.
-    pub socket_path: String,
-    /// Daemon mode string: `"normal"`, `"preload"`, or `"record"`.
-    pub mode: String,
-    /// Whether the `enable_preload` control file currently exists on disk.
-    pub enable_preload_file_exists: bool,
-    /// Path of the `enable_preload` control file.
-    pub enable_preload_path: String,
-    /// Whether `/dev/cpuset/top-app/cgroup.procs` exists on this device.
-    pub foreground_path_exists: bool,
-    /// Last foreground PID seen by the addon (`-1` if none yet).
-    pub last_foreground_pid: i32,
-    /// Last foreground package name resolved, if any.
-    pub last_foreground_package: Option<String>,
-    /// Number of packages in the resolved package map.
-    pub package_cache_count: usize,
-    /// Number of entries in the warmup dedup cache.
-    pub dedup_cache_count: usize,
-    /// Number of entries in the failure negative cache.
-    pub negative_cache_count: usize,
-    /// Number of warmups currently in flight.
-    pub in_flight_count: usize,
-    /// Total warmup failures since daemon start.
-    pub total_failures: u32,
-    /// Whether the addon has been auto-disabled due to excessive failures.
-    pub auto_disabled: bool,
-    /// Watched inotify paths and their registration status.
-    pub watched_paths: Vec<WatchedPath>,
-    /// Last skip reason logged by the addon, if any.
-    pub last_skip_reason: Option<String>,
-    /// Last warmup result summary, if any.
-    pub last_warmup_result: Option<String>,
-}
-
-/// Registration status for a single inotify-watched path.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WatchedPath {
-    pub path: String,
-    pub registered: bool,
-}
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct PreloadConfig {
@@ -101,8 +50,10 @@ pub struct PreloadAddon {
     total_failures: u32,
     auto_disabled: bool,
 
-    /// Inotify watch registration results, populated during daemon init.
-    pub watch_registrations: Vec<WatchedPath>,
+    /// Inotify watch registration results, populated by the runtime after
+    /// inotify setup.  The addon stores the result but does not perform the
+    /// registration itself.
+    pub watch_registrations: Vec<WatchedPathStatus>,
     /// Last skip reason emitted (e.g. `"already_in_flight"`, `"cooldown"`).
     pub last_skip_reason: Option<String>,
     /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
@@ -160,7 +111,7 @@ impl Addon for PreloadAddon {
         }
 
         if !self.config.enabled {
-            if std::path::Path::new(crate::paths::ENABLE_PRELOAD_PATH).exists() {
+            if crate::low_level::sys::path_exists(crate::paths::ENABLE_PRELOAD_PATH) {
                 self.config.enabled = true;
                 reqs.push(self.submit(Intent::AddonLog {
                     addon_id: 102,
@@ -391,40 +342,24 @@ impl Addon for PreloadAddon {
         reqs
     }
 
-    fn set_watch_registrations(
-        &mut self,
-        registrations: Vec<crate::high_level::addons::preload::WatchedPath>,
-    ) {
+    fn set_watch_registrations(&mut self, registrations: Vec<WatchedPathStatus>) {
         self.watch_registrations = registrations;
     }
 
-    fn get_status(&self) -> String {
-        let report = self.status_report();
-        serde_json::to_string_pretty(&report)
-            .unwrap_or_else(|e| format!("{{\"error\": \"serialization failed: {}\"}}", e))
+    fn preload_snapshot(&self) -> Option<crate::high_level::api::PreloadSnapshot> {
+        Some(self.status_snapshot())
     }
 }
 
 impl PreloadAddon {
-    /// Build a [`PreloadStatusReport`] from current addon state.
+    /// Return a pure policy-state snapshot.
     ///
-    /// Filesystem checks (control file, foreground path) are performed at
-    /// call time so the report reflects the live on-disk state.
-    pub fn status_report(&self) -> PreloadStatusReport {
-        let enable_preload_path = crate::paths::ENABLE_PRELOAD_PATH.to_string();
-        let enable_preload_file_exists =
-            std::path::Path::new(crate::paths::ENABLE_PRELOAD_PATH).exists();
-        let foreground_path_exists =
-            std::path::Path::new("/dev/cpuset/top-app/cgroup.procs").exists();
-
-        PreloadStatusReport {
+    /// No filesystem probes, no daemon context, no serialization.
+    /// The runtime layer is responsible for assembling the full
+    /// [`DaemonStatusReport`] by combining this snapshot with live OS checks.
+    pub fn status_snapshot(&self) -> PreloadSnapshot {
+        PreloadSnapshot {
             enabled: self.config.enabled,
-            warmup_mode_active: true, // addon is only instantiated when warmup is active
-            socket_path: crate::paths::SOCKET_PATH.to_string(),
-            mode: "preload".to_string(),
-            enable_preload_file_exists,
-            enable_preload_path,
-            foreground_path_exists,
             last_foreground_pid: self.last_foreground_pid,
             last_foreground_package: self.last_foreground_package.clone(),
             package_cache_count: self.package_map.len(),
@@ -433,7 +368,6 @@ impl PreloadAddon {
             in_flight_count: self.in_flight.len(),
             total_failures: self.total_failures,
             auto_disabled: self.auto_disabled,
-            watched_paths: self.watch_registrations.clone(),
             last_skip_reason: self.last_skip_reason.clone(),
             last_warmup_result: self.last_warmup_result.clone(),
         }

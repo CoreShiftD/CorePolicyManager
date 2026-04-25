@@ -4,7 +4,7 @@
 
 use crate::core::Event;
 use crate::core::state_view::StateView;
-use crate::high_level::addons::preload::WatchedPath;
+use crate::high_level::api::WatchedPathStatus;
 use crate::high_level::capability::CapabilityToken;
 use crate::low_level::reactor::Event as ReactorEvent;
 
@@ -29,13 +29,17 @@ pub trait Addon {
     ) -> Vec<crate::high_level::identity::Request> {
         Vec::new()
     }
-    fn get_status(&self) -> String {
-        "status not supported".to_string()
+    /// Store inotify watch registration results so they appear in the runtime
+    /// status report.  The default implementation is a no-op for addons that
+    /// do not use inotify.  The runtime calls this after inotify setup.
+    fn set_watch_registrations(&mut self, _registrations: Vec<WatchedPathStatus>) {}
+
+    /// Return a pure policy-state snapshot if this addon is the PreloadAddon,
+    /// otherwise `None`.  The runtime uses this to build the status report
+    /// without downcasting.
+    fn preload_snapshot(&self) -> Option<crate::high_level::api::PreloadSnapshot> {
+        None
     }
-    /// Store inotify watch registration results so they appear in status
-    /// reports.  The default implementation is a no-op for addons that do not
-    /// use inotify.
-    fn set_watch_registrations(&mut self, _registrations: Vec<WatchedPath>) {}
 }
 
 pub struct NoOpAddon;

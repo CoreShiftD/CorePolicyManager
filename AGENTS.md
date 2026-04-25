@@ -24,9 +24,19 @@ Do not optimize for commit count. Optimize for durable engineering quality.
 - **`rust/src/core`**: Pure state machine, reducers, scheduler, replay, validation, invariants.
   - Internal split: `core/types.rs`, `core/state.rs`, `core/engine.rs`
 - **`rust/src/high_level`**: Android-facing policy semantics, identity, capabilities, feature mapping.
+  - Addons own **policy/decision state only**: enabled flags, caches, skip reasons, warmup results.
+  - Addons must **not** perform filesystem probes, daemon context lookups, or JSON serialization.
+  - Addons expose typed snapshots (e.g. `PreloadSnapshot`) via trait methods; the runtime assembles reports.
+  - Typed IPC request/response structs (`DaemonStatusReport`, `PreloadSnapshot`, `WatchedPathStatus`) live in `high_level/api.rs`.
 - **`rust/src/mid_level`**: IPC framing, daemon boundary translation, request/response transport.
+  - Frames bytes and dispatches commands. Must not know addon internals beyond command/response types.
+  - Receives opaque serialized payloads from the runtime; does not assemble or interpret status reports.
 - **`rust/src/low_level`**: **The ONLY layer allowed direct OS/platform-facing API access.** Reactor, syscalls, spawn, drain, IO primitives.
+  - Path existence checks must use `low_level::sys::path_exists()`, not `std::path::Path::exists()`.
 - **`rust/src/runtime`**: Side effects, structured logging, services, process execution, orchestration.
+  - **Owns status assembly**: `runtime::status::assemble_daemon_status()` is the single place that combines addon snapshots, live filesystem probes, and daemon context into a `DaemonStatusReport`.
+  - Calls `low_level::sys::path_exists()` for all control-file and device-path probes.
+- **`rust/src/main.rs`**: Thin CLI only. Parses commands, sends typed IPC requests, deserializes typed responses, pretty-prints. No protocol logic beyond using shared constants.
 
 Android app code is a separate frontend. Rust daemon work must not casually alter Android UI behavior.
 
@@ -130,6 +140,44 @@ Audit one subsystem and improve it:
 - docs accuracy
 
 Then make one justified improvement.
+
+---
+
+## Layer Responsibility Rules
+
+These rules were established after a status-reporting refactor revealed role drift.
+Violating them creates hidden coupling that makes the codebase harder to test and audit.
+
+**Addon (`high_level/addons/`):**
+- Own policy/decision state: enabled flags, caches, skip reasons, warmup results, foreground tracking.
+- Expose state via typed snapshot methods (e.g. `status_snapshot() -> PreloadSnapshot`).
+- Must NOT call `std::path::Path::exists()`, `std::fs::*`, or any OS probe directly.
+- Must NOT serialize to JSON or produce wire-format strings.
+- Must NOT know socket paths, daemon mode, or control-file paths.
+
+**`low_level/sys`:**
+- Owns all direct OS/platform-facing checks: `path_exists()`, metadata, inotify registration.
+- `path_exists(path: &str) -> bool` is the canonical helper; use it everywhere instead of `Path::exists()`.
+
+**`runtime/status.rs`:**
+- Single place for assembling `DaemonStatusReport`.
+- Calls `low_level::sys::path_exists()` for filesystem probes.
+- Calls `addon.preload_snapshot()` (via trait) for policy state.
+- Merges daemon context (mode, socket path) passed in by the caller.
+
+**`mid_level/ipc.rs`:**
+- Frames bytes, dispatches commands, enforces backpressure.
+- Receives opaque JSON strings from the runtime; does not parse or construct status reports.
+- Must not import addon types beyond what `high_level/api.rs` defines.
+
+**`high_level/api.rs`:**
+- Defines stable typed request/response structs: `Command`, `DaemonStatusReport`, `PreloadSnapshot`, `WatchedPathStatus`.
+- These are the canonical wire types; all layers reference them.
+
+**`main.rs`:**
+- Thin CLI: parse command, send IPC request, deserialize typed response, pretty-print.
+- Must not duplicate protocol framing logic.
+- Uses `paths::SOCKET_PATH` and `api::DaemonStatusReport` constants/types.
 
 ---
 

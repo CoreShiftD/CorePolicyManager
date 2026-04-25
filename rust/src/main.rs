@@ -99,10 +99,16 @@ fn run_command(command: Command) -> Result<(), String> {
             }
 
             let json_bytes = &resp_buf[1..];
-            // Pretty-print if the payload is valid JSON, otherwise emit raw.
-            match serde_json::from_slice::<serde_json::Value>(json_bytes) {
-                Ok(val) => {
-                    println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+            // Deserialize into the typed report; fall back to raw UTF-8 on
+            // parse failure so the CLI is never silently empty.
+            match serde_json::from_slice::<CoreShift::high_level::api::DaemonStatusReport>(
+                json_bytes,
+            ) {
+                Ok(report) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&report).unwrap_or_default()
+                    );
                 }
                 Err(_) => {
                     println!("{}", String::from_utf8_lossy(json_bytes));
