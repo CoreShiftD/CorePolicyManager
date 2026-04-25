@@ -31,10 +31,26 @@ fn test_coredebug_probe_placeholder() {
         .output()
         .expect("failed to execute coredebug");
 
-    assert!(!output.status.success());
+    // This might succeed or fail depending on environment, but it should
+    // contain the "Running all planned" message.
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Running all planned substrate diagnostic probes"));
-    assert!(stdout.contains("Not implemented yet"));
+}
+
+#[test]
+#[cfg(feature = "debug-cli")]
+fn test_coredebug_probe_paths() {
+    let bin = env!("CARGO_BIN_EXE_coredebug");
+    let output = Command::new(bin)
+        .args(["probe", "paths"])
+        .output()
+        .expect("failed to execute coredebug");
+
+    // We don't strictly assert success here because environment permissions
+    // might vary, but we check if it actually ran the probe.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--- Probing paths ---"));
+    assert!(stdout.contains("RESULT:"));
 }
 
 #[test]

@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+use coreshift_policy::low_level::sys::{path_exists, read_proc_cmdline, read_proc_status};
 use std::process::ExitCode;
 
 fn print_help() {
@@ -13,6 +14,72 @@ fn print_help() {
         "  probe <cat>    Run diagnostic substrate probes (e.g. procfs, inotify, paths, spawn)"
     );
     println!("  help           Show this help");
+}
+
+fn probe_paths() -> bool {
+    let mut all_pass = true;
+
+    println!("--- Probing paths ---");
+
+    // 1. /data/local/tmp exists/accessible
+    let tmp_path = "/data/local/tmp";
+    if path_exists(tmp_path) {
+        println!("PASS: {} exists and is accessible", tmp_path);
+    } else {
+        // On non-Android it might not exist, but let's WARN/FAIL based on intent
+        println!(
+            "WARN: {} is not accessible (normal on non-Android)",
+            tmp_path
+        );
+        // We don't fail 'paths' probe just because of this if we are on host
+    }
+
+    // 2. /data/local/tmp/coreshift can be created or already exists
+    let coreshift_path = "/data/local/tmp/coreshift";
+    if path_exists(coreshift_path) {
+        println!("PASS: {} already exists", coreshift_path);
+    } else {
+        match std::fs::create_dir_all(coreshift_path) {
+            Ok(_) => {
+                println!("PASS: {} created successfully", coreshift_path);
+            }
+            Err(e) => {
+                println!("FAIL: {} could not be created: {}", coreshift_path, e);
+                all_pass = false;
+            }
+        }
+    }
+
+    // 3. /proc/self/status can be read
+    let pid = unsafe { libc::getpid() };
+    match read_proc_status(pid) {
+        Ok(status) => {
+            println!("PASS: /proc/self/status read (Name: {})", status.name);
+        }
+        Err(e) => {
+            println!("FAIL: /proc/self/status could not be read: {}", e);
+            all_pass = false;
+        }
+    }
+
+    // 4. /proc/self/cmdline can be read
+    match read_proc_cmdline(pid) {
+        Ok(cmdline) => {
+            println!("PASS: /proc/self/cmdline read: {}", cmdline);
+        }
+        Err(e) => {
+            println!("FAIL: /proc/self/cmdline could not be read: {}", e);
+            all_pass = false;
+        }
+    }
+
+    if all_pass {
+        println!("RESULT: PASS");
+    } else {
+        println!("RESULT: FAIL");
+    }
+
+    all_pass
 }
 
 fn main() -> ExitCode {
@@ -33,26 +100,22 @@ fn main() -> ExitCode {
             match cat.as_deref() {
                 None => {
                     println!("Running all planned substrate diagnostic probes...");
-                    println!("Status: Not implemented yet.");
-                    ExitCode::from(1)
-                }
-                Some("procfs") => {
-                    println!("Probing procfs helper behavior...");
-                    println!("Status: Not implemented yet.");
-                    ExitCode::from(1)
-                }
-                Some("inotify") => {
-                    println!("Probing inotify substrate...");
-                    println!("Status: Not implemented yet.");
-                    ExitCode::from(1)
+                    let p1 = probe_paths();
+                    if p1 {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
                 }
                 Some("paths") => {
-                    println!("Probing path existence/visibility...");
-                    println!("Status: Not implemented yet.");
-                    ExitCode::from(1)
+                    if probe_paths() {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
                 }
-                Some("spawn") => {
-                    println!("Probing process spawning primitives...");
+                Some("procfs") | Some("inotify") | Some("spawn") => {
+                    println!("Probing {} substrate...", cat.unwrap());
                     println!("Status: Not implemented yet.");
                     ExitCode::from(1)
                 }
