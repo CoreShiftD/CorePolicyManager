@@ -18,6 +18,14 @@ This project uses a two-binary model to separate production daemon logic from di
 - **`cargo test`**: The primary source of truth for development validation. All logic should be verified here using unit and integration tests.
 - **`coredebug`**: Specialized for on-device diagnostics and manual probes that cannot be easily represented in a standard cargo test environment (e.g., specific Android kernel behaviors). It is **not** a replacement for `cargo test`.
 
+## low_level API stability
+The `low_level` module is the stable, frozen substrate of CoreShift Policy. 
+
+- **Stability Guarantee**: Higher layers (daemon runtime, feature modules) build on this API. Breaking changes to `low_level` are avoided in favor of additive improvements.
+- **Scope**: Owns syscalls, FFI, resource ownership (FDs/PIDs), and non-blocking I/O multiplexing.
+- **Policy Neutral**: No business logic or daemon-level policy resides in `low_level`.
+- **Validation**: Every public API is verified by `cargo test` and documented with usage examples.
+
 ## Binary Identity (Production)
 - **Product Name**: CoreShift Policy
 - **Executable**: `corepolicy`

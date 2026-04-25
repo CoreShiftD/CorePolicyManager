@@ -2,6 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Process spawning and lifecycle management.
+//!
+//! This module provides high-level primitives for spawning processes with
+//! resource constraints, I/O redirection, and automatic cleanup. It supports
+//! both `posix_spawn` and `fork`/`exec` backends, with automatic selection
+//! based on platform capabilities.
+
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::os::unix::io::RawFd;
@@ -14,23 +21,23 @@ use libc::{
 };
 
 unsafe extern "C" {
-    pub static mut environ: *mut *mut libc::c_char;
+    pub(crate) static mut environ: *mut *mut libc::c_char;
 }
 
 #[cfg(target_os = "android")]
 unsafe extern "C" {
-    pub fn __system_property_get(
+    pub(crate) fn __system_property_get(
         name: *const libc::c_char,
         value: *mut libc::c_char,
     ) -> libc::c_int;
 }
 
-pub const POSIX_SPAWN_SETPGROUP: i32 = 2;
-pub const POSIX_SPAWN_SETSIGDEF: i32 = 4;
-pub const POSIX_SPAWN_SETSIGMASK: i32 = 8;
+pub(crate) const POSIX_SPAWN_SETPGROUP: i32 = 2;
+pub(crate) const POSIX_SPAWN_SETSIGDEF: i32 = 4;
+pub(crate) const POSIX_SPAWN_SETSIGMASK: i32 = 8;
 
 unsafe extern "C" {
-    pub fn posix_spawn(
+    pub(crate) fn posix_spawn(
         pid: *mut libc::pid_t,
         path: *const libc::c_char,
         file_actions: *const libc::posix_spawn_file_actions_t,
@@ -39,45 +46,45 @@ unsafe extern "C" {
         envp: *const *mut libc::c_char,
     ) -> libc::c_int;
 
-    pub fn posix_spawn_file_actions_addclose(
+    pub(crate) fn posix_spawn_file_actions_addclose(
         file_actions: *mut libc::posix_spawn_file_actions_t,
         fd: libc::c_int,
     ) -> libc::c_int;
 
-    pub fn posix_spawn_file_actions_adddup2(
+    pub(crate) fn posix_spawn_file_actions_adddup2(
         file_actions: *mut libc::posix_spawn_file_actions_t,
         fd: libc::c_int,
         newfd: libc::c_int,
     ) -> libc::c_int;
 
-    pub fn posix_spawn_file_actions_destroy(
+    pub(crate) fn posix_spawn_file_actions_destroy(
         file_actions: *mut libc::posix_spawn_file_actions_t,
     ) -> libc::c_int;
 
-    pub fn posix_spawn_file_actions_init(
+    pub(crate) fn posix_spawn_file_actions_init(
         file_actions: *mut libc::posix_spawn_file_actions_t,
     ) -> libc::c_int;
 
-    pub fn posix_spawnattr_destroy(attr: *mut libc::posix_spawnattr_t) -> libc::c_int;
+    pub(crate) fn posix_spawnattr_destroy(attr: *mut libc::posix_spawnattr_t) -> libc::c_int;
 
-    pub fn posix_spawnattr_init(attr: *mut libc::posix_spawnattr_t) -> libc::c_int;
+    pub(crate) fn posix_spawnattr_init(attr: *mut libc::posix_spawnattr_t) -> libc::c_int;
 
-    pub fn posix_spawnattr_setflags(
+    pub(crate) fn posix_spawnattr_setflags(
         attr: *mut libc::posix_spawnattr_t,
         flags: libc::c_short,
     ) -> libc::c_int;
 
-    pub fn posix_spawnattr_setpgroup(
+    pub(crate) fn posix_spawnattr_setpgroup(
         attr: *mut libc::posix_spawnattr_t,
         pgroup: libc::pid_t,
     ) -> libc::c_int;
 
-    pub fn posix_spawnattr_setsigdefault(
+    pub(crate) fn posix_spawnattr_setsigdefault(
         attr: *mut libc::posix_spawnattr_t,
         sigdefault: *const libc::sigset_t,
     ) -> libc::c_int;
 
-    pub fn posix_spawnattr_setsigmask(
+    pub(crate) fn posix_spawnattr_setsigmask(
         attr: *mut libc::posix_spawnattr_t,
         sigmask: *const libc::sigset_t,
     ) -> libc::c_int;
@@ -85,18 +92,27 @@ unsafe extern "C" {
 
 use serde::{Deserialize, Serialize};
 
+/// Error type for low-level system operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SysError {
-    Syscall { code: i32, op: String },
+    /// A syscall failed with the specified error code.
+    Syscall {
+        /// The raw OS error code.
+        code: i32,
+        /// The name of the failed operation.
+        op: String,
+    },
 }
 
 impl SysError {
+    /// Construct a new syscall error.
     pub fn sys(code: i32, op: &str) -> Self {
         SysError::Syscall {
             code,
             op: op.to_string(),
         }
     }
+    /// Return the raw OS error code if applicable.
     pub fn raw_os_error(&self) -> Option<i32> {
         match self {
             SysError::Syscall { code, .. } => Some(*code),
@@ -115,7 +131,7 @@ impl fmt::Display for SysError {
 impl std::error::Error for SysError {}
 
 #[inline(always)]
-pub fn syscall_ret(ret: i32, op: &'static str) -> Result<(), SysError> {
+pub(crate) fn syscall_ret(ret: i32, op: &'static str) -> Result<(), SysError> {
     if ret == -1 {
         let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         Err(SysError::sys(code, op))
@@ -125,7 +141,7 @@ pub fn syscall_ret(ret: i32, op: &'static str) -> Result<(), SysError> {
 }
 
 #[inline(always)]
-pub fn posix_ret(ret: i32, op: &'static str) -> Result<(), SysError> {
+pub(crate) fn posix_ret(ret: i32, op: &'static str) -> Result<(), SysError> {
     if ret != 0 {
         Err(SysError::sys(ret, op))
     } else {
@@ -276,16 +292,23 @@ unsafe fn close_range_fast(keep_fd: Option<RawFd>) {
     }
 }
 
+/// Represents the termination status of a process.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExitStatus {
+    /// Process exited normally with the specified code.
     Exited(i32),
+    /// Process was terminated by a signal.
     Signaled(i32),
 }
 
+/// Advisory selection of the process spawning backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnBackend {
+    /// Let the system choose the best backend (preferred).
     Auto,
+    /// Force the use of `posix_spawn`.
     PosixSpawn,
+    /// Force the use of `fork`/`exec`.
     Fork,
 }
 
@@ -300,19 +323,23 @@ fn decode_status(status: i32) -> ExitStatus {
     }
 }
 
+/// A handle to a spawned process.
 pub struct Process {
     pid: pid_t,
 }
 
 impl Process {
+    /// Create a handle for an existing PID.
     pub fn new(pid: pid_t) -> Self {
         Self { pid }
     }
 
+    /// Return the process ID.
     pub fn pid(&self) -> pid_t {
         self.pid
     }
 
+    /// Perform a non-blocking wait for process termination.
     pub fn wait_step(&self) -> Result<Option<ExitStatus>, SysError> {
         loop {
             let mut status = 0;
@@ -331,6 +358,7 @@ impl Process {
         }
     }
 
+    /// Block until the process terminates.
     pub fn wait_blocking(&self) -> Result<ExitStatus, SysError> {
         loop {
             let mut status = 0;
@@ -346,6 +374,7 @@ impl Process {
         }
     }
 
+    /// Send a signal to the process.
     pub fn kill(&self, sig: i32) -> Result<(), SysError> {
         let r = unsafe { libc::kill(self.pid, sig) };
         if r < 0 {
@@ -358,6 +387,7 @@ impl Process {
         Ok(())
     }
 
+    /// Send a signal to the process group.
     pub fn kill_pgroup(&self, sig: i32) -> Result<(), SysError> {
         let r = unsafe { libc::kill(-self.pid, sig) };
         if r < 0 {
@@ -371,28 +401,47 @@ impl Process {
     }
 }
 
+/// Configuration options for spawning a new process.
 #[derive(Clone)]
 pub struct SpawnOptions {
+    /// Execution context (argv, env, cwd).
     pub ctx: ExecContext,
+    /// Optional buffer to write to the child's stdin.
     pub stdin: Option<Box<[u8]>>,
+    /// Capture the child's stdout.
     pub capture_stdout: bool,
+    /// Capture the child's stderr.
     pub capture_stderr: bool,
+    /// Wait for the process to terminate.
     pub wait: bool,
+    /// Process group and isolation settings.
     pub pgroup: ProcessGroup,
+    /// Maximum number of bytes to capture from output streams.
     pub max_output: usize,
+    /// Optional execution timeout in milliseconds.
     pub timeout_ms: Option<u32>,
+    /// Grace period in milliseconds before `SIGKILL` after `SIGTERM`.
     pub kill_grace_ms: u32,
+    /// Policy for handling process cancellation/timeout.
     pub cancel: CancelPolicy,
+    /// Advisory selection of the spawning backend.
     pub backend: SpawnBackend,
+    /// Optional closure called on each stdout chunk; return `true` to exit early.
     pub early_exit: Option<fn(&[u8]) -> bool>,
 }
 
+/// The result of a process execution.
 #[derive(Debug)]
 pub struct Output {
+    /// The PID of the finished process.
     pub pid: pid_t,
+    /// Final exit status (None if `wait=false`).
     pub status: Option<ExitStatus>,
+    /// Captured stdout buffer.
     pub stdout: Vec<u8>,
+    /// Captured stderr buffer.
     pub stderr: Vec<u8>,
+    /// Whether the process timed out.
     pub timed_out: bool,
 }
 
@@ -446,27 +495,26 @@ fn resolve_backend(opts: &SpawnOptions) -> Backend {
     }
 }
 
-/// Spawns a new process with bounded execution constraints.
-///
-/// **Contracts & Limitations:**
-/// - `backend` is advisory. The system will force a `Fork` fallback to maintain correctness
-///   if incompatible options (like `cwd` or `setsid`) are requested.
-/// - The `posix_spawn` path provides **best-effort FD isolation**, closing all tracked FDs up to `MAX_USED_FD`.
-///   It is not strictly isolated from externally opened FDs without O_CLOEXEC.
-/// - If `wait = false`, the caller is **strictly responsible** for reaping the child process.
-/// - The standard stream read buffer uses a fixed-size stack allocation internally to prevent heap churn.
-/// - No relative ordering or interleaving is guaranteed between the collected `stdout` and `stderr` buffers.
 use crate::low_level::io::DrainState;
 
+/// Specialized drain state for process spawning.
 pub type SpawnDrain = DrainState<fn(&[u8]) -> bool>;
 
+/// A process that is currently running and being monitored.
 pub struct RunningProcess {
+    /// Handle to the process.
     pub process: Process,
+    /// I/O management state.
     pub drain: SpawnDrain,
 }
 
 use crate::low_level::reactor::Reactor;
 
+/// Start spawning a process and return a monitor handle.
+///
+/// This initializes the pipes and starts the process, but does not block.
+/// The caller is responsible for adding the resulting pipe descriptors to a
+/// reactor and draining them.
 pub fn spawn_start(job_id: u64, opts: SpawnOptions) -> Result<RunningProcess, SysError> {
     if !opts.wait && (opts.stdin.is_some() || opts.capture_stdout || opts.capture_stderr) {
         return Err(SysError::sys(
@@ -488,6 +536,10 @@ pub fn spawn_start(job_id: u64, opts: SpawnOptions) -> Result<RunningProcess, Sy
     })
 }
 
+/// Spawn a process and block until completion or timeout.
+///
+/// This is the primary high-level interface for process execution. It handles
+/// the full lifecycle, including I/O multiplexing and signal management.
 pub fn spawn(opts: SpawnOptions) -> Result<Output, SysError> {
     let wait = opts.wait;
     let timeout_ms = opts.timeout_ms;
@@ -502,8 +554,6 @@ pub fn spawn(opts: SpawnOptions) -> Result<Output, SysError> {
     let mut drain = running.drain;
 
     // To prevent FD leak and adhere to ownership, we shouldn't use `mem::forget`.
-    // Wait, wait_loop expects `drain` to still have slots!
-    // But `take_all_slots` empties them. We should iterate mutably, or reassign tokens if we keep them in `drain`.
     if let Some(mut slot) = drain.stdin_slot.take() {
         slot.token = Some(reactor.add(&slot.fd, false, true)?);
         drain.stdin_slot = Some(slot);

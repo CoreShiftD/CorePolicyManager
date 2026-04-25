@@ -2,21 +2,33 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Asynchronous I/O writing.
+//!
+//! This module provides the [`WriterState`] structure which handles
+//! non-blocking writes of stdin buffers to monitored processes.
+
 use crate::low_level::reactor::Fd;
 use crate::low_level::spawn::SysError;
 
 const WRITE_CHUNK: usize = 65536;
 
+/// Manages the transmission of a fixed buffer to a pipe.
 pub struct WriterState {
-    pub buf: Option<Box<[u8]>>,
-    pub off: usize,
+    pub(crate) buf: Option<Box<[u8]>>,
+    off: usize,
 }
 
 impl WriterState {
+    /// Create a new writer state for the specified buffer.
     pub fn new(buf: Option<Box<[u8]>>) -> Self {
         Self { buf, off: 0 }
     }
 
+    /// Write as much data as possible to the specified descriptor.
+    ///
+    /// # Returns
+    /// * `Ok(true)` if the entire buffer has been written or the pipe is closed.
+    /// * `Ok(false)` if the operation would block (`EAGAIN`).
     #[inline(always)]
     pub fn write_to_fd(&mut self, fd: &Fd) -> Result<bool, SysError> {
         if let Some(buf) = &self.buf {

@@ -4,37 +4,54 @@
 
 //! Raw inotify helpers.
 //!
-//! Runtime code owns the semantic mapping from watch descriptors to daemon
-//! events. This module owns only syscalls and byte-level event decoding.
+//! This module provides low-level interaction with the Linux `inotify` subsystem.
+//! It handles the initialization of watches, reading of raw events, and
+//! decoding of the packed event stream.
+//!
+//! Higher-level modules should use these primitives to monitor configuration
+//! files, log directories, or process markers.
 
 use crate::low_level::reactor::Fd;
 use crate::low_level::spawn::SysError;
 
-/// A decoded inotify event.
+/// A decoded inotify event header.
 ///
-/// NOTE: This currently only captures the fixed-size event header.
-/// Directory watches that require filtering by child filename must be extended
-/// to read and store the `name` field from the raw event buffer.
+/// This structure represents the fixed-size portion of an `inotify_event`.
+///
+/// NOTE: The `name` field is currently skipped during decoding. Directory
+/// watches that require filtering by child filename must be extended to
+/// capture the variable-length name buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InotifyEvent {
+    /// Watch descriptor that generated this event.
     pub wd: i32,
+    /// Event mask (e.g., [`MODIFY_MASK`]).
     pub mask: u32,
-    /// Raw `inotify_event.len` value.
-    ///
-    /// File watches commonly report an empty name; directory watches may carry
-    /// the affected child name. This implementation currently ignores the
-    /// name bytes; `name_len` indicates how many bytes were skipped.
+    /// Length of the name field (0 if no name is present).
     pub name_len: u32,
 }
 
+/// File was modified.
 pub const MODIFY_MASK: u32 = libc::IN_MODIFY;
+/// Mask for monitoring package file state changes.
 pub const PACKAGE_FILE_MASK: u32 = libc::IN_MODIFY | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
+/// Inotify event queue overflowed.
 pub const QUEUE_OVERFLOW_MASK: u32 = libc::IN_Q_OVERFLOW;
+/// Watch was removed (explicitly or because file was deleted).
 pub const IGNORED_MASK: u32 = libc::IN_IGNORED;
+/// Filesystem containing watched object was unmounted.
 pub const UNMOUNT_MASK: u32 = libc::IN_UNMOUNT;
+/// Watched file/directory was deleted.
 pub const DELETE_SELF_MASK: u32 = libc::IN_DELETE_SELF;
+/// Watched file/directory was moved.
 pub const MOVE_SELF_MASK: u32 = libc::IN_MOVE_SELF;
 
+/// Add a watch to an existing inotify instance.
+///
+/// # Arguments
+/// * `fd` - The inotify file descriptor.
+/// * `path` - Path to the file or directory to watch.
+/// * `mask` - Events to monitor (e.g., [`MODIFY_MASK`]).
 pub fn add_watch(fd: &Fd, path: &str, mask: u32) -> Result<i32, SysError> {
     let path = std::ffi::CString::new(path)
         .map_err(|_| SysError::sys(libc::EINVAL, "inotify path contains nul"))?;
@@ -48,6 +65,10 @@ pub fn add_watch(fd: &Fd, path: &str, mask: u32) -> Result<i32, SysError> {
     Ok(wd)
 }
 
+/// Read all available inotify events from the descriptor.
+///
+/// This function drains the inotify file descriptor until no more events
+/// are available (`EAGAIN`). It is safe to use with edge-triggered reactors.
 pub fn read_events(fd: &Fd) -> Result<Vec<InotifyEvent>, SysError> {
     let mut all_events = Vec::new();
     let mut buf = vec![0u8; 4096];
@@ -66,6 +87,10 @@ pub fn read_events(fd: &Fd) -> Result<Vec<InotifyEvent>, SysError> {
     Ok(all_events)
 }
 
+/// Decode packed inotify events from a raw byte buffer.
+///
+/// This handles multi-event buffers and handles unaligned reads safely.
+/// Truncated events at the end of the buffer are ignored.
 pub fn decode_events(buf: &[u8]) -> Vec<InotifyEvent> {
     let mut events = Vec::new();
     let mut offset = 0;

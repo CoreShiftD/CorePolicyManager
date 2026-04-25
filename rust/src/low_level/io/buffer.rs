@@ -2,20 +2,31 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/
 
+//! Asynchronous I/O buffering.
+//!
+//! This module provides the [`BufferState`] structure which accumulates
+//! stdout and stderr data from monitored processes.
+
 use crate::low_level::reactor::Fd;
 use crate::low_level::spawn::SysError;
 
 const READ_CHUNK: usize = 65536;
 
+/// Accumulates output from process streams.
+///
+/// `BufferState` manages the collection of bytes from stdout and stderr pipes.
+/// It enforces a combined memory limit to prevent runaway memory usage by
+/// misbehaving processes.
 #[derive(Default)]
 #[repr(align(64))]
 pub struct BufferState {
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub limit: usize,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    limit: usize,
 }
 
 impl BufferState {
+    /// Create a new buffer state with the specified memory limit.
     pub fn new(limit: usize) -> Self {
         Self {
             stdout: Vec::with_capacity(1024),
@@ -24,6 +35,11 @@ impl BufferState {
         }
     }
 
+    /// Drain available data from a file descriptor into internal storage.
+    ///
+    /// # Returns
+    /// * `Ok(true)` if EOF was reached.
+    /// * `Ok(false)` if the operation would block (`EAGAIN`).
     #[inline(always)]
     pub fn read_from_fd(
         &mut self,
@@ -92,6 +108,7 @@ impl BufferState {
         }
     }
 
+    /// Consume the state and return the accumulated buffers.
     pub fn into_parts(mut self) -> (Vec<u8>, Vec<u8>) {
         (
             std::mem::take(&mut self.stdout),

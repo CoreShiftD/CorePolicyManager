@@ -54,9 +54,12 @@ pub fn read_to_string(path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(path)
 }
 
+/// A snapshot of process status information from procfs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcStatus {
+    /// Command name of the process.
     pub name: String,
+    /// Real UID of the process.
     pub uid: u32,
 }
 
@@ -81,6 +84,7 @@ pub fn read_proc_cmdline(pid: i32) -> Result<String, std::io::Error> {
         .replace('\0', " "))
 }
 
+/// Parse the contents of a /proc/pid/status file.
 pub fn parse_proc_status(content: &str) -> Result<ProcStatus, std::io::Error> {
     let mut name = None;
     let mut uid = None;
@@ -109,20 +113,24 @@ pub fn parse_proc_status(content: &str) -> Result<ProcStatus, std::io::Error> {
     }
 }
 
+/// Utilities for process signal management.
 pub struct SignalRuntime;
 
+/// Return the system clock ticks per second.
 #[inline(always)]
 pub fn get_clk_tck() -> u64 {
     unsafe { libc::sysconf(libc::_SC_CLK_TCK) as u64 }
 }
 
 impl SignalRuntime {
+    /// Create an empty signal set.
     pub fn empty_set() -> sigset_t {
         let mut set: sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut set) };
         set
     }
 
+    /// Create a signal set containing the specified signals.
     pub fn set_with(signals: &[i32]) -> sigset_t {
         let mut set: sigset_t = unsafe { std::mem::zeroed() };
         unsafe { libc::sigemptyset(&mut set) };
@@ -132,12 +140,14 @@ impl SignalRuntime {
         set
     }
 
+    /// Unblock all signals for the current thread.
     pub fn unblock_all() -> Result<(), SysError> {
         let empty_mask = Self::empty_set();
         let r = unsafe { libc::sigprocmask(libc::SIG_SETMASK, &empty_mask, std::ptr::null_mut()) };
         syscall_ret(r, "sigprocmask")
     }
 
+    /// Reset a signal to its default kernel handler.
     pub fn reset_default(sig: i32) {
         unsafe { libc::signal(sig, libc::SIG_DFL) };
     }
@@ -147,21 +157,29 @@ use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::ptr;
 
+/// Policy for handling process cancellation or timeouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CancelPolicy {
+    /// Do nothing on cancellation; let the process run to completion.
     #[default]
     None,
-    Graceful, // implies term then kill
-    Kill,     // implies direct kill
+    /// Send SIGTERM, then SIGKILL after a grace period.
+    Graceful,
+    /// Send SIGKILL immediately.
+    Kill,
 }
 
+/// Process group and session configuration.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProcessGroup {
+    /// Join an existing process group leader.
     pub leader: Option<pid_t>,
-    pub isolated: bool, // Corresponds to setsid
+    /// Create a new session (setsid).
+    pub isolated: bool,
 }
 
 impl ProcessGroup {
+    /// Create a new process group configuration.
     pub fn new(leader: Option<pid_t>, isolated: bool) -> Self {
         Self { leader, isolated }
     }
@@ -169,15 +187,21 @@ impl ProcessGroup {
 
 use arrayvec::ArrayVec;
 
+/// Owned argument vector storage.
 #[derive(Clone)]
 pub enum ExecArgv {
+    /// Dynamically allocated C-compatible strings.
     Dynamic(Vec<CString>),
 }
 
+/// Validated execution context for process spawning.
 #[derive(Clone)]
 pub struct ExecContext {
+    /// The argument vector.
     pub argv: ExecArgv,
+    /// Optional environment variables.
     pub envp: Option<Vec<CString>>,
+    /// Optional working directory.
     pub cwd: Option<CString>,
 }
 
@@ -187,9 +211,6 @@ impl ExecContext {
     /// Rejections are explicit:
     /// - empty argv is invalid
     /// - interior NUL bytes in argv/env/cwd are invalid
-    ///
-    /// Higher layers should surface this as a normal spawn failure rather than
-    /// attempting to repair or silently drop invalid inputs.
     pub fn new(
         argv: Vec<String>,
         env: Option<Vec<String>>,
@@ -241,12 +262,11 @@ impl ExecContext {
         })
     }
 
+    /// Return a fixed-size array of pointers to the argument strings.
     pub fn get_argv_ptrs(&self) -> ArrayVec<*mut c_char, 64> {
         let mut ptrs = ArrayVec::new();
         match &self.argv {
             ExecArgv::Dynamic(v) => {
-                // The pointed-to CString storage is owned by self; only the
-                // pointer array is transient.
                 for s in v {
                     if ptrs.try_push(s.as_ptr() as *mut c_char).is_err() {
                         break;
@@ -261,10 +281,8 @@ impl ExecContext {
         ptrs
     }
 
+    /// Return a fixed-size array of pointers to the environment strings.
     pub fn get_envp_ptrs(&self) -> Option<ArrayVec<*mut c_char, 64>> {
-        // We intentionally truncate to keep the stack-allocated pointer array
-        // bounded; the owned CString storage remains valid for the lifetime of
-        // the context.
         self.envp.as_ref().map(|envp| {
             let mut ptrs = ArrayVec::new();
             for s in envp {
