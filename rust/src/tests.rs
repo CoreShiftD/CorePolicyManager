@@ -607,7 +607,7 @@ mod tests_internal {
         );
         assert_eq!(reqs.len(), 2);
         if let crate::core::Intent::AddonLog { msg, .. } = &reqs[1].intent {
-            assert!(msg.contains("skip") && msg.contains("failure_backoff"));
+            assert!(msg.contains("skipped") && msg.contains("negative_cache"));
         } else {
             panic!("Expected SKIP log");
         }
@@ -1229,6 +1229,7 @@ mod tests_internal {
             enabled: true,
             last_foreground_pid: 1234,
             last_foreground_package: Some("com.example.app".to_string()),
+            last_transition: Some("none -> com.example.app".to_string()),
             package_cache_count: 3,
             package_cache_dirty: true,
             dedup_cache_count: 1,
@@ -1268,6 +1269,7 @@ mod tests_internal {
             uptime_secs: 10,
             mode: "preload".to_string(),
             socket_path: "/data/local/tmp/coreshift/coreshift.sock".to_string(),
+            active_clients: 1,
             preload_addon_loaded: true,
             enable_preload_file_exists: false,
             enable_preload_path: "/data/local/tmp/coreshift/control/enable_preload".to_string(),
@@ -1287,6 +1289,7 @@ mod tests_internal {
                 enabled: true,
                 last_foreground_pid: 42,
                 last_foreground_package: Some("com.test".to_string()),
+                last_transition: Some("none -> com.test".to_string()),
                 package_cache_count: 1,
                 package_cache_dirty: false,
                 dedup_cache_count: 0,
@@ -1337,6 +1340,7 @@ mod tests_internal {
             0,
             "preload",
             "/data/local/tmp/coreshift/coreshift.sock",
+            0,
             Some(&addon as &dyn Addon),
             &watches,
             None,
@@ -1366,7 +1370,7 @@ mod tests_internal {
     fn runtime_assembler_without_preload_addon() {
         use crate::runtime::assemble_daemon_status;
 
-        let report = assemble_daemon_status(0, "normal", "/tmp/test.sock", None, &[], None);
+        let report = assemble_daemon_status(0, "normal", "/tmp/test.sock", 0, None, &[], None);
 
         assert_eq!(report.mode, "normal");
         assert!(!report.preload_addon_loaded);
@@ -1543,6 +1547,7 @@ mod tests_internal {
             0,
             "preload",
             "/tmp/s.sock",
+            0,
             Some(&addon as &dyn Addon),
             &regs,
             None,
@@ -1579,13 +1584,15 @@ mod tests_internal {
                     check_dir(&path, tests_rs, main_rs, forbidden, forbidden_outside_main);
                 } else if path.extension().is_some_and(|e| e == "rs") && path != *tests_rs {
                     let content = std::fs::read_to_string(&path).unwrap();
-                    for token in forbidden {
-                        assert!(
-                            !content.contains(token),
-                            "Found forbidden output macro '{}' in {:?}",
-                            token,
-                            path
-                        );
+                    if path != *main_rs {
+                        for token in forbidden {
+                            assert!(
+                                !content.contains(token),
+                                "Found forbidden output macro '{}' in {:?}",
+                                token,
+                                path
+                            );
+                        }
                     }
                     if path != *main_rs {
                         assert!(

@@ -47,6 +47,7 @@ pub struct PreloadAddon {
     last_foreground_time: u64,
     pending_foreground_pid: Option<i32>,
     last_foreground_package: Option<String>,
+    last_transition: Option<String>,
 
     total_failures: u32,
     auto_disabled: bool,
@@ -80,6 +81,7 @@ impl PreloadAddon {
             last_foreground_time: 0,
             pending_foreground_pid: None,
             last_foreground_package: None,
+            last_transition: None,
             total_failures: 0,
             auto_disabled: false,
             events_seen: 0,
@@ -208,12 +210,19 @@ impl Addon for PreloadAddon {
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Debug,
-                                    msg: format!("preload skip package={} stage=identity reason=system_package", package_name),
+                                    msg: format!("transient_noisy_skip package={}", package_name),
                                 }));
                                 return reqs;
                             }
 
-                            self.last_foreground_package = Some(package_name.clone());
+                            if self.last_foreground_package.as_deref() != Some(&package_name) {
+                                self.last_transition = Some(format!(
+                                    "{} -> {}",
+                                    self.last_foreground_package.as_deref().unwrap_or("none"),
+                                    package_name
+                                ));
+                                self.last_foreground_package = Some(package_name.clone());
+                            }
                             reqs.push(self.submit(Intent::AddonLog {
                                 addon_id: 102,
                                 level: LogLevel::Debug,
@@ -229,9 +238,9 @@ impl Addon for PreloadAddon {
                                 self.last_skip_package = Some(package_name.clone());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
-                                    level: LogLevel::Debug,
+                                    level: LogLevel::Info,
                                     msg: format!(
-                                        "preload skip package={} stage=identity reason=already_in_flight",
+                                        "preload_skipped pkg={} reason=already_in_flight",
                                         package_name
                                     ),
                                 }));
@@ -244,9 +253,9 @@ impl Addon for PreloadAddon {
                                 self.last_skip_package = Some(package_name.clone());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
-                                    level: LogLevel::Warn,
+                                    level: LogLevel::Info,
                                     msg: format!(
-                                        "preload skip package={} stage=identity reason=global_budget_full count={}",
+                                        "preload_skipped pkg={} reason=global_budget_full count={}",
                                         package_name, self.in_flight.len()
                                     ),
                                 }));
@@ -261,8 +270,8 @@ impl Addon for PreloadAddon {
                                     self.last_skip_package = Some(package_name.clone());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
-                                        level: LogLevel::Debug,
-                                        msg: format!("preload skip package={} stage=identity reason=failure_backoff remaining_ms={}", package_name, self.config.per_package_failure_backoff_ms - elapsed),
+                                        level: LogLevel::Info,
+                                        msg: format!("preload_skipped pkg={} reason=negative_cache remaining_ms={}", package_name, self.config.per_package_failure_backoff_ms - elapsed),
                                     }));
                                     return reqs;
                                 }
@@ -276,8 +285,8 @@ impl Addon for PreloadAddon {
                                     self.last_skip_package = Some(package_name.clone());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
-                                        level: LogLevel::Debug,
-                                        msg: format!("preload skip package={} stage=identity reason=cooldown remaining_ms={}", package_name, self.config.per_package_warmup_cooldown_ms - elapsed),
+                                        level: LogLevel::Info,
+                                        msg: format!("preload_skipped pkg={} reason=dedup_cooldown remaining_ms={}", package_name, self.config.per_package_warmup_cooldown_ms - elapsed),
                                     }));
                                     return reqs;
                                 }
@@ -341,9 +350,9 @@ impl Addon for PreloadAddon {
                                 self.negative_cache.insert(package_name.clone(), now);
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
-                                    level: LogLevel::Warn,
+                                    level: LogLevel::Info,
                                     msg: format!(
-                                        "preload skip package={} stage=discovery reason=no_paths",
+                                        "preload_skipped pkg={} reason=no_paths",
                                         package_name
                                     ),
                                 }));
@@ -366,7 +375,7 @@ impl Addon for PreloadAddon {
                                 addon_id: 102,
                                 level: LogLevel::Info,
                                 msg: format!(
-                                    "preload warmup task queued: package={} paths={} in_flight={}",
+                                    "preload_queued pkg={} paths={} in_flight={}",
                                     package_name,
                                     paths.len(),
                                     self.in_flight.len()
@@ -408,7 +417,7 @@ impl Addon for PreloadAddon {
                     reqs.push(self.submit(Intent::AddonLog {
                         addon_id: 102,
                         level: LogLevel::Info,
-                        msg: format!("preload_success {}", result_summary),
+                        msg: format!("preload_complete {}", result_summary),
                     }));
                 }
             }
@@ -424,10 +433,10 @@ impl Addon for PreloadAddon {
                 self.total_failures += 1;
                 reqs.push(self.submit(Intent::AddonLog {
                     addon_id: 102,
-                    level: LogLevel::Warn,
+                    level: LogLevel::Info,
                     msg: format!(
-                        "preload_task_failed stage={} package={} err={} total_fails={}",
-                        key, package, err, self.total_failures
+                        "preload_failed pkg={} reason={} err={} total_fails={}",
+                        package, key, err, self.total_failures
                     ),
                 }));
             }
@@ -452,6 +461,7 @@ impl PreloadAddon {
             enabled: self.config.enabled,
             last_foreground_pid: self.last_foreground_pid,
             last_foreground_package: self.last_foreground_package.clone(),
+            last_transition: self.last_transition.clone(),
             package_cache_count: self.package_map.len(),
             package_cache_dirty: self.package_cache_dirty,
             dedup_cache_count: self.dedup_cache.len(),

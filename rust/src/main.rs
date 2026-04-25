@@ -15,10 +15,14 @@ enum Command {
 }
 
 fn log_cli(level: CoreShift::core::LogLevel, message: impl Into<String>) {
+    let msg = message.into();
+    if level == CoreShift::core::LogLevel::Error {
+        eprintln!("{}", msg);
+    }
     CoreShift::runtime::log_runtime_event(
         CoreShift::core::CORE_OWNER,
         level,
-        CoreShift::core::LogEvent::Generic(message.into()),
+        CoreShift::core::LogEvent::Generic(msg),
     );
 }
 
@@ -61,7 +65,7 @@ fn run_command(command: Command) -> Result<(), String> {
             enable_warmup: false,
             record_path: None,
         })
-        .map_err(|e| format!("{:?}", e)),
+        .map_err(|e| format!("daemon failed: {:?}", e)),
         Command::Help => {
             print_help();
             Ok(())
@@ -70,34 +74,34 @@ fn run_command(command: Command) -> Result<(), String> {
             enable_warmup: true,
             record_path: None,
         })
-        .map_err(|e| format!("{:?}", e)),
+        .map_err(|e| format!("daemon failed: {:?}", e)),
         Command::PreloadStatus { summary } => {
             use std::io::{Read, Write};
             use std::os::unix::net::UnixStream;
             use std::time::Duration;
 
             let stream_res = UnixStream::connect(CoreShift::paths::SOCKET_PATH);
-            let mut stream = stream_res.map_err(|e| format!("failed to connect to daemon: {}", e))?;
+            let mut stream = stream_res.map_err(|e| format!("failed to connect to daemon socket (is it running?): {}", e))?;
 
             // Set reasonable timeouts for the status request.
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("failed to set read timeout: {}", e))?;
             stream
                 .set_write_timeout(Some(Duration::from_secs(5)))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("failed to set write timeout: {}", e))?;
 
             // Type 4: PreloadStatus request (single-byte body, no JSON payload).
             let body: [u8; 1] = [4u8];
             let len = (body.len() as u32).to_le_bytes();
-            stream.write_all(&len).map_err(|e| e.to_string())?;
-            stream.write_all(&body).map_err(|e| e.to_string())?;
+            stream.write_all(&len).map_err(|e| format!("failed to write request length: {}", e))?;
+            stream.write_all(&body).map_err(|e| format!("failed to write request body: {}", e))?;
 
             // Read 4-byte length prefix.
             let mut len_buf = [0u8; 4];
             if let Err(e) = stream.read_exact(&mut len_buf) {
                 if e.kind() == std::io::ErrorKind::TimedOut {
-                    return Err("timeout waiting for daemon response".to_string());
+                    return Err("timeout waiting for daemon response length prefix".to_string());
                 }
                 return Err(format!("failed to read response length: {}", e));
             }
@@ -117,7 +121,7 @@ fn run_command(command: Command) -> Result<(), String> {
 
             // Response type byte 5 = PreloadStatus JSON payload.
             if resp_buf[0] != 5 {
-                return Err(format!("unexpected response type: {}", resp_buf[0]));
+                return Err(format!("unexpected response type: {} (expected 5)", resp_buf[0]));
             }
 
             let json_bytes = &resp_buf[1..];
@@ -128,35 +132,29 @@ fn run_command(command: Command) -> Result<(), String> {
             ) {
                 Ok(report) => {
                     if summary {
-                        println!("CoreShift Daemon Status");
-                        println!("=======================");
-                        println!("Uptime:      {}s", report.uptime_secs);
-                        println!("Mode:        {}", report.mode);
-                        println!("Socket:      {}", report.socket_path);
-                        println!("Preload:     {}", if report.preload_addon_loaded { "Loaded" } else { "Not Loaded" });
+                        println!("daemon:           alive");
+                        println!("uptime:           {}s", report.uptime_secs);
+                        println!("socket_clients:   {}", report.active_clients);
+                        println!("watches_active:   {}", if report.inotify.as_ref().map(|i| i.fd_active).unwrap_or(false) { "yes" } else { "no" });
                         
                         if let Some(snap) = report.preload {
-                            println!("\nPreload Addon State");
-                            println!("-------------------");
-                            println!("Enabled:     {}", snap.enabled);
-                            println!("Events Seen: {}", snap.events_seen);
-                            println!("In Flight:   {} {:?}", snap.in_flight_count, snap.in_flight_packages);
-                            println!("Caches:      dedup={} negative={} pkgs={}", snap.dedup_cache_count, snap.negative_cache_count, snap.package_cache_count);
-                            println!("Failures:    {} (auto_disabled={})", snap.total_failures, snap.auto_disabled);
+                            println!("foreground_pkg:   {}", snap.last_foreground_package.as_deref().unwrap_or("none"));
+                            println!("last_transition:  {}", snap.last_transition.as_deref().unwrap_or("none"));
+                            println!("last_preload_pkg: {}", snap.last_warmup_package.as_deref().unwrap_or("none"));
                             
-                            if let Some(pkg) = snap.last_foreground_package {
-                                println!("Foreground:  {} (pid={})", pkg, snap.last_foreground_pid);
+                            let last_res = if let Some(_pkg) = &snap.last_warmup_package {
+                                snap.last_warmup_result.clone().unwrap_or_else(|| "unknown".to_string())
+                            } else if let Some(_stage) = &snap.last_skip_stage {
+                                format!("skipped({})", snap.last_skip_reason.as_deref().unwrap_or("unknown"))
                             } else {
-                                println!("Foreground:  None (pid={})", snap.last_foreground_pid);
-                            }
-
-                            if let Some(stage) = snap.last_skip_stage {
-                                println!("Last Skip:   stage={} reason={} pkg={:?}", stage, snap.last_skip_reason.as_deref().unwrap_or("none"), snap.last_skip_package);
-                            }
-
-                            if let Some(pkg) = snap.last_warmup_package {
-                                println!("Last Warmup: pkg={} result={:?} paths={}", pkg, snap.last_warmup_result, snap.last_discovered_path_count);
-                            }
+                                "none".to_string()
+                            };
+                            println!("last_preload_res: {}", last_res);
+                            
+                            println!("in_flight:        {} {:?}", snap.in_flight_count, snap.in_flight_packages);
+                            println!("dedup_entries:    {}", snap.dedup_cache_count);
+                            println!("negative_entries: {}", snap.negative_cache_count);
+                            println!("events_seen:      {}", snap.events_seen);
                         }
                     } else {
                         println!(
@@ -165,7 +163,8 @@ fn run_command(command: Command) -> Result<(), String> {
                         );
                     }
                 }
-                Err(_) => {
+                Err(e) => {
+                    eprintln!("failed to parse daemon JSON: {}", e);
                     println!("{}", String::from_utf8_lossy(json_bytes));
                 }
             }

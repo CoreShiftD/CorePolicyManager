@@ -340,6 +340,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     let mut ipc = IpcModule::new(ipc_fd, ipc_token);
 
     let mut preload_inotify = None;
+    let mut last_foreground_package: Option<String> = None;
     // Watch registration results kept here so the IPC status handler can
     // include them in the assembled DaemonStatusReport without re-probing.
     let mut daemon_watch_registrations: Vec<crate::high_level::api::WatchedPathStatus> = Vec::new();
@@ -641,6 +642,7 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             start_time.elapsed().as_secs(),
                             mode,
                             paths::SOCKET_PATH,
+                            ipc.clients.len() as u32,
                             preload_ref,
                             &daemon_watch_registrations,
                             preload_inotify.as_ref().map(|watcher| watcher.status()),
@@ -741,51 +743,47 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                         for event in events {
                             match event {
                                 crate::runtime::PreloadInotifyEvent::ForegroundAccepted {
-                                    old_pid,
+                                    old_pid: _,
                                     new_pid,
-                                    uid,
+                                    uid: _,
                                     package,
                                 } => {
-                                    let _ = effect_executor.apply(crate::core::Effect::Log {
-                                        owner: 102,
-                                        level: crate::core::LogLevel::Info,
-                                        event: crate::core::LogEvent::Generic(format!(
-                                            "accept pid={} uid={} pkg={} old_pid={:?}",
-                                            new_pid, uid, package, old_pid
-                                        )),
-                                    });
+                                    let last_pkg = last_foreground_package.clone();
+                                    if last_pkg.as_ref() != Some(&package) {
+                                        let transition = if let Some(old) = last_pkg {
+                                            format!("{} -> {}", old, package)
+                                        } else {
+                                            package.clone()
+                                        };
+                                        let _ = effect_executor.apply(crate::core::Effect::Log {
+                                            owner: 102,
+                                            level: crate::core::LogLevel::Info,
+                                            event: crate::core::LogEvent::Generic(format!(
+                                                "foreground_changed: {}",
+                                                transition
+                                            )),
+                                        });
+                                        last_foreground_package = Some(package.clone());
+                                    }
                                     sys_events.push(crate::core::Event::ForegroundChanged {
                                         pid: new_pid,
                                     });
                                 }
                                 crate::runtime::PreloadInotifyEvent::ForegroundSkipped {
-                                    pid,
-                                    uid,
+                                    pid: _,
+                                    uid: _,
                                     name,
-                                    cmdline,
+                                    cmdline: _,
                                     reason,
                                 } => {
-                                    let detail = match (uid, name.as_deref(), cmdline.as_deref()) {
-                                        (Some(uid), Some(name), Some(cmdline)) => format!(
-                                            "skip pid={} uid={} name={} cmd={} reason={}",
-                                            pid, uid, name, cmdline, reason
-                                        ),
-                                        (Some(uid), Some(name), None) => format!(
-                                            "skip pid={} uid={} name={} reason={}",
-                                            pid, uid, name, reason
-                                        ),
-                                        (Some(uid), None, _) => {
-                                            format!(
-                                                "skip pid={} uid={} reason={}",
-                                                pid, uid, reason
-                                            )
-                                        }
-                                        _ => format!("skip pid={} reason={}", pid, reason),
-                                    };
                                     let _ = effect_executor.apply(crate::core::Effect::Log {
                                         owner: 102,
-                                        level: crate::core::LogLevel::Info,
-                                        event: crate::core::LogEvent::Generic(detail),
+                                        level: crate::core::LogLevel::Debug,
+                                        event: crate::core::LogEvent::Generic(format!(
+                                            "foreground_skip: {} reason={}",
+                                            name.as_deref().unwrap_or("unknown"),
+                                            reason
+                                        )),
                                     });
                                 }
                                 crate::runtime::PreloadInotifyEvent::PackagesChanged { path } => {

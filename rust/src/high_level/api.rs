@@ -46,6 +46,8 @@ pub struct DaemonStatusReport {
     pub mode: String,
     /// Path of the Unix-domain socket the daemon is listening on.
     pub socket_path: String,
+    /// Number of active IPC clients.
+    pub active_clients: u32,
     /// Whether the preload addon is loaded in this daemon instance.
     pub preload_addon_loaded: bool,
     /// Whether the `enable_preload` control file currently exists on disk.
@@ -99,6 +101,8 @@ pub struct PreloadSnapshot {
     pub last_foreground_pid: i32,
     /// Last foreground package name resolved, if any.
     pub last_foreground_package: Option<String>,
+    /// Last package transition seen (e.g. `"com.foo -> com.bar"`).
+    pub last_transition: Option<String>,
     /// Number of packages in the resolved package map.
     pub package_cache_count: usize,
     /// Whether the addon must refresh package mappings before resolution.

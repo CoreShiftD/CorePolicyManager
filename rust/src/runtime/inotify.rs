@@ -232,6 +232,8 @@ impl PreloadInotify {
                 self.last_foreground_pid = Some(new_pid);
                 match classify_foreground_pid(new_pid, &mut read_status, &mut read_cmdline) {
                     ForegroundClassification::Accept { uid, package } => {
+                        // Only emit event if the normalized package name actually changed.
+                        // This suppresses churn where same app starts new PIDs/threads.
                         if self.last_accepted_package.as_deref() != Some(package.as_str()) {
                             self.last_accepted_package = Some(package.clone());
                             out.push(PreloadInotifyEvent::ForegroundAccepted {
@@ -248,13 +250,17 @@ impl PreloadInotify {
                         cmdline,
                         reason,
                     } => {
-                        out.push(PreloadInotifyEvent::ForegroundSkipped {
-                            pid: new_pid,
-                            uid,
-                            name,
-                            cmdline,
-                            reason,
-                        });
+                        // Suppress logs for common noisy system processes to keep logs meaningful.
+                        let is_noisy_system = name.as_deref().map(is_noisy_system_process).unwrap_or(false);
+                        if !is_noisy_system {
+                            out.push(PreloadInotifyEvent::ForegroundSkipped {
+                                pid: new_pid,
+                                uid,
+                                name,
+                                cmdline,
+                                reason,
+                            });
+                        }
                     }
                     ForegroundClassification::Vanished => {}
                 }
@@ -451,6 +457,13 @@ fn helper_process_suffix(suffix: &str) -> bool {
     ]
     .iter()
     .any(|needle| suffix.contains(needle))
+}
+
+fn is_noisy_system_process(name: &str) -> bool {
+    matches!(
+        name,
+        "system_server" | "surfaceflinger" | "zygote" | "zygote64" | "init"
+    )
 }
 
 fn core_process_name(name: &str) -> bool {
