@@ -11,6 +11,7 @@ use crate::low_level::inotify::{
 };
 use crate::low_level::reactor::Fd;
 use crate::low_level::spawn::SysError;
+use crate::low_level::sys::ProcStatus;
 
 pub const CGROUP_PROCS_PATH: &str = "/dev/cpuset/top-app/cgroup.procs";
 pub const PACKAGES_XML_PATH: &str = "/data/system/packages.xml";
@@ -37,9 +38,18 @@ impl InotifySource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreloadInotifyEvent {
-    ForegroundChanged {
+    ForegroundAccepted {
         old_pid: Option<i32>,
         new_pid: i32,
+        uid: u32,
+        package: String,
+    },
+    ForegroundSkipped {
+        pid: i32,
+        uid: Option<u32>,
+        name: Option<String>,
+        cmdline: Option<String>,
+        reason: &'static str,
     },
     PackagesChanged {
         path: &'static str,
@@ -101,18 +111,41 @@ impl PreloadInotify {
 
     pub fn handle_readable(&mut self) -> Result<Vec<PreloadInotifyEvent>, SysError> {
         let raw_events = crate::low_level::inotify::read_events(&self.fd)?;
-        Ok(self.handle_decoded_events(&raw_events, || {
-            crate::low_level::sys::read_to_string(CGROUP_PROCS_PATH)
-        }))
+        Ok(self.handle_decoded_events_with_procfs(
+            &raw_events,
+            || crate::low_level::sys::read_to_string(CGROUP_PROCS_PATH),
+            crate::low_level::sys::read_proc_status,
+            crate::low_level::sys::read_proc_cmdline,
+        ))
     }
 
     pub fn handle_decoded_events<F>(
         &mut self,
         raw_events: &[InotifyEvent],
-        mut read_cgroup: F,
+        read_cgroup: F,
     ) -> Vec<PreloadInotifyEvent>
     where
         F: FnMut() -> Result<String, std::io::Error>,
+    {
+        self.handle_decoded_events_with_procfs(
+            raw_events,
+            read_cgroup,
+            crate::low_level::sys::read_proc_status,
+            crate::low_level::sys::read_proc_cmdline,
+        )
+    }
+
+    pub fn handle_decoded_events_with_procfs<F, S, C>(
+        &mut self,
+        raw_events: &[InotifyEvent],
+        mut read_cgroup: F,
+        mut read_status: S,
+        mut read_cmdline: C,
+    ) -> Vec<PreloadInotifyEvent>
+    where
+        F: FnMut() -> Result<String, std::io::Error>,
+        S: FnMut(i32) -> Result<ProcStatus, std::io::Error>,
+        C: FnMut(i32) -> Result<String, std::io::Error>,
     {
         let mut out = Vec::new();
         let mut cgroup_changed = false;
@@ -195,7 +228,31 @@ impl PreloadInotify {
             let old_pid = self.last_foreground_pid;
             if old_pid != Some(new_pid) {
                 self.last_foreground_pid = Some(new_pid);
-                out.push(PreloadInotifyEvent::ForegroundChanged { old_pid, new_pid });
+                match classify_foreground_pid(new_pid, &mut read_status, &mut read_cmdline) {
+                    ForegroundClassification::Accept { uid, package } => {
+                        out.push(PreloadInotifyEvent::ForegroundAccepted {
+                            old_pid,
+                            new_pid,
+                            uid,
+                            package,
+                        });
+                    }
+                    ForegroundClassification::Reject {
+                        uid,
+                        name,
+                        cmdline,
+                        reason,
+                    } => {
+                        out.push(PreloadInotifyEvent::ForegroundSkipped {
+                            pid: new_pid,
+                            uid,
+                            name,
+                            cmdline,
+                            reason,
+                        });
+                    }
+                    ForegroundClassification::Vanished => {}
+                }
             }
         }
 
@@ -247,4 +304,100 @@ pub fn parse_top_app_pid(content: &str) -> Option<i32> {
         .split_whitespace()
         .find_map(|pid| pid.parse::<i32>().ok())
         .filter(|pid| *pid > 0)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForegroundClassification {
+    Accept {
+        uid: u32,
+        package: String,
+    },
+    Reject {
+        uid: Option<u32>,
+        name: Option<String>,
+        cmdline: Option<String>,
+        reason: &'static str,
+    },
+    Vanished,
+}
+
+pub fn classify_foreground_pid<S, C>(
+    pid: i32,
+    mut read_status: S,
+    mut read_cmdline: C,
+) -> ForegroundClassification
+where
+    S: FnMut(i32) -> Result<ProcStatus, std::io::Error>,
+    C: FnMut(i32) -> Result<String, std::io::Error>,
+{
+    let status = match read_status(pid) {
+        Ok(status) => status,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ForegroundClassification::Vanished;
+        }
+        Err(_) => {
+            return ForegroundClassification::Reject {
+                uid: None,
+                name: None,
+                cmdline: None,
+                reason: "status_unreadable",
+            };
+        }
+    };
+
+    if status.uid < 10_000 {
+        return ForegroundClassification::Reject {
+            uid: Some(status.uid),
+            name: Some(status.name),
+            cmdline: None,
+            reason: "system_uid",
+        };
+    }
+
+    if status.name.starts_with("com.android.") || status.name.starts_with("com.google.android.") {
+        return ForegroundClassification::Reject {
+            uid: Some(status.uid),
+            name: Some(status.name),
+            cmdline: None,
+            reason: "system_process",
+        };
+    }
+
+    if !status.name.contains('.') {
+        return ForegroundClassification::Reject {
+            uid: Some(status.uid),
+            name: Some(status.name),
+            cmdline: None,
+            reason: "no_dot_name",
+        };
+    }
+
+    let cmdline = match read_cmdline(pid) {
+        Ok(cmdline) => cmdline,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return ForegroundClassification::Vanished;
+        }
+        Err(_) => {
+            return ForegroundClassification::Reject {
+                uid: Some(status.uid),
+                name: Some(status.name),
+                cmdline: None,
+                reason: "cmdline_unreadable",
+            };
+        }
+    };
+
+    if cmdline.contains(':') {
+        return ForegroundClassification::Reject {
+            uid: Some(status.uid),
+            name: Some(status.name),
+            cmdline: Some(cmdline),
+            reason: "secondary_process",
+        };
+    }
+
+    ForegroundClassification::Accept {
+        uid: status.uid,
+        package: status.name,
+    }
 }

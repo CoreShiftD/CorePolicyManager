@@ -38,6 +38,53 @@ pub fn read_to_string(path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(path)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcStatus {
+    pub name: String,
+    pub uid: u32,
+}
+
+pub fn read_proc_status(pid: i32) -> Result<ProcStatus, std::io::Error> {
+    let path = format!("/proc/{}/status", pid);
+    parse_proc_status(&std::fs::read_to_string(path)?)
+}
+
+pub fn read_proc_cmdline(pid: i32) -> Result<String, std::io::Error> {
+    let path = format!("/proc/{}/cmdline", pid);
+    let bytes = std::fs::read(path)?;
+    Ok(String::from_utf8_lossy(&bytes)
+        .trim_end_matches('\0')
+        .replace('\0', " "))
+}
+
+pub fn parse_proc_status(content: &str) -> Result<ProcStatus, std::io::Error> {
+    let mut name = None;
+    let mut uid = None;
+
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("Name:") {
+            name = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("Uid:") {
+            uid = rest
+                .split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u32>().ok());
+        }
+
+        if name.is_some() && uid.is_some() {
+            break;
+        }
+    }
+
+    match (name, uid) {
+        (Some(name), Some(uid)) => Ok(ProcStatus { name, uid }),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "proc status missing Name or Uid",
+        )),
+    }
+}
+
 pub struct SignalRuntime;
 
 #[inline(always)]

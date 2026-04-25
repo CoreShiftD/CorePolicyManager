@@ -13,6 +13,17 @@ Tracing the initialization in `run_daemon`:
    - Source log: `"daemon start version=0.1.0 git=a472b4f log_schema=structured_v2"`.
 6. **Inotify Setup**: If preload is enabled, watches `/dev/cpuset/top-app/cgroup.procs`, `/data/system/packages.xml`, and `/data/system/packages.list`.
 
+## Foreground Filtering
+
+Preload foreground handling is intentionally cheap. A cgroup event first reads
+`/dev/cpuset/top-app/cgroup.procs` and ignores duplicate PIDs. For a new PID,
+the runtime reads `/proc/<pid>/status` and parses only `Name` and `Uid`.
+Processes that vanished, have UID below `10000`, use obvious Android system
+package names, or have no dot in `Name` do not trigger preload. Only surviving
+package-like candidates read `/proc/<pid>/cmdline`; names containing `:` are
+treated as secondary processes and skipped. Package database files remain cache
+invalidation signals only and are not parsed in this hot path.
+
 ## The Event Loop
 
 The daemon operates in a continuous tick loop (`TICK_MS = 16` milliseconds):

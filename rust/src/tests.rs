@@ -660,6 +660,156 @@ mod tests_internal {
     }
 
     #[test]
+    fn foreground_classifier_rejects_system_uid() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.foo.bar".to_string(),
+                    uid: 1000,
+                })
+            },
+            |_| panic!("cmdline should not be read for system uid"),
+        );
+
+        assert_eq!(
+            decision,
+            crate::runtime::ForegroundClassification::Reject {
+                uid: Some(1000),
+                name: Some("com.foo.bar".to_string()),
+                cmdline: None,
+                reason: "system_uid",
+            }
+        );
+    }
+
+    #[test]
+    fn foreground_classifier_rejects_system_server_name() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "system_server".to_string(),
+                    uid: 10000,
+                })
+            },
+            |_| panic!("cmdline should not be read for no-dot process names"),
+        );
+
+        assert!(matches!(
+            decision,
+            crate::runtime::ForegroundClassification::Reject {
+                reason: "no_dot_name",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn foreground_classifier_rejects_no_dot_name() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "surfaceflinger".to_string(),
+                    uid: 10000,
+                })
+            },
+            |_| panic!("cmdline should not be read for no-dot process names"),
+        );
+
+        assert!(matches!(
+            decision,
+            crate::runtime::ForegroundClassification::Reject {
+                reason: "no_dot_name",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn foreground_classifier_rejects_obvious_android_package_names() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.android.settings".to_string(),
+                    uid: 10000,
+                })
+            },
+            |_| panic!("cmdline should not be read for obvious system packages"),
+        );
+
+        assert!(matches!(
+            decision,
+            crate::runtime::ForegroundClassification::Reject {
+                reason: "system_process",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn foreground_classifier_accepts_primary_package_process() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.foo.bar".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("com.foo.bar".to_string()),
+        );
+
+        assert_eq!(
+            decision,
+            crate::runtime::ForegroundClassification::Accept {
+                uid: 10234,
+                package: "com.foo.bar".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn foreground_classifier_rejects_secondary_process_cmdline() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: "com.foo.bar".to_string(),
+                    uid: 10234,
+                })
+            },
+            |_| Ok("com.foo.bar:service".to_string()),
+        );
+
+        assert!(matches!(
+            decision,
+            crate::runtime::ForegroundClassification::Reject {
+                reason: "secondary_process",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn foreground_classifier_ignores_vanished_pid() {
+        let decision = crate::runtime::classify_foreground_pid(
+            123,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "vanished",
+                ))
+            },
+            |_| Ok("com.foo.bar".to_string()),
+        );
+
+        assert_eq!(decision, crate::runtime::ForegroundClassification::Vanished);
+    }
+
+    #[test]
     fn inotify_decode_handles_multiple_packed_events_and_empty_name() {
         use crate::low_level::inotify::{InotifyEvent, decode_events};
 
@@ -719,47 +869,93 @@ mod tests_internal {
         let mut watcher =
             PreloadInotify::new(Fd::new(fd.into_raw_fd(), "test").unwrap(), 10, 11, 12);
 
-        let first = watcher.handle_decoded_events(
+        let mut status_reads = 0;
+        let mut cmdline_reads = 0;
+
+        let first = watcher.handle_decoded_events_with_procfs(
             &[InotifyEvent {
                 wd: 10,
                 mask: crate::low_level::inotify::MODIFY_MASK,
                 name_len: 0,
             }],
             || Ok("100\n".to_string()),
+            |pid| {
+                status_reads += 1;
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: format!("com.example.app{}", pid),
+                    uid: 10234,
+                })
+            },
+            |pid| {
+                cmdline_reads += 1;
+                Ok(format!("com.example.app{}", pid))
+            },
         );
         assert_eq!(
             first,
-            vec![PreloadInotifyEvent::ForegroundChanged {
+            vec![PreloadInotifyEvent::ForegroundAccepted {
                 old_pid: None,
-                new_pid: 100
+                new_pid: 100,
+                uid: 10234,
+                package: "com.example.app100".to_string(),
             }]
         );
+        assert_eq!(status_reads, 1);
+        assert_eq!(cmdline_reads, 1);
 
-        let duplicate = watcher.handle_decoded_events(
+        let duplicate = watcher.handle_decoded_events_with_procfs(
             &[InotifyEvent {
                 wd: 10,
                 mask: crate::low_level::inotify::MODIFY_MASK,
                 name_len: 0,
             }],
             || Ok("100\n".to_string()),
+            |pid| {
+                status_reads += 1;
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: format!("com.example.app{}", pid),
+                    uid: 10234,
+                })
+            },
+            |pid| {
+                cmdline_reads += 1;
+                Ok(format!("com.example.app{}", pid))
+            },
         );
         assert!(duplicate.is_empty());
+        assert_eq!(status_reads, 1);
+        assert_eq!(cmdline_reads, 1);
 
-        let changed = watcher.handle_decoded_events(
+        let changed = watcher.handle_decoded_events_with_procfs(
             &[InotifyEvent {
                 wd: 10,
                 mask: crate::low_level::inotify::MODIFY_MASK,
                 name_len: 0,
             }],
             || Ok("200\n".to_string()),
+            |pid| {
+                status_reads += 1;
+                Ok(crate::low_level::sys::ProcStatus {
+                    name: format!("com.example.app{}", pid),
+                    uid: 10234,
+                })
+            },
+            |pid| {
+                cmdline_reads += 1;
+                Ok(format!("com.example.app{}", pid))
+            },
         );
         assert_eq!(
             changed,
-            vec![PreloadInotifyEvent::ForegroundChanged {
+            vec![PreloadInotifyEvent::ForegroundAccepted {
                 old_pid: Some(100),
-                new_pid: 200
+                new_pid: 200,
+                uid: 10234,
+                package: "com.example.app200".to_string(),
             }]
         );
+        assert_eq!(status_reads, 2);
+        assert_eq!(cmdline_reads, 2);
     }
 
     #[test]

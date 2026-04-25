@@ -735,20 +735,52 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                     Ok(events) => {
                         for event in events {
                             match event {
-                                crate::runtime::PreloadInotifyEvent::ForegroundChanged {
+                                crate::runtime::PreloadInotifyEvent::ForegroundAccepted {
                                     old_pid,
                                     new_pid,
+                                    uid,
+                                    package,
                                 } => {
                                     let _ = effect_executor.apply(crate::core::Effect::Log {
                                         owner: 102,
                                         level: crate::core::LogLevel::Info,
                                         event: crate::core::LogEvent::Generic(format!(
-                                            "cgroup event received old_pid={:?} new_pid={}",
-                                            old_pid, new_pid
+                                            "accept pid={} uid={} pkg={} old_pid={:?}",
+                                            new_pid, uid, package, old_pid
                                         )),
                                     });
                                     sys_events.push(crate::core::Event::ForegroundChanged {
                                         pid: new_pid,
+                                    });
+                                }
+                                crate::runtime::PreloadInotifyEvent::ForegroundSkipped {
+                                    pid,
+                                    uid,
+                                    name,
+                                    cmdline,
+                                    reason,
+                                } => {
+                                    let detail = match (uid, name.as_deref(), cmdline.as_deref()) {
+                                        (Some(uid), Some(name), Some(cmdline)) => format!(
+                                            "skip pid={} uid={} name={} cmd={} reason={}",
+                                            pid, uid, name, cmdline, reason
+                                        ),
+                                        (Some(uid), Some(name), None) => format!(
+                                            "skip pid={} uid={} name={} reason={}",
+                                            pid, uid, name, reason
+                                        ),
+                                        (Some(uid), None, _) => {
+                                            format!(
+                                                "skip pid={} uid={} reason={}",
+                                                pid, uid, reason
+                                            )
+                                        }
+                                        _ => format!("skip pid={} reason={}", pid, reason),
+                                    };
+                                    let _ = effect_executor.apply(crate::core::Effect::Log {
+                                        owner: 102,
+                                        level: crate::core::LogLevel::Info,
+                                        event: crate::core::LogEvent::Generic(detail),
                                     });
                                 }
                                 crate::runtime::PreloadInotifyEvent::PackagesChanged { path } => {

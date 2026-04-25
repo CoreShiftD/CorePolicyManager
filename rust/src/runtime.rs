@@ -13,8 +13,9 @@ mod system_services;
 
 pub use effects::{EffectExecutor, RuntimeDrain, RuntimeProcess};
 pub use inotify::{
-    CGROUP_PROCS_PATH, InotifySource, PACKAGES_LIST_PATH, PACKAGES_XML_PATH, PreloadInotify,
-    PreloadInotifyEvent, parse_top_app_pid,
+    CGROUP_PROCS_PATH, ForegroundClassification, InotifySource, PACKAGES_LIST_PATH,
+    PACKAGES_XML_PATH, PreloadInotify, PreloadInotifyEvent, classify_foreground_pid,
+    parse_top_app_pid,
 };
 pub use logging::{LogRouter, log_runtime_event};
 pub use status::assemble_daemon_status;
