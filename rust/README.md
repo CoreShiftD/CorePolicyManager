@@ -12,10 +12,10 @@ The executable binary is named `corepolicy`.
 ## Planned CLI Model
 The `corepolicy` CLI is designed for simplicity and directness. 
 
-**NOTE: These commands are PLANNED and not fully implemented in the current placeholder binary.**
+**NOTE: Only help/placeholder behavior is currently implemented. All other commands are PLANNED.**
 
 ```bash
-corepolicy           # (Planned) Default mode: runs all stable enabled daemon features
+corepolicy           # Placeholder: prints implementation status
 corepolicy -p        # (Planned) Preload mode: starts the autonomous loop with preload enabled
 corepolicy status    # (Planned) Reads local status from /data/local/tmp/coreshift/status.json
 corepolicy help      # Prints help and usage information (Implemented)
