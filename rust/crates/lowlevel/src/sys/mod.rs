@@ -27,7 +27,7 @@ use libc::sigset_t;
 /// (including `ENOENT`, `EACCES`, etc.).
 ///
 /// This is the canonical low-level path-existence helper. Higher layers
-/// (runtime, addons) must call this instead of `std::path::Path::exists()`.
+/// must call this instead of `std::path::Path::exists()`.
 pub fn path_exists(path: &str) -> bool {
     match std::ffi::CString::new(path) {
         Ok(c) => unsafe { libc::access(c.as_ptr(), libc::F_OK) == 0 },
@@ -258,6 +258,11 @@ impl ExecContext {
     }
 
     /// Return a fixed-size array of pointers to the argument strings.
+    ///
+    /// ### Advanced API
+    /// This returns raw pointers to the underlying `CString` storage. The
+    /// pointers are only valid as long as the `ExecContext` is not dropped or
+    /// modified.
     pub fn get_argv_ptrs(&self) -> ArrayVec<*mut c_char, 64> {
         let mut ptrs = ArrayVec::new();
         match &self.argv {
@@ -277,6 +282,11 @@ impl ExecContext {
     }
 
     /// Return a fixed-size array of pointers to the environment strings.
+    ///
+    /// ### Advanced API
+    /// This returns raw pointers to the underlying `CString` storage. The
+    /// pointers are only valid as long as the `ExecContext` is not dropped or
+    /// modified.
     pub fn get_envp_ptrs(&self) -> Option<ArrayVec<*mut c_char, 64>> {
         self.envp.as_ref().map(|envp| {
             let mut ptrs = ArrayVec::new();

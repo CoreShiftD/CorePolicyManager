@@ -86,6 +86,11 @@ impl Fd {
 
     /// Read bytes into a raw buffer.
     ///
+    /// ### Advanced API
+    /// This is a low-level wrapper around `libc::read`. The caller is
+    /// responsible for ensuring `buf` points to a valid memory region of at
+    /// least `count` bytes.
+    ///
     /// Returns `Ok(None)` if the operation would block (`EAGAIN`).
     pub fn read(&self, buf: *mut u8, count: usize) -> Result<Option<usize>, SysError> {
         loop {
@@ -105,6 +110,11 @@ impl Fd {
     }
 
     /// Write bytes from a raw buffer.
+    ///
+    /// ### Advanced API
+    /// This is a low-level wrapper around `libc::write`. The caller is
+    /// responsible for ensuring `buf` points to a valid memory region of at
+    /// least `count` bytes.
     ///
     /// Returns `Ok(None)` if the operation would block (`EAGAIN`).
     pub fn write(&self, buf: *const u8, count: usize) -> Result<Option<usize>, SysError> {
