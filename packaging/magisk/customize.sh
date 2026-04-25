@@ -1,0 +1,36 @@
+#!/system/bin/sh
+
+ui_print "***********************************"
+ui_print "*        CoreShift Policy         *"
+ui_print "***********************************"
+
+ABI="$(getprop ro.product.cpu.abi)"
+ABILIST="$(getprop ro.product.cpu.abilist)"
+
+ui_print "- Detecting ABI..."
+mkdir -p "$MODPATH/system/bin"
+
+if echo "$ABILIST$ABI" | grep -q "arm64-v8a" && [ -f "$MODPATH/bin/arm64-v8a/corepolicy" ]; then
+    ui_print "- Installing arm64-v8a binary"
+    mv "$MODPATH/bin/arm64-v8a/corepolicy" "$MODPATH/system/bin/corepolicy"
+elif echo "$ABILIST$ABI" | grep -q "armeabi-v7a" && [ -f "$MODPATH/bin/armeabi-v7a/corepolicy" ]; then
+    ui_print "- Installing armeabi-v7a binary"
+    mv "$MODPATH/bin/armeabi-v7a/corepolicy" "$MODPATH/system/bin/corepolicy"
+else
+    ui_print "! Error: Compatible CoreShift Policy binary not found for this device."
+    exit 1
+fi
+
+ui_print "- Setting permissions..."
+set_perm_recursive "$MODPATH" 0 0 0755 0644
+set_perm "$MODPATH/system/bin/corepolicy" 0 0 0755
+set_perm "$MODPATH/bin/arm64-v8a/corepolicy" 0 0 0755
+set_perm "$MODPATH/bin/armeabi-v7a/corepolicy" 0 0 0755
+set_perm "$MODPATH/service.sh" 0 0 0755
+set_perm "$MODPATH/uninstall.sh" 0 0 0755
+
+ui_print "- Creating working directory..."
+mkdir -p /data/local/tmp/coreshift
+chmod 0755 /data/local/tmp/coreshift
+
+ui_print "- Installation complete!"

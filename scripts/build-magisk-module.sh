@@ -1,0 +1,57 @@
+#!/bin/bash
+set -e
+
+# Change to project root
+cd "$(dirname "$0")/.."
+PROJECT_ROOT=$(pwd)
+RUST_ROOT="$PROJECT_ROOT/rust"
+
+echo "Ensuring Rust targets are available..."
+rustup target add aarch64-linux-android armv7-linux-androideabi
+
+cd "$RUST_ROOT"
+CARGO_TARGET_DIR=$(cargo metadata --format-version 1 | grep -o '"target_directory":"[^"]*"' | head -n 1 | cut -d'"' -f4)
+
+echo "Building release binary for arm64-v8a..."
+cargo build --release --target aarch64-linux-android -j 1
+
+echo "Building release binary for armeabi-v7a..."
+cargo build --release --target armv7-linux-androideabi -j 1
+cd "$PROJECT_ROOT"
+
+echo "Preparing packaging directory..."
+DIST_DIR="dist/magisk/CoreShiftPolicy"
+rm -rf "$DIST_DIR"
+mkdir -p "$DIST_DIR/system/bin"
+mkdir -p "$DIST_DIR/bin/arm64-v8a"
+mkdir -p "$DIST_DIR/bin/armeabi-v7a"
+
+echo "Copying module files..."
+cp packaging/magisk/module.prop "$DIST_DIR/"
+cp packaging/magisk/service.sh "$DIST_DIR/"
+cp packaging/magisk/customize.sh "$DIST_DIR/"
+cp packaging/magisk/uninstall.sh "$DIST_DIR/"
+
+echo "Copying binaries..."
+TARGET_DIR=${CARGO_TARGET_DIR:-rust/target}
+cp "$TARGET_DIR/aarch64-linux-android/release/corepolicy" "$DIST_DIR/bin/arm64-v8a/corepolicy"
+cp "$TARGET_DIR/armv7-linux-androideabi/release/corepolicy" "$DIST_DIR/bin/armeabi-v7a/corepolicy"
+
+echo "Setting permissions..."
+chmod 0755 "$DIST_DIR/service.sh"
+chmod 0755 "$DIST_DIR/customize.sh"
+chmod 0755 "$DIST_DIR/uninstall.sh"
+chmod 0755 "$DIST_DIR/bin/arm64-v8a/corepolicy"
+chmod 0755 "$DIST_DIR/bin/armeabi-v7a/corepolicy"
+
+echo "Zipping module..."
+mkdir -p dist
+cd "$DIST_DIR"
+rm -f "../../CoreShiftPolicy-v0.1.0-preview.1.zip"
+zip -r "../../CoreShiftPolicy-v0.1.0-preview.1.zip" .
+cd ../../..
+
+echo "Done: dist/CoreShiftPolicy-v0.1.0-preview.1.zip"
+
+echo "Package contents:"
+unzip -l dist/CoreShiftPolicy-v0.1.0-preview.1.zip
