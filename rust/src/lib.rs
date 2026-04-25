@@ -206,6 +206,45 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
     ];
 
     if config.enable_warmup {
+        // When the daemon is started in preload mode, ensure the control file
+        // exists so the addon activates immediately without requiring a manual
+        // toggle.  We create it here (before the addon's first tick) so that
+        // `PreloadAddon::on_core_event` sees it on the very first `Tick`.
+        if let Err(e) = paths::ensure_dirs() {
+            crate::runtime::log_runtime_event(
+                crate::core::CORE_OWNER,
+                crate::core::LogLevel::Warn,
+                crate::core::LogEvent::Generic(format!(
+                    "preload: failed to ensure dirs before writing enable_preload: {}",
+                    e
+                )),
+            );
+        } else if !std::path::Path::new(paths::ENABLE_PRELOAD_PATH).exists() {
+            match std::fs::write(paths::ENABLE_PRELOAD_PATH, b"") {
+                Ok(()) => {
+                    crate::runtime::log_runtime_event(
+                        crate::core::CORE_OWNER,
+                        crate::core::LogLevel::Info,
+                        crate::core::LogEvent::Generic(format!(
+                            "preload: created enable_preload control file path={}",
+                            paths::ENABLE_PRELOAD_PATH
+                        )),
+                    );
+                }
+                Err(e) => {
+                    crate::runtime::log_runtime_event(
+                        crate::core::CORE_OWNER,
+                        crate::core::LogLevel::Warn,
+                        crate::core::LogEvent::Generic(format!(
+                            "preload: failed to create enable_preload path={} err={}",
+                            paths::ENABLE_PRELOAD_PATH,
+                            e
+                        )),
+                    );
+                }
+            }
+        }
+
         addons.push((
             Box::new(PreloadAddon::new(
                 crate::high_level::addons::preload::PreloadConfig::default(),
@@ -378,6 +417,32 @@ pub fn run_daemon(config: DaemonConfig) -> Result<(), crate::low_level::spawn::S
                             libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE,
                         )
                     };
+
+                    // Record watch registration results on the PreloadAddon so
+                    // `preload-status` can report them accurately.  The addon
+                    // exposes `watch_registrations` as a public field; we set
+                    // it here via the `set_watch_registrations` helper on the
+                    // Addon trait so we don't need downcasting.
+                    let watch_results = vec![
+                        crate::high_level::addons::preload::WatchedPath {
+                            path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
+                            registered: wd_cgroup >= 0,
+                        },
+                        crate::high_level::addons::preload::WatchedPath {
+                            path: "/data/system/packages.xml".to_string(),
+                            registered: wd_pkg_xml >= 0,
+                        },
+                        crate::high_level::addons::preload::WatchedPath {
+                            path: "/data/system/packages.list".to_string(),
+                            registered: wd_pkg_list >= 0,
+                        },
+                    ];
+                    for (addon, spec, _) in &mut addons {
+                        if spec.id == 102 {
+                            addon.set_watch_registrations(watch_results.clone());
+                            break;
+                        }
+                    }
 
                     if wd_cgroup >= 0 && wd_pkg_xml >= 0 && wd_pkg_list >= 0 {
                         let _ = effect_executor.apply(crate::core::Effect::Log {

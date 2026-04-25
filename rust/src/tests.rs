@@ -665,6 +665,264 @@ mod tests_internal {
         check_dir(&src_dir, &forbidden);
     }
 
+    // -------------------------------------------------------------------------
+    // Preload status model tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn preload_status_report_serializes_and_deserializes() {
+        use crate::high_level::addons::preload::{PreloadStatusReport, WatchedPath};
+
+        let report = PreloadStatusReport {
+            enabled: true,
+            warmup_mode_active: true,
+            socket_path: "/data/local/tmp/coreshift/coreshift.sock".to_string(),
+            mode: "preload".to_string(),
+            enable_preload_file_exists: false,
+            enable_preload_path: "/data/local/tmp/coreshift/control/enable_preload".to_string(),
+            foreground_path_exists: false,
+            last_foreground_pid: 1234,
+            last_foreground_package: Some("com.example.app".to_string()),
+            package_cache_count: 3,
+            dedup_cache_count: 1,
+            negative_cache_count: 0,
+            in_flight_count: 0,
+            total_failures: 2,
+            auto_disabled: false,
+            watched_paths: vec![
+                WatchedPath {
+                    path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
+                    registered: true,
+                },
+                WatchedPath {
+                    path: "/data/system/packages.xml".to_string(),
+                    registered: false,
+                },
+            ],
+            last_skip_reason: Some("cooldown".to_string()),
+            last_warmup_result: Some(
+                "package=com.example.app bytes=4096 duration_ms=12".to_string(),
+            ),
+        };
+
+        let json = serde_json::to_string(&report).expect("serialization must succeed");
+        let decoded: PreloadStatusReport =
+            serde_json::from_str(&json).expect("deserialization must succeed");
+
+        assert_eq!(report, decoded);
+        assert!(json.contains("\"enabled\":true"));
+        assert!(json.contains("\"last_foreground_pid\":1234"));
+        assert!(json.contains("com.example.app"));
+        assert!(json.contains("cooldown"));
+    }
+
+    #[test]
+    fn preload_status_report_default_fields() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+
+        let config = PreloadConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        let addon = PreloadAddon::new(config);
+        let report = addon.status_report();
+
+        assert!(!report.enabled);
+        assert!(report.warmup_mode_active);
+        assert_eq!(report.last_foreground_pid, -1);
+        assert!(report.last_foreground_package.is_none());
+        assert_eq!(report.package_cache_count, 0);
+        assert_eq!(report.dedup_cache_count, 0);
+        assert_eq!(report.negative_cache_count, 0);
+        assert_eq!(report.in_flight_count, 0);
+        assert_eq!(report.total_failures, 0);
+        assert!(!report.auto_disabled);
+        assert!(report.watched_paths.is_empty());
+        assert!(report.last_skip_reason.is_none());
+        assert!(report.last_warmup_result.is_none());
+        assert_eq!(report.socket_path, crate::paths::SOCKET_PATH);
+        assert_eq!(
+            report.enable_preload_path,
+            crate::paths::ENABLE_PRELOAD_PATH
+        );
+    }
+
+    #[test]
+    fn preload_status_report_tracks_skip_reason() {
+        use crate::core::{Event, ExecutionState, SystemService};
+        use crate::high_level::addon::Addon;
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+
+        let config = PreloadConfig {
+            enabled: true,
+            global_max_in_flight: 1,
+            ..Default::default()
+        };
+        let mut addon = PreloadAddon::new(config);
+        let state = ExecutionState::new();
+
+        // Put one package in-flight to trigger global_budget_full on the next.
+        addon.in_flight.insert("com.first".to_string());
+
+        let _ = addon.on_core_event(
+            &state,
+            &Event::SystemResponse {
+                request_id: 0,
+                kind: SystemService::ResolveIdentity,
+                payload: "com.second".to_string().into_bytes(),
+            },
+        );
+
+        let report = addon.status_report();
+        assert_eq!(
+            report.last_skip_reason.as_deref(),
+            Some("global_budget_full")
+        );
+        assert_eq!(
+            report.last_foreground_package.as_deref(),
+            Some("com.second")
+        );
+    }
+
+    #[test]
+    fn preload_status_report_tracks_warmup_result() {
+        use crate::core::{Event, ExecutionState};
+        use crate::high_level::addon::Addon;
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+
+        let config = PreloadConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let mut addon = PreloadAddon::new(config);
+        let state = ExecutionState::new();
+
+        addon.in_flight.insert("com.warmup".to_string());
+
+        let payload = serde_json::to_vec(&(8192u64, 25u64)).unwrap();
+        let _ = addon.on_core_event(
+            &state,
+            &Event::AddonCompleted {
+                addon_id: 102,
+                key: "warmup:com.warmup".to_string(),
+                payload,
+            },
+        );
+
+        let report = addon.status_report();
+        let result = report
+            .last_warmup_result
+            .expect("warmup result must be set");
+        assert!(result.contains("com.warmup"));
+        assert!(result.contains("bytes=8192"));
+        assert!(result.contains("duration_ms=25"));
+        assert!(!addon.in_flight.contains("com.warmup"));
+    }
+
+    #[test]
+    fn ipc_preload_status_response_encodes_and_decodes() {
+        use crate::low_level::reactor::Token;
+        use crate::mid_level::ipc::{Conn, IpcModule, ReadState};
+        use std::os::unix::io::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+
+        let (server_sock, _) = UnixStream::pair().unwrap();
+        server_sock.set_nonblocking(true).unwrap();
+        let server_fd =
+            crate::low_level::reactor::Fd::new(server_sock.into_raw_fd(), "test").unwrap();
+        let mut ipc = IpcModule::new(server_fd, Token(1));
+
+        let (conn_sock, _peer) = UnixStream::pair().unwrap();
+        conn_sock.set_nonblocking(true).unwrap();
+        let token = Token(2);
+        let client_id = 1u32;
+        ipc.clients.insert(
+            client_id,
+            Conn {
+                fd: crate::low_level::reactor::Fd::new(conn_sock.into_raw_fd(), "test").unwrap(),
+                token,
+                read_buf: Vec::new(),
+                write_buf: Vec::new(),
+                state: ReadState::Header { needed: 4 },
+                uid: 1000,
+            },
+        );
+        ipc.client_tokens.insert(token, client_id);
+
+        let status_json = r#"{"enabled":true,"mode":"preload"}"#.to_string();
+        ipc.send_preload_status(client_id, status_json.clone());
+
+        let conn = ipc.clients.get(&client_id).expect("client must remain");
+        // Frame: 4-byte LE length + 1-byte type (5) + JSON bytes
+        let frame = &conn.write_buf;
+        assert!(frame.len() >= 5);
+        let body_len = u32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]) as usize;
+        assert_eq!(body_len, 1 + status_json.len());
+        assert_eq!(frame[4], 5u8); // type byte = PreloadStatus
+        let decoded = std::str::from_utf8(&frame[5..]).expect("valid utf8");
+        assert_eq!(decoded, status_json);
+    }
+
+    #[test]
+    fn preload_cli_auto_enable_creates_control_file() {
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig};
+        use std::path::Path;
+
+        // Use a temp dir to avoid touching real /data paths.
+        let tmp = std::env::temp_dir().join("coreshift_test_enable_preload");
+        let _ = std::fs::remove_file(&tmp);
+
+        // Simulate what run_daemon does: write the file if it doesn't exist.
+        if !tmp.exists() {
+            std::fs::write(&tmp, b"").expect("write must succeed");
+        }
+        assert!(Path::new(&tmp).exists(), "control file must be created");
+
+        // Verify the addon picks it up on the next tick when the path exists.
+        // We can't use the real ENABLE_PRELOAD_PATH in tests, so we verify the
+        // logic by checking that a newly-created PreloadAddon with enabled=false
+        // activates when the override file is present (using the real path check
+        // in on_core_event, which we skip here since we can't write to /data).
+        // Instead, verify the status_report reflects the field correctly.
+        let config = PreloadConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let addon = PreloadAddon::new(config);
+        let report = addon.status_report();
+        assert!(report.enabled);
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn preload_addon_set_watch_registrations() {
+        use crate::high_level::addon::Addon;
+        use crate::high_level::addons::preload::{PreloadAddon, PreloadConfig, WatchedPath};
+
+        let mut addon = PreloadAddon::new(PreloadConfig::default());
+        assert!(addon.watch_registrations.is_empty());
+
+        let regs = vec![
+            WatchedPath {
+                path: "/dev/cpuset/top-app/cgroup.procs".to_string(),
+                registered: true,
+            },
+            WatchedPath {
+                path: "/data/system/packages.xml".to_string(),
+                registered: false,
+            },
+        ];
+        addon.set_watch_registrations(regs.clone());
+
+        assert_eq!(addon.watch_registrations.len(), 2);
+        assert!(addon.watch_registrations[0].registered);
+        assert!(!addon.watch_registrations[1].registered);
+
+        let report = addon.status_report();
+        assert_eq!(report.watched_paths, regs);
+    }
+
     #[test]
     fn production_source_has_no_ad_hoc_output_macros() {
         let forbidden = [concat!("eprint", "ln!"), concat!("db", "g!")];

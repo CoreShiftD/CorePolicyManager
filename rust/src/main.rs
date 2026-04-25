@@ -70,40 +70,45 @@ fn run_command(command: Command) -> Result<(), String> {
         Command::PreloadStatus => {
             use std::io::{Read, Write};
             use std::os::unix::net::UnixStream;
-            let mut stream = UnixStream::connect("/data/local/tmp/coreshift/coreshift.sock")
+            let mut stream = UnixStream::connect(CoreShift::paths::SOCKET_PATH)
                 .map_err(|e| format!("failed to connect to daemon: {}", e))?;
 
-            // Type 1 is Command, then JSON payload.
-            let cmd = CoreShift::high_level::api::Command::PreloadStatus;
-            let payload = serde_json::to_vec(&cmd).map_err(|e| e.to_string())?;
-            let mut req = Vec::with_capacity(5 + payload.len());
-            let len = (payload.len() as u32 + 1).to_le_bytes(); // length includes type byte
-            req.extend_from_slice(&len);
-            req.push(1u8); // Type 1: JSON Command
-            req.extend_from_slice(&payload);
-            stream.write_all(&req).map_err(|e| e.to_string())?;
+            // Type 4: PreloadStatus request (single-byte body, no JSON payload).
+            let body: [u8; 1] = [4u8];
+            let len = (body.len() as u32).to_le_bytes();
+            stream.write_all(&len).map_err(|e| e.to_string())?;
+            stream.write_all(&body).map_err(|e| e.to_string())?;
 
-            // Read length
+            // Read 4-byte length prefix.
             let mut len_buf = [0u8; 4];
             stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
             let resp_len = u32::from_le_bytes(len_buf) as usize;
 
-            if resp_len > 0 {
-                let mut resp_buf = vec![0u8; resp_len];
-                stream
-                    .read_exact(&mut resp_buf)
-                    .map_err(|e| e.to_string())?;
-                if resp_buf[0] == 5 {
-                    // PreloadStatus
-                    let status = String::from_utf8_lossy(&resp_buf[1..]);
-                    println!("{}", status);
-                    Ok(())
-                } else {
-                    Err(format!("unexpected response type: {}", resp_buf[0]))
-                }
-            } else {
-                Err("empty response".to_string())
+            if resp_len == 0 {
+                return Err("empty response from daemon".to_string());
             }
+
+            let mut resp_buf = vec![0u8; resp_len];
+            stream
+                .read_exact(&mut resp_buf)
+                .map_err(|e| e.to_string())?;
+
+            // Response type byte 5 = PreloadStatus JSON payload.
+            if resp_buf[0] != 5 {
+                return Err(format!("unexpected response type: {}", resp_buf[0]));
+            }
+
+            let json_bytes = &resp_buf[1..];
+            // Pretty-print if the payload is valid JSON, otherwise emit raw.
+            match serde_json::from_slice::<serde_json::Value>(json_bytes) {
+                Ok(val) => {
+                    println!("{}", serde_json::to_string_pretty(&val).unwrap_or_default());
+                }
+                Err(_) => {
+                    println!("{}", String::from_utf8_lossy(json_bytes));
+                }
+            }
+            Ok(())
         }
         Command::Record(path) => CoreShift::run_daemon(DaemonConfig {
             enable_warmup: false,

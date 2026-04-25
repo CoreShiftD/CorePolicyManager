@@ -6,8 +6,60 @@ use crate::core::state_view::StateView;
 use crate::core::{Event, Intent, LogLevel, SystemService};
 use crate::high_level::addon::Addon;
 use crate::high_level::identity::{Principal, Request};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Structured diagnostic snapshot emitted by `preload-status`.
+///
+/// All fields are observable without daemon restart. The report is
+/// JSON-encoded and sent over IPC as a `WireResponse::PreloadStatus` frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PreloadStatusReport {
+    /// Whether the preload addon is currently enabled (override file present
+    /// and config flag set).
+    pub enabled: bool,
+    /// Whether the daemon was started with `--enable-warmup` / `preload` mode.
+    pub warmup_mode_active: bool,
+    /// Path of the Unix-domain socket the daemon is listening on.
+    pub socket_path: String,
+    /// Daemon mode string: `"normal"`, `"preload"`, or `"record"`.
+    pub mode: String,
+    /// Whether the `enable_preload` control file currently exists on disk.
+    pub enable_preload_file_exists: bool,
+    /// Path of the `enable_preload` control file.
+    pub enable_preload_path: String,
+    /// Whether `/dev/cpuset/top-app/cgroup.procs` exists on this device.
+    pub foreground_path_exists: bool,
+    /// Last foreground PID seen by the addon (`-1` if none yet).
+    pub last_foreground_pid: i32,
+    /// Last foreground package name resolved, if any.
+    pub last_foreground_package: Option<String>,
+    /// Number of packages in the resolved package map.
+    pub package_cache_count: usize,
+    /// Number of entries in the warmup dedup cache.
+    pub dedup_cache_count: usize,
+    /// Number of entries in the failure negative cache.
+    pub negative_cache_count: usize,
+    /// Number of warmups currently in flight.
+    pub in_flight_count: usize,
+    /// Total warmup failures since daemon start.
+    pub total_failures: u32,
+    /// Whether the addon has been auto-disabled due to excessive failures.
+    pub auto_disabled: bool,
+    /// Watched inotify paths and their registration status.
+    pub watched_paths: Vec<WatchedPath>,
+    /// Last skip reason logged by the addon, if any.
+    pub last_skip_reason: Option<String>,
+    /// Last warmup result summary, if any.
+    pub last_warmup_result: Option<String>,
+}
+
+/// Registration status for a single inotify-watched path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WatchedPath {
+    pub path: String,
+    pub registered: bool,
+}
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct PreloadConfig {
@@ -44,9 +96,17 @@ pub struct PreloadAddon {
     last_foreground_pid: i32,
     last_foreground_time: u64,
     pending_foreground_pid: Option<i32>,
+    last_foreground_package: Option<String>,
 
     total_failures: u32,
     auto_disabled: bool,
+
+    /// Inotify watch registration results, populated during daemon init.
+    pub watch_registrations: Vec<WatchedPath>,
+    /// Last skip reason emitted (e.g. `"already_in_flight"`, `"cooldown"`).
+    pub last_skip_reason: Option<String>,
+    /// Last warmup result summary (e.g. `"package=com.foo bytes=1234 duration_ms=50"`).
+    pub last_warmup_result: Option<String>,
 }
 
 impl PreloadAddon {
@@ -60,8 +120,12 @@ impl PreloadAddon {
             last_foreground_pid: -1,
             last_foreground_time: 0,
             pending_foreground_pid: None,
+            last_foreground_package: None,
             total_failures: 0,
             auto_disabled: false,
+            watch_registrations: Vec::new(),
+            last_skip_reason: None,
+            last_warmup_result: None,
         }
     }
 
@@ -141,6 +205,7 @@ impl Addon for PreloadAddon {
                 match kind {
                     SystemService::ResolveIdentity => {
                         if let Ok(package_name) = String::from_utf8(payload.clone()) {
+                            self.last_foreground_package = Some(package_name.clone());
                             reqs.push(self.submit(Intent::AddonLog {
                                 addon_id: 102,
                                 level: LogLevel::Debug,
@@ -151,6 +216,7 @@ impl Addon for PreloadAddon {
                             }));
 
                             if self.in_flight.contains(&package_name) {
+                                self.last_skip_reason = Some("already_in_flight".to_string());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Debug,
@@ -163,6 +229,7 @@ impl Addon for PreloadAddon {
                             }
 
                             if self.in_flight.len() >= self.config.global_max_in_flight {
+                                self.last_skip_reason = Some("global_budget_full".to_string());
                                 reqs.push(self.submit(Intent::AddonLog {
                                     addon_id: 102,
                                     level: LogLevel::Warn,
@@ -177,6 +244,7 @@ impl Addon for PreloadAddon {
                             if let Some(t) = self.negative_cache.get(&package_name) {
                                 let elapsed = now.saturating_sub(*t);
                                 if elapsed < self.config.per_package_failure_backoff_ms {
+                                    self.last_skip_reason = Some("failure_backoff".to_string());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
                                         level: LogLevel::Debug,
@@ -189,6 +257,7 @@ impl Addon for PreloadAddon {
                             if let Some(last_warmup) = self.dedup_cache.get(&package_name) {
                                 let elapsed = now.saturating_sub(*last_warmup);
                                 if elapsed < self.config.per_package_warmup_cooldown_ms {
+                                    self.last_skip_reason = Some("cooldown".to_string());
                                     reqs.push(self.submit(Intent::AddonLog {
                                         addon_id: 102,
                                         level: LogLevel::Debug,
@@ -286,13 +355,15 @@ impl Addon for PreloadAddon {
                 self.dedup_cache.insert(package.to_string(), now);
 
                 if let Ok((bytes, duration_ms)) = serde_json::from_slice::<(u64, u64)>(payload) {
+                    let result_summary = format!(
+                        "package={} bytes={} duration_ms={}",
+                        package, bytes, duration_ms
+                    );
+                    self.last_warmup_result = Some(result_summary.clone());
                     reqs.push(self.submit(Intent::AddonLog {
                         addon_id: 102,
                         level: LogLevel::Info,
-                        msg: format!(
-                            "preload done package={} bytes={} duration_ms={}",
-                            package, bytes, duration_ms
-                        ),
+                        msg: format!("preload done {}", result_summary),
                     }));
                 }
             }
@@ -320,30 +391,51 @@ impl Addon for PreloadAddon {
         reqs
     }
 
+    fn set_watch_registrations(
+        &mut self,
+        registrations: Vec<crate::high_level::addons::preload::WatchedPath>,
+    ) {
+        self.watch_registrations = registrations;
+    }
+
     fn get_status(&self) -> String {
-        let mut s = String::new();
-        s.push_str(&format!("enabled: {}\n", self.config.enabled));
-        s.push_str(&format!(
-            "last_foreground_pid: {}\n",
-            self.last_foreground_pid
-        ));
-        s.push_str(&format!(
-            "last_foreground_time: {}\n",
-            self.last_foreground_time
-        ));
-        s.push_str(&format!(
-            "pending_foreground_pid: {:?}\n",
-            self.pending_foreground_pid
-        ));
-        s.push_str(&format!("package_map_count: {}\n", self.package_map.len()));
-        s.push_str(&format!("dedup_cache_count: {}\n", self.dedup_cache.len()));
-        s.push_str(&format!(
-            "negative_cache_count: {}\n",
-            self.negative_cache.len()
-        ));
-        s.push_str(&format!("in_flight_count: {}\n", self.in_flight.len()));
-        s.push_str(&format!("total_failures: {}\n", self.total_failures));
-        s.push_str(&format!("auto_disabled: {}\n", self.auto_disabled));
-        s
+        let report = self.status_report();
+        serde_json::to_string_pretty(&report)
+            .unwrap_or_else(|e| format!("{{\"error\": \"serialization failed: {}\"}}", e))
+    }
+}
+
+impl PreloadAddon {
+    /// Build a [`PreloadStatusReport`] from current addon state.
+    ///
+    /// Filesystem checks (control file, foreground path) are performed at
+    /// call time so the report reflects the live on-disk state.
+    pub fn status_report(&self) -> PreloadStatusReport {
+        let enable_preload_path = crate::paths::ENABLE_PRELOAD_PATH.to_string();
+        let enable_preload_file_exists =
+            std::path::Path::new(crate::paths::ENABLE_PRELOAD_PATH).exists();
+        let foreground_path_exists =
+            std::path::Path::new("/dev/cpuset/top-app/cgroup.procs").exists();
+
+        PreloadStatusReport {
+            enabled: self.config.enabled,
+            warmup_mode_active: true, // addon is only instantiated when warmup is active
+            socket_path: crate::paths::SOCKET_PATH.to_string(),
+            mode: "preload".to_string(),
+            enable_preload_file_exists,
+            enable_preload_path,
+            foreground_path_exists,
+            last_foreground_pid: self.last_foreground_pid,
+            last_foreground_package: self.last_foreground_package.clone(),
+            package_cache_count: self.package_map.len(),
+            dedup_cache_count: self.dedup_cache.len(),
+            negative_cache_count: self.negative_cache.len(),
+            in_flight_count: self.in_flight.len(),
+            total_failures: self.total_failures,
+            auto_disabled: self.auto_disabled,
+            watched_paths: self.watch_registrations.clone(),
+            last_skip_reason: self.last_skip_reason.clone(),
+            last_warmup_result: self.last_warmup_result.clone(),
+        }
     }
 }

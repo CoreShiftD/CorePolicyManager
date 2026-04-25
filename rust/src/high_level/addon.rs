@@ -4,6 +4,7 @@
 
 use crate::core::Event;
 use crate::core::state_view::StateView;
+use crate::high_level::addons::preload::WatchedPath;
 use crate::high_level::capability::CapabilityToken;
 use crate::low_level::reactor::Event as ReactorEvent;
 
@@ -31,6 +32,10 @@ pub trait Addon {
     fn get_status(&self) -> String {
         "status not supported".to_string()
     }
+    /// Store inotify watch registration results so they appear in status
+    /// reports.  The default implementation is a no-op for addons that do not
+    /// use inotify.
+    fn set_watch_registrations(&mut self, _registrations: Vec<WatchedPath>) {}
 }
 
 pub struct NoOpAddon;
