@@ -117,9 +117,22 @@ pub struct Event {
     pub token: Token,
     pub readable: bool,
     pub writable: bool,
+    /// Indicates an error or hangup (EPOLLERR | EPOLLHUP).
+    ///
+    /// NOTE: For edge-triggered readiness, an error condition often means both
+    /// readable and writable are set to ensure the handler drains the FD.
     pub error: bool,
 }
 
+/// A lightweight epoll reactor using edge-triggered monitoring (EPOLLET).
+///
+/// ### Edge-Triggered Contract
+/// Because this reactor uses EPOLLET, all handlers MUST drain their respective
+/// read or write sources until they receive an `EAGAIN` / `EWOULDBLOCK` error
+/// (represented as `Ok(None)` in the `Fd` helpers).
+///
+/// Failure to drain a source will result in missing future readiness events
+/// for that file descriptor until it is re-registered or another event occurs.
 pub struct Reactor {
     epfd: RawFd,
     next_token: u64,
@@ -241,6 +254,10 @@ impl Reactor {
         timeout: i32,
     ) -> Result<usize, SysError> {
         buffer.clear();
+
+        if max_events == 0 {
+            return Ok(0);
+        }
 
         // Ensure buffer has enough capacity
         if buffer.capacity() < max_events {

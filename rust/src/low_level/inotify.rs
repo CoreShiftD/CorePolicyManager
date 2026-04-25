@@ -10,6 +10,11 @@
 use crate::low_level::reactor::Fd;
 use crate::low_level::spawn::SysError;
 
+/// A decoded inotify event.
+///
+/// NOTE: This currently only captures the fixed-size event header.
+/// Directory watches that require filtering by child filename must be extended
+/// to read and store the `name` field from the raw event buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InotifyEvent {
     pub wd: i32,
@@ -17,8 +22,8 @@ pub struct InotifyEvent {
     /// Raw `inotify_event.len` value.
     ///
     /// File watches commonly report an empty name; directory watches may carry
-    /// the affected child name. Runtime code maps by watch descriptor and uses
-    /// this only for diagnostics/tests.
+    /// the affected child name. This implementation currently ignores the
+    /// name bytes; `name_len` indicates how many bytes were skipped.
     pub name_len: u32,
 }
 

@@ -300,7 +300,6 @@ fn decode_status(status: i32) -> ExitStatus {
     }
 }
 
-#[derive(Clone)]
 pub struct Process {
     pid: pid_t,
 }
