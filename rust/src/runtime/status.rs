@@ -1,10 +1,8 @@
 use crate::features::profile::{
     CategoryDatabase, PrivilegeMode, ProfileFeature, ProfilePriority, SelectedProfile,
 };
-use crate::features::tweaks::{TweakStatus, TWEAK_STATUS_FILE};
-use crate::paths::{
-    APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE,
-};
+use crate::features::tweaks::{TWEAK_STATUS_FILE, TweakStatus};
+use crate::paths::{APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE};
 use crate::runtime::daemon::{Daemon, DaemonConfig};
 use crate::runtime::foreground::ForegroundSnapshot;
 use crate::runtime::logging;
@@ -555,7 +553,9 @@ mod tests {
             root.join("app_index_status.json")
                 .to_string_lossy()
                 .into_owned(),
-            root.join("tweak_status.json").to_string_lossy().into_owned(),
+            root.join("tweak_status.json")
+                .to_string_lossy()
+                .into_owned(),
         )
     }
 
@@ -596,10 +596,9 @@ mod tests {
         write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(public.uptime_secs > 0);
         assert!(public.session_secs > 0);
     }
@@ -610,10 +609,9 @@ mod tests {
         write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(public.profile.is_none());
     }
 
@@ -623,10 +621,9 @@ mod tests {
         write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(public.preload.is_none());
     }
 
@@ -636,10 +633,9 @@ mod tests {
         write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(public.app_index.is_none());
     }
 
@@ -649,10 +645,9 @@ mod tests {
         write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(public.tweak.is_none());
     }
 
@@ -703,23 +698,27 @@ mod tests {
             Path::new(&tweak),
             &TweakStatus {
                 schema_version: 1,
-                last_profile: "balance".to_string(),
+                last_source: "preset:balance".to_string(),
+                last_commands: 5,
+                last_successful: 3,
+                last_failed: 1,
                 last_applied_ms: 100,
-                summary: crate::features::tweaks::TweakApplySummary {
-                    profile_name: "balance".to_string(),
+                summary: Some(crate::features::tweaks::TweakApplySummary {
+                    source: "preset:balance".to_string(),
+                    requested_commands: 1,
+                    executed_commands: 5,
                     attempted_writes: 5,
                     successful_writes: 3,
                     skipped_writes: 1,
                     failed_writes: 1,
                     first_error: Some("test error".to_string()),
-                },
+                }),
             },
         );
 
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         let json = serde_json::to_value(public).unwrap();
         let object = json.as_object().unwrap();
         assert!(!object.contains_key("started_ms"));
@@ -771,17 +770,19 @@ mod tests {
             Path::new(&tweak),
             &TweakStatus {
                 schema_version: 1,
-                last_profile: "performance".to_string(),
+                last_source: "preset:performance".to_string(),
+                last_commands: 0,
+                last_successful: 0,
+                last_failed: 0,
                 last_applied_ms: 200,
-                summary: crate::features::tweaks::TweakApplySummary::default(),
+                summary: Some(crate::features::tweaks::TweakApplySummary::default()),
             },
         );
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(!public.features.usage);
         assert!(!public.features.profile);
         assert!(!public.features.preload);
@@ -800,10 +801,9 @@ mod tests {
         write_json(Path::new(&core), &core_status);
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         let json = serde_json::to_value(public).unwrap();
         assert!(json.get("device_uptime_secs").is_none());
     }
@@ -881,10 +881,9 @@ mod tests {
         .unwrap();
 
         let db = CategoryDatabase::default();
-        let public = read_public_status_from_paths(
-            &core, &profile, &preload, &app_index, &tweak, &db,
-        )
-        .unwrap();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
+                .unwrap();
         assert!(public.alive);
 
         let core_raw: DaemonStatus = read_json_file(&core).unwrap();

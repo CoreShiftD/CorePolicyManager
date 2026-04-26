@@ -1,21 +1,17 @@
-//! Applies system-level performance, balance, and power-saving tweaks.
-//
-// This module ports and modernizes the logic from a legacy script, providing a safe
-// and robust way to apply kernel, CPU, and I/O tuning profiles. It uses a JSON-based
-// cache for discovered system properties to avoid unnecessary filesystem scans on
-// every run.
-
 use crate::runtime::status::write_json_file_if_changed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// --- Public API ---
+const TWEAK_CACHE_FILE: &str = "/data/local/tmp/coreshift/tweak_cache.json";
+pub const TWEAK_STATUS_FILE: &str = "/data/local/tmp/coreshift/tweak_status.json";
+const LITTLE_CORE_CAP_THRESHOLD: u32 = 512;
+const ALLOWED_ROOTS: [&str; 4] = ["/proc/sys/", "/sys/", "/dev/cpuset/", "/dev/cpuctl/"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TweakProfile {
@@ -39,25 +35,30 @@ impl FromStr for TweakProfile {
 
 impl fmt::Display for TweakProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::Balance => "balance",
-                Self::Performance => "performance",
-                Self::Power => "power",
-            }
-        )
+        let value = match self {
+            Self::Balance => "balance",
+            Self::Performance => "performance",
+            Self::Power => "power",
+        };
+        write!(f, "{}", value)
     }
 }
 
-/// A summary of the actions taken and the result of applying a tweak profile.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct TweakApplySummary {
-    pub profile_name: String,
+    #[serde(default, alias = "profile_name")]
+    pub source: String,
+    #[serde(default)]
+    pub requested_commands: usize,
+    #[serde(default)]
+    pub executed_commands: usize,
+    #[serde(default)]
     pub attempted_writes: u32,
+    #[serde(default)]
     pub successful_writes: u32,
+    #[serde(default)]
     pub skipped_writes: u32,
+    #[serde(default)]
     pub failed_writes: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_error: Option<String>,
@@ -68,42 +69,79 @@ impl TweakApplySummary {
         self.attempted_writes += 1;
         match result {
             WriteResult::Success => self.successful_writes += 1,
-            WriteResult::Skipped => self.skipped_writes += 1,
-            WriteResult::Failed(e) => {
+            WriteResult::Skipped | WriteResult::PathMissing | WriteResult::GovernorUnsupported => {
+                self.skipped_writes += 1
+            }
+            WriteResult::Failed(error) => {
                 self.failed_writes += 1;
                 if self.first_error.is_none() {
-                    self.first_error = Some(e);
+                    self.first_error = Some(error);
                 }
             }
-            WriteResult::PathMissing => self.skipped_writes += 1,
-            WriteResult::GovernorUnsupported => self.skipped_writes += 1, // New skipped reason
+        }
+    }
+
+    fn record_command_error(&mut self, error: String) {
+        self.failed_writes += 1;
+        if self.first_error.is_none() {
+            self.first_error = Some(error);
         }
     }
 }
 
-// --- Status Reporting ---
-pub const TWEAK_STATUS_FILE: &str = "/data/local/tmp/coreshift/tweak_status.json";
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TweakStatus {
+    #[serde(default = "schema_version_1")]
     pub schema_version: u32,
-    pub last_profile: String,
+    #[serde(default, alias = "last_profile")]
+    pub last_source: String,
+    #[serde(default)]
+    pub last_commands: usize,
+    #[serde(default)]
+    pub last_successful: u32,
+    #[serde(default)]
+    pub last_failed: u32,
+    #[serde(default)]
     pub last_applied_ms: u64,
-    pub summary: TweakApplySummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<TweakApplySummary>,
+}
+
+impl Default for TweakStatus {
+    fn default() -> Self {
+        Self {
+            schema_version: schema_version_1(),
+            last_source: String::new(),
+            last_commands: 0,
+            last_successful: 0,
+            last_failed: 0,
+            last_applied_ms: 0,
+            summary: None,
+        }
+    }
 }
 
 impl TweakStatus {
+    fn from_summary(summary: &TweakApplySummary) -> Self {
+        Self {
+            schema_version: schema_version_1(),
+            last_source: summary.source.clone(),
+            last_commands: summary.executed_commands,
+            last_successful: summary.successful_writes,
+            last_failed: summary.failed_writes,
+            last_applied_ms: now_ms(),
+            summary: Some(summary.clone()),
+        }
+    }
+
     pub fn write_if_changed(
         &self,
         last_written: &mut Option<TweakStatus>,
     ) -> Result<bool, std::io::Error> {
-        write_json_file_if_changed(TWEAK_STATUS_FILE, self, last_written)
+        let path = tweak_status_file_path();
+        write_json_file_if_changed(path.to_string_lossy().as_ref(), self, last_written)
     }
 }
-
-// --- Caching ---
-const TWEAK_CACHE_FILE: &str = "/data/local/tmp/coreshift/tweak_cache.json";
-const LITTLE_CORE_CAP_THRESHOLD: u32 = 512;
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct TweakCache {
@@ -111,13 +149,13 @@ pub struct TweakCache {
     #[serde(default)]
     pub updated_ms: u64,
     pub entries: HashMap<String, String>,
-    #[serde(skip)] // Do not serialize, only for runtime tracking
+    #[serde(skip)]
     pub dirty: bool,
 }
 
 impl TweakCache {
     pub fn load() -> Self {
-        Self::load_from_path(Path::new(TWEAK_CACHE_FILE))
+        Self::load_from_path(&tweak_cache_file_path())
     }
 
     fn load_from_path(path: &Path) -> Self {
@@ -129,15 +167,12 @@ impl TweakCache {
     }
 
     pub fn save(&mut self) -> io::Result<()> {
-        self.save_to_path(Path::new(TWEAK_CACHE_FILE))
+        self.save_to_path(&tweak_cache_file_path())
     }
 
     fn save_to_path(&mut self, path: &Path) -> io::Result<()> {
         self.schema_version = 1;
-        self.updated_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        self.updated_ms = now_ms();
 
         if self.entries.len() > 256 {
             return Err(io::Error::other("Cache size exceeds limit"));
@@ -149,26 +184,27 @@ impl TweakCache {
         let temp_path = path.with_extension("json.tmp");
         fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
         fs::rename(&temp_path, path)?;
-        self.dirty = false; // Clear dirty flag after successful save
+        self.dirty = false;
         Ok(())
     }
 
     pub fn clear() -> io::Result<()> {
-        Self::clear_path(Path::new(TWEAK_CACHE_FILE))
+        Self::clear_path(&tweak_cache_file_path())
     }
 
     fn clear_path(path: &Path) -> io::Result<()> {
         match fs::remove_file(path) {
             Ok(_) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
         }
     }
 
-    /// Inserts a key-value pair into the cache. Sets dirty flag if value changes or is new.
-    fn insert(&mut self, key: String, value: String) {
-        if let Some(old_value) = self.entries.insert(key, value.clone()) {
-            if old_value != value {
+    fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        let key = key.into();
+        let value = value.into();
+        if let Some(previous) = self.entries.insert(key, value.clone()) {
+            if previous != value {
                 self.dirty = true;
             }
         } else {
@@ -177,124 +213,530 @@ impl TweakCache {
     }
 }
 
-// --- Profile Definitions ---
-#[derive(Debug, Clone)]
-struct ProfileConfig {
-    sched_migration_cost: u32,
-    sched_min_granularity: u32,
-    sched_wakeup_granularity: u32,
-    schedutil_up: u32,
-    schedutil_down: u32,
-    read_ahead_kb: u32,
-    nr_requests: u32,
-    swappiness: u32,
-    vfs_cache_pressure: u32,
-    dirty_background_ratio: u32,
-    dirty_ratio: u32,
-    dirty_expire: u32,
-    thp_enabled: &'static str,
-    thp_defrag: &'static str,
-    uclamp_min_top_app: u32,
-    uclamp_max_background: u32,
-    watermark_scale_factor: u32,
-    page_cluster: u32,
-    scan_sleep_millisecs: u32,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TweakCommand {
+    Write {
+        path: String,
+        value: String,
+    },
+    GovernorCpu {
+        target: String,
+    },
+    GovernorDevfreq {
+        target: String,
+    },
+    Cpuset {
+        group: String,
+        target: CpusetTarget,
+    },
+    Uclamp {
+        group: String,
+        bound: UclampBound,
+        value: u32,
+    },
+    Preset(TweakProfile),
 }
 
-static CONFIG_BALANCE: ProfileConfig = ProfileConfig {
-    sched_migration_cost: 5000000,
-    sched_min_granularity: 1500000,
-    sched_wakeup_granularity: 2000000,
-    schedutil_up: 500,
-    schedutil_down: 20000,
-    read_ahead_kb: 128,
-    nr_requests: 64,
-    swappiness: 10,
-    vfs_cache_pressure: 50,
-    dirty_background_ratio: 5,
-    dirty_ratio: 15,
-    dirty_expire: 2000,
-    thp_enabled: "madvise",
-    thp_defrag: "defer",
-    uclamp_min_top_app: 20,
-    uclamp_max_background: 10,
-    watermark_scale_factor: 10,
-    page_cluster: 0,
-    scan_sleep_millisecs: 10000,
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpusetTarget {
+    All,
+    Little,
+}
 
-static CONFIG_PERFORMANCE: ProfileConfig = ProfileConfig {
-    sched_migration_cost: 3000000,
-    sched_min_granularity: 1000000,
-    sched_wakeup_granularity: 1500000,
-    schedutil_up: 250,
-    schedutil_down: 40000,
-    read_ahead_kb: 256,
-    nr_requests: 128,
-    swappiness: 5,
-    vfs_cache_pressure: 100,
-    dirty_background_ratio: 10,
-    dirty_ratio: 30,
-    dirty_expire: 1000,
-    thp_enabled: "always",
-    thp_defrag: "always",
-    uclamp_min_top_app: 60,
-    uclamp_max_background: 5,
-    watermark_scale_factor: 15,
-    page_cluster: 0,
-    scan_sleep_millisecs: 5000,
-};
+impl fmt::Display for CpusetTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::Little => write!(f, "little"),
+        }
+    }
+}
 
-static CONFIG_POWER: ProfileConfig = ProfileConfig {
-    sched_migration_cost: 10000000,
-    sched_min_granularity: 3000000,
-    sched_wakeup_granularity: 4000000,
-    schedutil_up: 2000,
-    schedutil_down: 10000,
-    read_ahead_kb: 64,
-    nr_requests: 32,
-    swappiness: 60,
-    vfs_cache_pressure: 10,
-    dirty_background_ratio: 2,
-    dirty_ratio: 5,
-    dirty_expire: 5000,
-    thp_enabled: "never",
-    thp_defrag: "never",
-    uclamp_min_top_app: 10,
-    uclamp_max_background: 15,
-    watermark_scale_factor: 5,
-    page_cluster: 1,
-    scan_sleep_millisecs: 20000,
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UclampBound {
+    Min,
+    Max,
+}
 
-// --- Discovery & Application Logic ---
+impl fmt::Display for UclampBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Min => write!(f, "min"),
+            Self::Max => write!(f, "max"),
+        }
+    }
+}
 
 enum WriteResult {
     Success,
     Skipped,
-    PathMissing,         // Path does not exist
-    GovernorUnsupported, // Governor not supported by available_governors
+    PathMissing,
+    GovernorUnsupported,
     Failed(String),
 }
 
-/// Safely writes a value to a system path.
-fn write_value(path_str: &str, value: &str) -> WriteResult {
-    let path = Path::new(path_str);
-    if !path.exists() {
+pub fn run_tweak_command_line(
+    source: &str,
+    command_line: &str,
+) -> Result<TweakApplySummary, String> {
+    expand_command_line(command_line)?;
+    Ok(apply_tweak_commands(source, &[command_line.to_string()]))
+}
+
+pub fn apply_tweak_preset(profile: TweakProfile) -> TweakApplySummary {
+    apply_tweak_commands(
+        &format!("preset:{}", profile),
+        &preset_command_lines(profile),
+    )
+}
+
+pub fn apply_tweak_commands(source: &str, commands: &[String]) -> TweakApplySummary {
+    let mut cache = TweakCache::load();
+    let mut summary = TweakApplySummary {
+        source: source.to_string(),
+        requested_commands: commands.len(),
+        ..Default::default()
+    };
+
+    discover_cpu_topology(&mut cache);
+
+    for command_line in commands {
+        match expand_command_line(command_line) {
+            Ok(parsed) => {
+                summary.executed_commands += parsed.len();
+                for command in parsed {
+                    execute_command(&command, &mut cache, &mut summary);
+                }
+            }
+            Err(error) => summary.record_command_error(error),
+        }
+    }
+
+    if cache.dirty
+        && let Err(error) = cache.save()
+    {
+        summary.record_command_error(format!("Failed to save tweak cache: {}", error));
+    }
+
+    let status = TweakStatus::from_summary(&summary);
+    let mut last_written = None;
+    if let Err(error) = status.write_if_changed(&mut last_written) {
+        summary.record_command_error(format!("Failed to write tweak status: {}", error));
+    }
+
+    summary
+}
+
+pub fn command_fingerprint(commands: &[String]) -> Result<String, String> {
+    let normalized = normalize_commands(commands)?;
+    serde_json::to_string(&normalized).map_err(|error| error.to_string())
+}
+
+pub fn normalize_commands(commands: &[String]) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    for command_line in commands {
+        for command in expand_command_line(command_line)? {
+            normalized.push(format_command(&command));
+        }
+    }
+    Ok(normalized)
+}
+
+pub fn parse_tweak_command_line(command_line: &str) -> Result<TweakCommand, String> {
+    parse_command_line(command_line)
+}
+
+fn schema_version_1() -> u32 {
+    1
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn tweak_cache_file_path() -> PathBuf {
+    env_path("COREPOLICY_TEST_TWEAK_CACHE_FILE", TWEAK_CACHE_FILE)
+}
+
+fn tweak_status_file_path() -> PathBuf {
+    env_path("COREPOLICY_TEST_TWEAK_STATUS_FILE", TWEAK_STATUS_FILE)
+}
+
+fn proc_root_path() -> PathBuf {
+    env_path("COREPOLICY_TEST_PROC_ROOT", "/proc")
+}
+
+fn sys_root_path() -> PathBuf {
+    env_path("COREPOLICY_TEST_SYS_ROOT", "/sys")
+}
+
+fn cpuset_root_path() -> PathBuf {
+    env_path("COREPOLICY_TEST_CPUSET_ROOT", "/dev/cpuset")
+}
+
+fn cpuctl_root_path() -> PathBuf {
+    env_path("COREPOLICY_TEST_CPUCTL_ROOT", "/dev/cpuctl")
+}
+
+fn env_path(key: &str, default: &str) -> PathBuf {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default))
+}
+
+fn cpu_dir() -> PathBuf {
+    sys_root_path().join("devices/system/cpu")
+}
+
+fn cpufreq_dir() -> PathBuf {
+    cpu_dir().join("cpufreq")
+}
+
+fn devfreq_dir() -> PathBuf {
+    sys_root_path().join("class/devfreq")
+}
+
+fn is_allowed_write_path(path: &str) -> bool {
+    ALLOWED_ROOTS.iter().any(|root| path.starts_with(root))
+}
+
+fn map_runtime_path(path: &str) -> Option<PathBuf> {
+    if !is_allowed_write_path(path) {
+        return None;
+    }
+
+    path.strip_prefix("/proc/sys/")
+        .map(|suffix| proc_root_path().join("sys").join(suffix))
+        .or_else(|| {
+            path.strip_prefix("/sys/")
+                .map(|suffix| sys_root_path().join(suffix))
+        })
+        .or_else(|| {
+            path.strip_prefix("/dev/cpuset/")
+                .map(|suffix| cpuset_root_path().join(suffix))
+        })
+        .or_else(|| {
+            path.strip_prefix("/dev/cpuctl/")
+                .map(|suffix| cpuctl_root_path().join(suffix))
+        })
+}
+
+fn parse_command_line(command_line: &str) -> Result<TweakCommand, String> {
+    let trimmed = command_line.trim();
+    if trimmed.is_empty() {
+        return Err("empty tweak command".to_string());
+    }
+
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    match parts.as_slice() {
+        ["preset", profile] => Ok(TweakCommand::Preset(parse_profile(profile)?)),
+        ["tweak", "write", path, value @ ..] if !value.is_empty() => {
+            let value = value.join(" ");
+            if !is_allowed_write_path(path) {
+                return Err(format!("path '{}' is not allowed", path));
+            }
+            Ok(TweakCommand::Write {
+                path: (*path).to_string(),
+                value,
+            })
+        }
+        ["tweak", "governor", "cpu", target] => Ok(TweakCommand::GovernorCpu {
+            target: (*target).to_string(),
+        }),
+        ["tweak", "governor", "devfreq", target] => Ok(TweakCommand::GovernorDevfreq {
+            target: (*target).to_string(),
+        }),
+        ["tweak", "cpuset", group, "all"] => Ok(TweakCommand::Cpuset {
+            group: (*group).to_string(),
+            target: CpusetTarget::All,
+        }),
+        ["tweak", "cpuset", group, "little"] => Ok(TweakCommand::Cpuset {
+            group: (*group).to_string(),
+            target: CpusetTarget::Little,
+        }),
+        ["tweak", "uclamp", group, "min", value] => Ok(TweakCommand::Uclamp {
+            group: (*group).to_string(),
+            bound: UclampBound::Min,
+            value: parse_uclamp_value(value)?,
+        }),
+        ["tweak", "uclamp", group, "max", value] => Ok(TweakCommand::Uclamp {
+            group: (*group).to_string(),
+            bound: UclampBound::Max,
+            value: parse_uclamp_value(value)?,
+        }),
+        _ => Err(format!("invalid tweak command '{}'", command_line)),
+    }
+}
+
+fn parse_profile(value: &str) -> Result<TweakProfile, String> {
+    value
+        .parse::<TweakProfile>()
+        .map_err(|error| error.to_string())
+}
+
+fn parse_uclamp_value(value: &str) -> Result<u32, String> {
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| format!("invalid uclamp value '{}'", value))?;
+    if parsed > 100 {
+        return Err(format!(
+            "uclamp value '{}' must be between 0 and 100",
+            value
+        ));
+    }
+    Ok(parsed)
+}
+
+fn expand_command_line(command_line: &str) -> Result<Vec<TweakCommand>, String> {
+    match parse_command_line(command_line)? {
+        TweakCommand::Preset(profile) => preset_command_lines(profile)
+            .into_iter()
+            .map(|command| parse_command_line(&command))
+            .collect(),
+        command => Ok(vec![command]),
+    }
+}
+
+fn format_command(command: &TweakCommand) -> String {
+    match command {
+        TweakCommand::Write { path, value } => format!("tweak write {} {}", path, value),
+        TweakCommand::GovernorCpu { target } => format!("tweak governor cpu {}", target),
+        TweakCommand::GovernorDevfreq { target } => {
+            format!("tweak governor devfreq {}", target)
+        }
+        TweakCommand::Cpuset { group, target } => {
+            format!("tweak cpuset {} {}", group, target)
+        }
+        TweakCommand::Uclamp {
+            group,
+            bound,
+            value,
+        } => format!("tweak uclamp {} {} {}", group, bound, value),
+        TweakCommand::Preset(profile) => format!("preset {}", profile),
+    }
+}
+
+fn preset_command_lines(profile: TweakProfile) -> Vec<String> {
+    let (cpu_governor, devfreq_governor, swappiness, dirty_ratio, dirty_background_ratio) =
+        match profile {
+            TweakProfile::Balance => ("balance", "powersave", "10", "15", "5"),
+            TweakProfile::Performance => ("performance", "performance", "5", "30", "10"),
+            TweakProfile::Power => ("powersave", "powersave", "60", "5", "2"),
+        };
+    let (preload_cpuset, top_app_uclamp, background_uclamp) = match profile {
+        TweakProfile::Balance => ("all", "20", "10"),
+        TweakProfile::Performance => ("all", "60", "5"),
+        TweakProfile::Power => ("little", "10", "15"),
+    };
+
+    vec![
+        format!("tweak governor cpu {}", cpu_governor),
+        format!("tweak governor devfreq {}", devfreq_governor),
+        format!("tweak write /proc/sys/vm/swappiness {}", swappiness),
+        "tweak write /proc/sys/vm/vfs_cache_pressure 50".to_string(),
+        format!(
+            "tweak write /proc/sys/vm/dirty_background_ratio {}",
+            dirty_background_ratio
+        ),
+        format!("tweak write /proc/sys/vm/dirty_ratio {}", dirty_ratio),
+        format!("tweak cpuset top-app {}", preload_cpuset),
+        "tweak cpuset foreground all".to_string(),
+        "tweak cpuset background little".to_string(),
+        "tweak cpuset system-background little".to_string(),
+        format!("tweak uclamp top-app min {}", top_app_uclamp),
+        "tweak uclamp top-app max 100".to_string(),
+        format!("tweak uclamp background max {}", background_uclamp),
+    ]
+}
+
+fn execute_command(
+    command: &TweakCommand,
+    cache: &mut TweakCache,
+    summary: &mut TweakApplySummary,
+) {
+    match command {
+        TweakCommand::Write { path, value } => {
+            summary.record_write_result(write_value(path, value));
+        }
+        TweakCommand::GovernorCpu { target } => {
+            execute_cpu_governor(target, cache, summary);
+        }
+        TweakCommand::GovernorDevfreq { target } => {
+            execute_devfreq_governor(target, summary);
+        }
+        TweakCommand::Cpuset { group, target } => {
+            execute_cpuset(group, *target, cache, summary);
+        }
+        TweakCommand::Uclamp {
+            group,
+            bound,
+            value,
+        } => {
+            let path = format!("/dev/cpuctl/{}/cpu.uclamp.{}", group, bound);
+            summary.record_write_result(write_value(&path, &value.to_string()));
+        }
+        TweakCommand::Preset(profile) => {
+            for preset_command in preset_command_lines(*profile) {
+                if let Ok(expanded) = expand_command_line(&preset_command) {
+                    for command in expanded {
+                        execute_command(&command, cache, summary);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn execute_cpu_governor(target: &str, cache: &mut TweakCache, summary: &mut TweakApplySummary) {
+    const BALANCE_GOV_PRIORITY: &[&str] =
+        &["schedutil", "simple_ondemand", "schedhorizon", "sugov_ext"];
+
+    for_each_dir_entry(&cpufreq_dir(), |name| {
+        if !name.starts_with("policy") {
+            return;
+        }
+
+        let policy_dir = cpufreq_dir().join(name);
+        let governor_path = policy_dir.join("scaling_governor");
+        let available_path = policy_dir.join("scaling_available_governors");
+        if !governor_path.exists() {
+            summary.record_write_result(WriteResult::PathMissing);
+            return;
+        }
+
+        let desired = if target == "balance" {
+            let cache_key = format!("{}_governor", name);
+            if let Some(cached) = cache.entries.get(&cache_key).cloned() {
+                Some(cached)
+            } else if let Ok(available) = fs::read_to_string(&available_path) {
+                pick_best(&available, BALANCE_GOV_PRIORITY).map(|best| {
+                    cache.insert(cache_key, best.to_string());
+                    best.to_string()
+                })
+            } else {
+                None
+            }
+        } else {
+            match fs::read_to_string(&available_path) {
+                Ok(available) if governor_is_available(&available, target) => {
+                    Some(target.to_string())
+                }
+                Ok(_) => {
+                    summary.record_write_result(WriteResult::GovernorUnsupported);
+                    None
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    summary.record_write_result(WriteResult::GovernorUnsupported);
+                    None
+                }
+                Err(error) => {
+                    summary.record_write_result(WriteResult::Failed(format!(
+                        "Failed to read available governors for {}: {}",
+                        name, error
+                    )));
+                    None
+                }
+            }
+        };
+
+        if let Some(governor) = desired {
+            summary.record_write_result(write_value(
+                &format!("/sys/devices/system/cpu/cpufreq/{}/scaling_governor", name),
+                &governor,
+            ));
+        } else if target == "balance" {
+            summary.record_write_result(WriteResult::GovernorUnsupported);
+        }
+    });
+}
+
+fn execute_devfreq_governor(target: &str, summary: &mut TweakApplySummary) {
+    for_each_dir_entry(&devfreq_dir(), |name| {
+        let path = format!("/sys/class/devfreq/{}/governor", name);
+        summary.record_write_result(write_value(&path, target));
+    });
+}
+
+fn execute_cpuset(
+    group: &str,
+    target: CpusetTarget,
+    cache: &mut TweakCache,
+    summary: &mut TweakApplySummary,
+) {
+    discover_cpu_topology(cache);
+    let cache_key = match target {
+        CpusetTarget::All => "cpuset_all",
+        CpusetTarget::Little => "cpuset_little",
+    };
+    if let Some(cpus) = cache.entries.get(cache_key) {
+        let path = format!("/dev/cpuset/{}/cpus", group);
+        summary.record_write_result(write_value(&path, cpus));
+    } else {
+        summary.record_write_result(WriteResult::Skipped);
+    }
+}
+
+fn write_value(logical_path: &str, value: &str) -> WriteResult {
+    let Some(actual_path) = map_runtime_path(logical_path) else {
+        return WriteResult::Failed(format!("Path '{}' is not allowed", logical_path));
+    };
+    if !actual_path.exists() {
         return WriteResult::PathMissing;
     }
-    if let Ok(current) = fs::read_to_string(path)
+    if let Ok(current) = fs::read_to_string(&actual_path)
         && current.trim() == value
     {
         return WriteResult::Skipped;
     }
-    match fs::write(path, value) {
+    match fs::write(&actual_path, value) {
         Ok(_) => WriteResult::Success,
-        Err(e) => WriteResult::Failed(format!("{} -> '{}': {}", path_str, value, e)),
+        Err(error) => WriteResult::Failed(format!("{} -> '{}': {}", logical_path, value, error)),
     }
 }
 
-fn for_each_in_dir<F: FnMut(&str)>(dir: &str, mut f: F) {
+fn discover_cpu_topology(cache: &mut TweakCache) {
+    if cache.entries.contains_key("cpuset_little") && cache.entries.contains_key("cpuset_all") {
+        return;
+    }
+
+    let mut little_cores = Vec::new();
+    let mut all_cores = Vec::new();
+    for_each_dir_entry(&cpu_dir(), |name| {
+        if name.starts_with("cpu")
+            && name[3..].chars().all(char::is_numeric)
+            && let Ok(id) = name[3..].parse::<u32>()
+        {
+            all_cores.push(id);
+            let capacity_path = cpu_dir().join(name).join("cpu_capacity");
+            if let Ok(capacity) = fs::read_to_string(capacity_path)
+                && let Ok(value) = capacity.trim().parse::<u32>()
+                && value > 0
+                && value < LITTLE_CORE_CAP_THRESHOLD
+            {
+                little_cores.push(id);
+            }
+        }
+    });
+
+    if !little_cores.is_empty() {
+        cache.insert("cpuset_little", format_cpu_list(&little_cores));
+    }
+    if !all_cores.is_empty() {
+        cache.insert("cpuset_all", format_cpu_list(&all_cores));
+    }
+}
+
+fn format_cpu_list(cpus: &[u32]) -> String {
+    cpus.iter()
+        .map(|cpu| cpu.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn for_each_dir_entry<F: FnMut(&str)>(dir: &Path, mut f: F) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
@@ -304,414 +746,40 @@ fn for_each_in_dir<F: FnMut(&str)>(dir: &str, mut f: F) {
     }
 }
 
-fn pick_best<'a>(available: &str, prio: &[&'a str]) -> Option<&'a str> {
-    for p in prio {
-        if governor_is_available(available, p) {
-            return Some(*p);
-        }
-    }
-    None
+fn pick_best<'a>(available: &str, priorities: &[&'a str]) -> Option<&'a str> {
+    priorities
+        .iter()
+        .copied()
+        .find(|target| governor_is_available(available, target))
 }
 
 fn governor_is_available(available: &str, target: &str) -> bool {
     available.split_whitespace().any(|entry| entry == target)
 }
 
-/// Discovers CPU topology (little and all cores) and stores it in the cache.
-fn discover_cpu_topology(cache: &mut TweakCache, _summary: &mut TweakApplySummary) {
-    let current_cpuset_little = cache.entries.get("cpuset_little").cloned();
-    let current_cpuset_all = cache.entries.get("cpuset_all").cloned();
-
-    if current_cpuset_little.is_none() || current_cpuset_all.is_none() {
-        let mut little_cores = Vec::new();
-        let mut all_cores = Vec::new();
-
-        for_each_in_dir("/sys/devices/system/cpu", |name| {
-            if name.starts_with("cpu")
-                && name[3..].chars().all(char::is_numeric)
-                && let Ok(id) = name[3..].parse::<u32>()
-            {
-                all_cores.push(id);
-                let cap_path = format!("/sys/devices/system/cpu/{}/cpu_capacity", name);
-                if let Ok(cap_str) = fs::read_to_string(&cap_path)
-                    && let Ok(cap) = cap_str.trim().parse::<u32>()
-                    && cap > 0
-                    && cap < LITTLE_CORE_CAP_THRESHOLD
-                {
-                    little_cores.push(id);
-                }
-            }
-        });
-
-        if !little_cores.is_empty() {
-            cache.insert("cpuset_little".to_string(), format_cpu_list(&little_cores));
-        }
-        if !all_cores.is_empty() {
-            cache.insert("cpuset_all".to_string(), format_cpu_list(&all_cores));
-        }
-    }
-}
-
-fn format_cpu_list(cpus: &[u32]) -> String {
-    cpus.iter()
-        .map(|c| c.to_string())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn apply_governors(
-    profile: &TweakProfile,
-    cache: &mut TweakCache,
-    summary: &mut TweakApplySummary,
-) {
-    const GOV_PRIO_BALANCE: &[&str] =
-        &["schedutil", "simple_ondemand", "schedhorizon", "sugov_ext"];
-
-    for_each_in_dir("/sys/devices/system/cpu/cpufreq", |name| {
-        if !name.starts_with("policy") {
-            return;
-        }
-        let cache_key = format!("{}_governor", name);
-        let gov_path = format!("/sys/devices/system/cpu/cpufreq/{}/scaling_governor", name);
-        let avail_path = format!(
-            "/sys/devices/system/cpu/cpufreq/{}/scaling_available_governors",
-            name
-        );
-
-        if !Path::new(&gov_path).exists() {
-            summary.record_write_result(WriteResult::PathMissing);
-            return;
-        }
-
-        let target_gov_opt = match profile {
-            TweakProfile::Balance => {
-                if let Some(cached_gov) = cache.entries.get(&cache_key).cloned() {
-                    Some(cached_gov)
-                } else if let Ok(avail) = fs::read_to_string(Path::new(&avail_path)) {
-                    if let Some(best) = pick_best(&avail, GOV_PRIO_BALANCE) {
-                        cache.insert(cache_key, best.to_string());
-                        Some(best.to_string())
-                    } else {
-                        summary.record_write_result(WriteResult::GovernorUnsupported);
-                        None
-                    }
-                } else {
-                    summary.record_write_result(WriteResult::GovernorUnsupported);
-                    None
-                }
-            }
-            TweakProfile::Performance | TweakProfile::Power => {
-                let target_gov_name = profile.to_string();
-                match fs::read_to_string(Path::new(&avail_path)) {
-                    Ok(avail) => {
-                        if governor_is_available(&avail, &target_gov_name) {
-                            Some(target_gov_name)
-                        } else {
-                            summary.record_write_result(WriteResult::GovernorUnsupported);
-                            None
-                        }
-                    }
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                        summary.record_write_result(WriteResult::GovernorUnsupported);
-                        None
-                    }
-                    Err(e) => {
-                        summary.record_write_result(WriteResult::Failed(format!(
-                            "Failed to read available governors for {}: {}",
-                            name, e
-                        )));
-                        None
-                    }
-                }
-            }
-        };
-
-        if let Some(target_gov) = target_gov_opt {
-            summary.record_write_result(write_value(&gov_path, &target_gov));
-        }
-    });
-
-    for_each_in_dir("/sys/class/devfreq", |name| {
-        let gov_path = format!("/sys/class/devfreq/{}/governor", name);
-        let target_gov = match profile {
-            TweakProfile::Performance => "performance",
-            TweakProfile::Power => "powersave",
-            TweakProfile::Balance => "powersave",
-        };
-        summary.record_write_result(write_value(&gov_path, target_gov));
-    });
-}
-
-fn apply_kernel_tweaks(cfg: &ProfileConfig, summary: &mut TweakApplySummary) {
-    summary.record_write_result(write_value(
-        "/proc/sys/kernel/sched_migration_cost_ns",
-        &cfg.sched_migration_cost.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/kernel/sched_min_granularity_ns",
-        &cfg.sched_min_granularity.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/kernel/sched_wakeup_granularity_ns",
-        &cfg.sched_wakeup_granularity.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/swappiness",
-        &cfg.swappiness.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/vfs_cache_pressure",
-        &cfg.vfs_cache_pressure.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/dirty_background_ratio",
-        &cfg.dirty_background_ratio.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/dirty_ratio",
-        &cfg.dirty_ratio.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/dirty_expire_centisecs",
-        &cfg.dirty_expire.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/watermark_scale_factor",
-        &cfg.watermark_scale_factor.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/proc/sys/vm/page-cluster",
-        &cfg.page_cluster.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/sys/kernel/mm/transparent_hugepage/enabled",
-        cfg.thp_enabled,
-    ));
-    summary.record_write_result(write_value(
-        "/sys/kernel/mm/transparent_hugepage/defrag",
-        cfg.thp_defrag,
-    ));
-    summary.record_write_result(write_value(
-        "/sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs",
-        &cfg.scan_sleep_millisecs.to_string(),
-    ));
-    summary.record_write_result(write_value("/proc/sys/kernel/sched_autogroup_enabled", "0"));
-
-    for_each_in_dir("/sys/devices/system/cpu/cpufreq", |name| {
-        if !name.starts_with("policy") {
-            return;
-        }
-        let up_path = format!(
-            "/sys/devices/system/cpu/cpufreq/{}/schedutil/up_rate_limit_us",
-            name
-        );
-        let down_path = format!(
-            "/sys/devices/system/cpu/cpufreq/{}/schedutil/down_rate_limit_us",
-            name
-        );
-        let io_path = format!(
-            "/sys/devices/system/cpu/cpufreq/{}/schedutil/iowait_boost_enable",
-            name
-        );
-
-        summary.record_write_result(write_value(&up_path, &cfg.schedutil_up.to_string()));
-        summary.record_write_result(write_value(&down_path, &cfg.schedutil_down.to_string()));
-
-        let io_boost = if cfg.schedutil_up != 2000 { "1" } else { "0" };
-        summary.record_write_result(write_value(&io_path, io_boost));
-    });
-
-    summary.record_write_result(write_value("/sys/block/zram0/max_comp_streams", "2"));
-}
-
-fn apply_block_dev_tweaks(
-    cfg: &ProfileConfig,
-    cache: &mut TweakCache,
-    summary: &mut TweakApplySummary,
-) {
-    const BLK_PRIO_BALANCE: &[&str] = &["mq-deadline", "kyber", "bfq", "deadline", "none", "noop"];
-
-    for_each_in_dir("/sys/block", |name| {
-        if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
-            summary.record_write_result(WriteResult::Skipped);
-            summary.record_write_result(WriteResult::Skipped);
-            summary.record_write_result(WriteResult::Skipped);
-            return;
-        }
-
-        let cache_key = format!("block_scheduler_{}", name);
-        let current_cached_sched = cache.entries.get(&cache_key).cloned();
-
-        let target_sched_opt = if let Some(cached_sched) = current_cached_sched.clone() {
-            Some(cached_sched)
-        } else if let Ok(avail) = fs::read_to_string(format!("/sys/block/{}/queue/scheduler", name))
-            && let Some(best) = pick_best(&avail, BLK_PRIO_BALANCE)
-        {
-            cache.insert(cache_key, best.to_string());
-            Some(best.to_string())
-        } else {
-            None
-        };
-
-        if let Some(target_sched) = target_sched_opt {
-            summary.record_write_result(write_value(
-                &format!("/sys/block/{}/queue/scheduler", name),
-                &target_sched,
-            ));
-        } else {
-            summary.record_write_result(WriteResult::Skipped);
-        }
-
-        summary.record_write_result(write_value(
-            &format!("/sys/block/{}/queue/read_ahead_kb", name),
-            &cfg.read_ahead_kb.to_string(),
-        ));
-        summary.record_write_result(write_value(
-            &format!("/sys/block/{}/queue/nr_requests", name),
-            &cfg.nr_requests.to_string(),
-        ));
-    });
-}
-
-fn apply_cpuset_tweaks(cache: &TweakCache, summary: &mut TweakApplySummary) {
-    let num_little_paths = 4;
-    let num_all_paths = 5;
-
-    if let Some(little) = cache.entries.get("cpuset_little") {
-        summary.record_write_result(write_value("/dev/cpuset/background/cpus", little));
-        summary.record_write_result(write_value("/dev/cpuset/system-background/cpus", little));
-        summary.record_write_result(write_value(
-            "/dev/cpuset/background/sched_load_balance",
-            "0",
-        ));
-        summary.record_write_result(write_value(
-            "/dev/cpuset/system-background/sched_load_balance",
-            "0",
-        ));
-    } else {
-        for _ in 0..num_little_paths {
-            summary.record_write_result(WriteResult::Skipped);
-        }
-    }
-
-    if let Some(all) = cache.entries.get("cpuset_all") {
-        summary.record_write_result(write_value("/dev/cpuset/foreground/cpus", all));
-        summary.record_write_result(write_value("/dev/cpuset/top-app/cpus", all));
-        summary.record_write_result(write_value(
-            "/dev/cpuset/foreground/sched_load_balance",
-            "1",
-        ));
-        summary.record_write_result(write_value("/dev/cpuset/top-app/sched_load_balance", "1"));
-        summary.record_write_result(write_value(
-            "/dev/cpuset/top-app/sched_relax_domain_level",
-            "1",
-        ));
-    } else {
-        for _ in 0..num_all_paths {
-            summary.record_write_result(WriteResult::Skipped);
-        }
-    }
-}
-
-fn apply_uclamp_tweaks(cfg: &ProfileConfig, summary: &mut TweakApplySummary) {
-    summary.record_write_result(write_value("/dev/cpuctl/background/cpu.uclamp.min", "0"));
-    summary.record_write_result(write_value(
-        "/dev/cpuctl/background/cpu.uclamp.max",
-        &cfg.uclamp_max_background.to_string(),
-    ));
-    summary.record_write_result(write_value(
-        "/dev/cpuctl/system-background/cpu.uclamp.min",
-        "0",
-    ));
-    summary.record_write_result(write_value(
-        "/dev/cpuctl/system-background/cpu.uclamp.max",
-        "15",
-    ));
-    summary.record_write_result(write_value("/dev/cpuctl/foreground/cpu.uclamp.min", "0"));
-    summary.record_write_result(write_value("/dev/cpuctl/foreground/cpu.uclamp.max", "25"));
-    summary.record_write_result(write_value(
-        "/dev/cpuctl/top-app/cpu.uclamp.min",
-        &cfg.uclamp_min_top_app.to_string(),
-    ));
-    summary.record_write_result(write_value("/dev/cpuctl/top-app/cpu.uclamp.max", "100"));
-}
-
-/// The main entry point for applying a profile.
-pub fn apply_tweak_profile(profile: TweakProfile) -> TweakApplySummary {
-    let mut summary = TweakApplySummary {
-        profile_name: profile.to_string(),
-        ..Default::default()
-    };
-    let mut cache = TweakCache::load();
-
-    let config = match profile {
-        TweakProfile::Balance => &CONFIG_BALANCE,
-        TweakProfile::Performance => &CONFIG_PERFORMANCE,
-        TweakProfile::Power => &CONFIG_POWER,
-    };
-
-    discover_cpu_topology(&mut cache, &mut summary);
-
-    apply_governors(&profile, &mut cache, &mut summary);
-    apply_kernel_tweaks(config, &mut summary);
-    apply_block_dev_tweaks(config, &mut cache, &mut summary);
-    apply_cpuset_tweaks(&cache, &mut summary);
-    apply_uclamp_tweaks(config, &mut summary);
-
-    if cache.dirty
-        && let Err(e) = cache.save()
-    {
-        summary.failed_writes += 1; // This is a cache write error, not a sysfs write.
-        if summary.first_error.is_none() {
-            summary.first_error = Some(format!(
-                "Failed to save cache after applying profile: {}",
-                e
-            ));
-        }
-    }
-
-    let status = TweakStatus {
-        schema_version: 1,
-        last_profile: profile.to_string(),
-        last_applied_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64,
-        summary: summary.clone(),
-    };
-
-    let mut last_written_status = None;
-    if let Err(e) = status.write_if_changed(&mut last_written_status)
-        && summary.first_error.is_none()
-    {
-        summary.first_error = Some(format!("Failed to write tweak status: {}", e));
-    }
-
-    summary
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     struct TempDir {
         path: PathBuf,
     }
 
     impl TempDir {
-        fn new() -> Self {
-            let unique = format!(
-                "coreshift-policy-test-{}-{}",
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "coreshift_tweaks_{}_{}_{}",
+                name,
                 std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
+                now_ms()
+            ));
             fs::create_dir_all(&path).unwrap();
             Self { path }
         }
@@ -727,39 +795,87 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_tweak_cache_clear_idempotent() {
-        let dir = TempDir::new();
-        let cache_path = dir.path().join("tweak_cache.json");
+    fn with_test_env(root: &TempDir, f: impl FnOnce()) {
+        unsafe {
+            std::env::set_var("COREPOLICY_TEST_PROC_ROOT", root.path().join("proc"));
+            std::env::set_var("COREPOLICY_TEST_SYS_ROOT", root.path().join("sys"));
+            std::env::set_var(
+                "COREPOLICY_TEST_CPUSET_ROOT",
+                root.path().join("dev/cpuset"),
+            );
+            std::env::set_var(
+                "COREPOLICY_TEST_CPUCTL_ROOT",
+                root.path().join("dev/cpuctl"),
+            );
+            std::env::set_var(
+                "COREPOLICY_TEST_TWEAK_CACHE_FILE",
+                root.path().join("tweak_cache.json"),
+            );
+            std::env::set_var(
+                "COREPOLICY_TEST_TWEAK_STATUS_FILE",
+                root.path().join("tweak_status.json"),
+            );
+        }
+        fs::create_dir_all(root.path().join("proc/sys/vm")).unwrap();
+        fs::create_dir_all(root.path().join("sys/devices/system/cpu/cpufreq/policy0")).unwrap();
+        fs::create_dir_all(root.path().join("sys/class/devfreq/gpu0")).unwrap();
+        fs::create_dir_all(root.path().join("dev/cpuset/top-app")).unwrap();
+        fs::create_dir_all(root.path().join("dev/cpuctl/top-app")).unwrap();
+        fs::create_dir_all(root.path().join("dev/cpuctl/background")).unwrap();
+        f();
+        unsafe {
+            std::env::remove_var("COREPOLICY_TEST_PROC_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_SYS_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_CPUSET_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_CPUCTL_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_TWEAK_CACHE_FILE");
+            std::env::remove_var("COREPOLICY_TEST_TWEAK_STATUS_FILE");
+        }
+    }
 
-        assert!(!cache_path.exists());
-        assert!(TweakCache::clear_path(&cache_path).is_ok());
-        assert!(!cache_path.exists());
-
-        fs::write(&cache_path, "{}").unwrap();
-        assert!(cache_path.exists());
-        assert!(TweakCache::clear_path(&cache_path).is_ok());
-        assert!(!cache_path.exists());
+    fn write_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
     }
 
     #[test]
-    fn test_cache_dirty_tracking_changed_entry() {
-        let mut cache = TweakCache {
-            schema_version: 1,
-            updated_ms: 1,
-            entries: HashMap::from([("cpuset_little".to_string(), "0-3".to_string())]),
-            dirty: false,
-        };
-
-        assert!(!cache.dirty);
-
-        cache.insert("cpuset_little".to_string(), "0-2".to_string());
-        assert!(cache.dirty);
+    fn parses_raw_write_command() {
+        assert_eq!(
+            parse_tweak_command_line("tweak write /proc/sys/vm/swappiness 5").unwrap(),
+            TweakCommand::Write {
+                path: "/proc/sys/vm/swappiness".to_string(),
+                value: "5".to_string(),
+            }
+        );
     }
 
     #[test]
-    fn test_cache_dirty_save_path_new_entry() {
-        let dir = TempDir::new();
+    fn rejects_invalid_command() {
+        assert!(parse_tweak_command_line("tweak shell rm -rf /").is_err());
+    }
+
+    #[test]
+    fn enforces_path_whitelist() {
+        assert!(parse_tweak_command_line("tweak write /data/local/tmp/nope 1").is_err());
+    }
+
+    #[test]
+    fn preset_expansion_produces_commands() {
+        let normalized = normalize_commands(&["preset performance".to_string()]).unwrap();
+        assert!(!normalized.is_empty());
+        assert!(
+            normalized
+                .iter()
+                .any(|command| command == "tweak governor cpu performance")
+        );
+    }
+
+    #[test]
+    fn cache_dirty_save_path_new_entry() {
+        let _guard = test_env_lock().lock().unwrap();
+        let dir = TempDir::new("cache_save");
         let cache_path = dir.path().join("tweak_cache.json");
         let mut cache = TweakCache {
             schema_version: 1,
@@ -772,60 +888,97 @@ mod tests {
         assert!(!cache.dirty);
 
         let mut reloaded = TweakCache::load_from_path(&cache_path);
-        reloaded.insert("cpuset_all".to_string(), "0-7".to_string());
+        reloaded.insert("cpuset_all", "0-7");
         assert!(reloaded.dirty);
     }
 
     #[test]
-    fn test_governor_validation_skips_unsupported_target() {
-        assert!(!governor_is_available("schedutil powersave", "performance"));
+    fn tweak_cache_clear_is_idempotent() {
+        let _guard = test_env_lock().lock().unwrap();
+        let dir = TempDir::new("cache_clear");
+        let cache_path = dir.path().join("tweak_cache.json");
+        assert!(TweakCache::clear_path(&cache_path).is_ok());
+        write_file(&cache_path, "{}");
+        assert!(TweakCache::clear_path(&cache_path).is_ok());
+        assert!(!cache_path.exists());
     }
 
     #[test]
-    fn test_governor_validation_accepts_supported_target() {
-        assert!(governor_is_available(
-            "schedutil performance powersave",
-            "performance"
-        ));
+    fn governor_validation_skips_unsupported_target() {
+        let _guard = test_env_lock().lock().unwrap();
+        let dir = TempDir::new("governor_skip");
+        with_test_env(&dir, || {
+            write_file(
+                &dir.path()
+                    .join("sys/devices/system/cpu/cpufreq/policy0/scaling_governor"),
+                "schedutil",
+            );
+            write_file(
+                &dir.path()
+                    .join("sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors"),
+                "schedutil powersave",
+            );
+            let summary =
+                apply_tweak_commands("test", &["tweak governor cpu performance".to_string()]);
+            assert_eq!(summary.successful_writes, 0);
+            assert_eq!(summary.skipped_writes, 1);
+            assert_eq!(
+                fs::read_to_string(
+                    dir.path()
+                        .join("sys/devices/system/cpu/cpufreq/policy0/scaling_governor")
+                )
+                .unwrap(),
+                "schedutil"
+            );
+        });
     }
 
     #[test]
-    fn test_summary_accounting_invariant() {
-        let dir = TempDir::new();
-        let mut summary = TweakApplySummary::default();
+    fn governor_validation_applies_supported_target() {
+        let _guard = test_env_lock().lock().unwrap();
+        let dir = TempDir::new("governor_apply");
+        with_test_env(&dir, || {
+            write_file(
+                &dir.path()
+                    .join("sys/devices/system/cpu/cpufreq/policy0/scaling_governor"),
+                "schedutil",
+            );
+            write_file(
+                &dir.path()
+                    .join("sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors"),
+                "schedutil performance powersave",
+            );
+            let summary =
+                apply_tweak_commands("test", &["tweak governor cpu performance".to_string()]);
+            assert_eq!(summary.successful_writes, 1);
+            assert_eq!(
+                fs::read_to_string(
+                    dir.path()
+                        .join("sys/devices/system/cpu/cpufreq/policy0/scaling_governor")
+                )
+                .unwrap(),
+                "performance"
+            );
+        });
+    }
 
-        summary.record_write_result(write_value(
-            &dir.path().join("non_existent").to_string_lossy(),
-            "test",
-        ));
-        assert_eq!(summary.attempted_writes, 1);
-        assert_eq!(summary.skipped_writes, 1);
-        assert_eq!(summary.successful_writes, 0);
-        assert_eq!(summary.failed_writes, 0);
-
-        let existing_file = dir.path().join("test_file_initial");
-        fs::write(&existing_file, "initial").unwrap();
-        summary.record_write_result(write_value(&existing_file.to_string_lossy(), "initial"));
-        assert_eq!(summary.attempted_writes, 2);
-        assert_eq!(summary.skipped_writes, 2);
-        assert_eq!(summary.successful_writes, 0);
-        assert_eq!(summary.failed_writes, 0);
-
-        summary.record_write_result(write_value(&existing_file.to_string_lossy(), "new_value"));
-        assert_eq!(summary.attempted_writes, 3);
-        assert_eq!(summary.successful_writes, 1);
-        assert_eq!(summary.skipped_writes, 2);
-        assert_eq!(summary.failed_writes, 0);
-
-        summary.record_write_result(WriteResult::Failed("permission denied".to_string()));
-        assert_eq!(summary.attempted_writes, 4);
-        assert_eq!(summary.successful_writes, 1);
-        assert_eq!(summary.skipped_writes, 2);
-        assert_eq!(summary.failed_writes, 1);
-        assert!(summary.first_error.is_some());
-        assert_eq!(
-            summary.attempted_writes,
-            summary.successful_writes + summary.skipped_writes + summary.failed_writes
-        );
+    #[test]
+    fn summary_accounting_invariant_holds() {
+        let _guard = test_env_lock().lock().unwrap();
+        let dir = TempDir::new("summary");
+        with_test_env(&dir, || {
+            write_file(&dir.path().join("proc/sys/vm/swappiness"), "60");
+            let summary = apply_tweak_commands(
+                "test",
+                &[
+                    "tweak write /proc/sys/vm/swappiness 60".to_string(),
+                    "tweak write /proc/sys/vm/dirty_ratio 15".to_string(),
+                ],
+            );
+            assert_eq!(
+                summary.attempted_writes,
+                summary.successful_writes + summary.skipped_writes + summary.failed_writes
+            );
+        });
     }
 }

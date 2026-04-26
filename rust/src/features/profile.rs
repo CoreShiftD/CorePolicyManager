@@ -205,13 +205,21 @@ impl ProfileRulesFile {
     }
 
     pub fn resolve(&self, class: &ProfileClass, privilege: &PrivilegeMode) -> SelectedProfile {
+        SelectedProfile::from(&self.resolve_action(class, privilege))
+    }
+
+    pub fn resolve_action(
+        &self,
+        class: &ProfileClass,
+        privilege: &PrivilegeMode,
+    ) -> ProfileRuleAction {
         let class_key = class.to_string();
         let privilege_key = privilege.to_string();
         self.rules
             .get(&class_key)
             .and_then(|rules| rules.get(&privilege_key))
-            .map(SelectedProfile::from)
-            .unwrap_or_else(SelectedProfile::neutral)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 

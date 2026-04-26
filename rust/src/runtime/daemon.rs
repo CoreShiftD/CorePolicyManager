@@ -1,9 +1,10 @@
 use crate::features::app_index::AppIndexFeature;
 use crate::features::preload::{PreloadFeature, RuntimeAbi};
 use crate::features::profile::{
-    CategoryDatabase, PrivilegeMode, ProfileClass, ProfileFeature, ProfileRulesFile,
-    SelectedProfile, categories_file_path, profile_rules_file_path,
+    CategoryDatabase, PrivilegeMode, ProfileClass, ProfileFeature, ProfileRuleAction,
+    ProfileRulesFile, SelectedProfile, categories_file_path, profile_rules_file_path,
 };
+use crate::features::tweaks;
 use crate::paths::{BLACKLIST_FILE, CPUSET_TOP_APP};
 use crate::runtime::foreground::ForegroundResolver;
 use crate::runtime::logging;
@@ -134,6 +135,10 @@ impl CachedProfileRules {
     fn select(&self, class: &ProfileClass, privilege: &PrivilegeMode) -> SelectedProfile {
         self.rules.resolve(class, privilege)
     }
+
+    fn action(&self, class: &ProfileClass, privilege: &PrivilegeMode) -> ProfileRuleAction {
+        self.rules.resolve_action(class, privilege)
+    }
 }
 
 pub struct Daemon {
@@ -153,6 +158,7 @@ pub struct Daemon {
     preload_dirty: bool,
     last_pressure_refresh_ms: u64,
     app_index: AppIndexFeature,
+    last_tweak_signature: Option<String>,
     event_buffer: Vec<Event>,
     inotify_token: Option<Token>,
     inotify_fd: Option<Fd>,
@@ -268,6 +274,7 @@ impl Daemon {
             preload_dirty: config.preload,
             last_pressure_refresh_ms,
             app_index,
+            last_tweak_signature: None,
             event_buffer: Vec::with_capacity(16),
             inotify_token,
             inotify_fd,
@@ -290,12 +297,6 @@ impl Daemon {
     fn current_profile_class(&self) -> ProfileClass {
         self.category_db
             .classify(self.status.foreground.package.as_deref())
-    }
-
-    fn current_selected_profile(&self) -> SelectedProfile {
-        let class = self.current_profile_class();
-        self.profile_rules
-            .select(&class, &self.status.daemon.privilege)
     }
 
     fn build_profile_status(&self) -> ProfileStatusFile {
@@ -453,11 +454,24 @@ impl Daemon {
 
         if let Some(pkg) = snapshot.package.as_deref() {
             self.refresh_profile_caches();
-            let allow_preload = if self.status.features.profile {
-                self.current_selected_profile().preload
+            let class = self.current_profile_class();
+            let profile_action = if self.status.features.profile {
+                Some(
+                    self.profile_rules
+                        .action(&class, &self.status.daemon.privilege),
+                )
             } else {
-                true
+                None
             };
+            let allow_preload = profile_action
+                .as_ref()
+                .map(|action| action.preload)
+                .unwrap_or(true);
+            if let Some(action) = profile_action.as_ref() {
+                self.apply_profile_commands_if_needed(&class, action);
+            } else {
+                self.last_tweak_signature = None;
+            }
             if allow_preload {
                 let candidates = if self.status.features.app_index {
                     self.app_index.get_candidates(pkg)
@@ -477,7 +491,38 @@ impl Daemon {
                     self.preload_dirty = true;
                 }
             }
+        } else {
+            self.last_tweak_signature = None;
         }
+    }
+
+    fn apply_profile_commands_if_needed(
+        &mut self,
+        class: &ProfileClass,
+        action: &ProfileRuleAction,
+    ) {
+        if action.commands.is_empty() {
+            self.last_tweak_signature = None;
+            return;
+        }
+
+        let Ok(signature) = tweaks::command_fingerprint(&action.commands) else {
+            logging::warn("Skipping invalid profile tweak command set.");
+            return;
+        };
+        if self.last_tweak_signature.as_deref() == Some(signature.as_str()) {
+            return;
+        }
+
+        let source = format!("profile:{}/{}", class, self.status.daemon.privilege);
+        let summary = tweaks::apply_tweak_commands(&source, &action.commands);
+        if summary.failed_writes > 0 {
+            logging::warn(&format!(
+                "Tweak command application reported failures for {}.",
+                source
+            ));
+        }
+        self.last_tweak_signature = Some(signature);
     }
 
     pub fn run(&mut self) {
@@ -552,7 +597,9 @@ fn privilege_mode_from_uid(uid: u32) -> PrivilegeMode {
 mod tests {
     use super::*;
     use crate::runtime::foreground::ForegroundSnapshot;
+    use std::fs;
     use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     fn now_ms() -> u64 {
@@ -560,6 +607,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
+    }
+
+    fn test_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn with_test_categories_file(path: &Path, f: impl FnOnce()) {
@@ -580,6 +632,39 @@ mod tests {
         unsafe {
             std::env::remove_var("COREPOLICY_TEST_PROFILE_RULES_FILE");
         }
+    }
+
+    fn with_test_tweak_paths(root: &Path, f: impl FnOnce()) {
+        unsafe {
+            std::env::set_var("COREPOLICY_TEST_PROC_ROOT", root.join("proc"));
+            std::env::set_var("COREPOLICY_TEST_SYS_ROOT", root.join("sys"));
+            std::env::set_var("COREPOLICY_TEST_CPUSET_ROOT", root.join("dev/cpuset"));
+            std::env::set_var("COREPOLICY_TEST_CPUCTL_ROOT", root.join("dev/cpuctl"));
+            std::env::set_var(
+                "COREPOLICY_TEST_TWEAK_CACHE_FILE",
+                root.join("tweak_cache.json"),
+            );
+            std::env::set_var(
+                "COREPOLICY_TEST_TWEAK_STATUS_FILE",
+                root.join("tweak_status.json"),
+            );
+        }
+        f();
+        unsafe {
+            std::env::remove_var("COREPOLICY_TEST_PROC_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_SYS_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_CPUSET_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_CPUCTL_ROOT");
+            std::env::remove_var("COREPOLICY_TEST_TWEAK_CACHE_FILE");
+            std::env::remove_var("COREPOLICY_TEST_TWEAK_STATUS_FILE");
+        }
+    }
+
+    fn write_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
     }
 
     #[test]
@@ -606,6 +691,7 @@ mod tests {
 
     #[test]
     fn category_reverse_cache_classifies_known_package_correctly() {
+        let _guard = test_env_lock().lock().unwrap();
         let root =
             std::env::temp_dir().join(format!("coreshift_categories_cache_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -627,6 +713,7 @@ mod tests {
 
     #[test]
     fn category_cache_reloads_when_mtime_changes() {
+        let _guard = test_env_lock().lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "coreshift_categories_reload_{}",
             std::process::id()
@@ -668,6 +755,7 @@ mod tests {
 
     #[test]
     fn profile_rules_select_by_privilege() {
+        let _guard = test_env_lock().lock().unwrap();
         let root =
             std::env::temp_dir().join(format!("coreshift_profile_rules_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -707,6 +795,108 @@ mod tests {
                 unsafe {
                     std::env::remove_var("COREPOLICY_TEST_UID");
                 }
+            });
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn profile_commands_execute_on_profile_switch() {
+        let _guard = test_env_lock().lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("coreshift_profile_tweaks_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let categories_path = root.join("profiles_category.json");
+        let rules_path = root.join("profile_rules.json");
+        fs::write(
+            &categories_path,
+            r#"{"version":1,"updated_ms":1,"categories":{"game":["com.example.game"],"social":[],"tool":[],"launcher":[],"keyboard":[],"system":[]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &rules_path,
+            r#"{"schema_version":1,"rules":{"game":{"root":{"preload":true,"priority":"performance","commands":["tweak write /proc/sys/vm/swappiness 5"]}}}}"#,
+        )
+        .unwrap();
+        write_file(&root.join("proc/sys/vm/swappiness"), "60");
+
+        with_test_categories_file(&categories_path, || {
+            with_test_profile_rules_file(&rules_path, || {
+                with_test_tweak_paths(&root, || {
+                    unsafe {
+                        std::env::set_var("COREPOLICY_TEST_UID", "0");
+                    }
+                    let mut daemon = Daemon::new(DaemonConfig::default());
+                    daemon.process_foreground_snapshot(ForegroundSnapshot {
+                        pid: Some(100),
+                        package: Some("com.example.game".to_string()),
+                        last_skip_reason: None,
+                    });
+                    assert_eq!(
+                        fs::read_to_string(root.join("proc/sys/vm/swappiness")).unwrap(),
+                        "5"
+                    );
+                    unsafe {
+                        std::env::remove_var("COREPOLICY_TEST_UID");
+                    }
+                });
+            });
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn same_profile_command_set_is_not_spammed() {
+        let _guard = test_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "coreshift_profile_tweak_dedupe_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let categories_path = root.join("profiles_category.json");
+        let rules_path = root.join("profile_rules.json");
+        fs::write(
+            &categories_path,
+            r#"{"version":1,"updated_ms":1,"categories":{"game":["com.example.game"],"social":[],"tool":[],"launcher":[],"keyboard":[],"system":[]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &rules_path,
+            r#"{"schema_version":1,"rules":{"game":{"root":{"preload":true,"priority":"performance","commands":["tweak write /proc/sys/vm/swappiness 5"]}}}}"#,
+        )
+        .unwrap();
+        write_file(&root.join("proc/sys/vm/swappiness"), "60");
+
+        with_test_categories_file(&categories_path, || {
+            with_test_profile_rules_file(&rules_path, || {
+                with_test_tweak_paths(&root, || {
+                    unsafe {
+                        std::env::set_var("COREPOLICY_TEST_UID", "0");
+                    }
+                    let mut daemon = Daemon::new(DaemonConfig::default());
+                    daemon.process_foreground_snapshot(ForegroundSnapshot {
+                        pid: Some(100),
+                        package: Some("com.example.game".to_string()),
+                        last_skip_reason: None,
+                    });
+                    write_file(&root.join("proc/sys/vm/swappiness"), "60");
+                    daemon.process_foreground_snapshot(ForegroundSnapshot {
+                        pid: Some(100),
+                        package: Some("com.example.game".to_string()),
+                        last_skip_reason: None,
+                    });
+                    assert_eq!(
+                        fs::read_to_string(root.join("proc/sys/vm/swappiness")).unwrap(),
+                        "60"
+                    );
+                    unsafe {
+                        std::env::remove_var("COREPOLICY_TEST_UID");
+                    }
+                });
             });
         });
 

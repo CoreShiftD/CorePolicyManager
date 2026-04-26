@@ -1,5 +1,5 @@
 use coreshift_policy::features::tweaks::{self, TweakProfile};
-use coreshift_policy::runtime::status::{self, Feature, ALL_FEATURES};
+use coreshift_policy::runtime::status::{self, ALL_FEATURES, Feature};
 use std::collections::BTreeSet;
 use std::process::ExitCode;
 
@@ -8,10 +8,8 @@ enum Command {
     ShowHelp,
     RunStatus,
     StartDaemon(BTreeSet<Feature>),
-    CategoryList,
-    CategorySet(String, String),
-    CategoryRemove(String),
-    TweakApply(TweakProfile),
+    TweakRun(String),
+    TweakPreset(TweakProfile),
     TweakShowCache,
     TweakClearCache,
 }
@@ -32,30 +30,23 @@ fn parse_feature_name(value: &str) -> Result<Feature, CliError> {
 
 fn print_help() {
     println!(
-        "CoreShift Policy Daemon CLI
+        "CoreShift Policy CLI
 
 Usage:
-  corepolicy [ -f <feature> | --feature <feature> ... | -f --all | --feature --all ]
-  corepolicy status
-  corepolicy category <subcommand>
-  corepolicy tweak <subcommand>
   corepolicy help
+  corepolicy status
+  corepolicy start [--all] [-f FEATURE...]
+  corepolicy tweak run <command...>
+  corepolicy tweak preset <profile>
+  corepolicy tweak cache
+  corepolicy tweak cache clear
 
-Feature Flags:
-  -f, --feature <feature>   Enable a specific feature. Can be repeated.
-  -f, --feature --all       Enable all available features. This overrides any
-                            other features specified.
-
-Commands:
-  status                    Print daemon status.
-  category list             List all packages and their assigned categories.
-  category set <pkg> <cat>  Assign a package to a profile category.
-  category remove <pkg>     Remove a package from all profile categories.
-  tweak apply <profile>     Apply a system-wide tweak profile (balance, performance, power).
-  tweak cache               Show the discovered system values in the tweak cache.
-  tweak cache clear         Clear the tweak cache.
-  help, -h, --help          Print this help message.
-"
+Features:
+  preload
+  usage
+  pressure
+  app_index
+  profile"
     );
 }
 
@@ -64,23 +55,18 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
         return Ok(Command::ShowHelp);
     }
 
-    if !args.is_empty() {
-        match args[0].as_str() {
-            "category" => return parse_category_args(&args[1..]),
-            "tweak" => return parse_tweak_args(&args[1..]),
-            _ => {}
-        }
+    match args[0].as_str() {
+        "" | "help" | "-h" | "--help" => return Ok(Command::ShowHelp),
+        "status" if args.len() == 1 => return Ok(Command::RunStatus),
+        "start" => return parse_start_args(&args[1..]),
+        "tweak" => return parse_tweak_args(&args[1..]),
+        _ => {}
     }
 
-    if args.len() == 1 {
-        match args[0].as_str() {
-            "" | "help" | "-h" | "--help" => return Ok(Command::ShowHelp),
-            "status" => return Ok(Command::RunStatus),
-            _ => {}
-        }
-    }
+    parse_start_args(args)
+}
 
-    // Fallback to feature parsing
+fn parse_start_args(args: &[String]) -> Result<Command, CliError> {
     let mut features = BTreeSet::new();
     let mut all_requested = false;
     let mut iter = args.iter().peekable();
@@ -98,9 +84,13 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
                 let feature = parse_feature_name(value)?;
                 features.insert(feature);
             }
-            other => {
-                return Err(CliError(format!("unknown argument '{}'", other)));
+            "--all" => all_requested = true,
+            "-p" => {
+                return Err(CliError(
+                    "-p has been removed. Use -f or --feature.".to_string(),
+                ));
             }
+            other => return Err(CliError(format!("unknown argument '{}'", other))),
         }
     }
 
@@ -108,29 +98,11 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
         return Ok(Command::StartDaemon(ALL_FEATURES.iter().copied().collect()));
     }
     if features.is_empty() {
-        return Err(CliError("no features specified or unknown command".to_string()));
+        return Err(CliError(
+            "no features specified or unknown command".to_string(),
+        ));
     }
     Ok(Command::StartDaemon(features))
-}
-
-fn parse_category_args(args: &[String]) -> Result<Command, CliError> {
-    let Some(subcommand) = args.first() else {
-        return Err(CliError("missing category subcommand".to_string()));
-    };
-
-    match subcommand.as_str() {
-        "list" => Ok(Command::CategoryList),
-        "set" => {
-            let pkg = args.get(1).ok_or(CliError("missing package name".to_string()))?;
-            let cat = args.get(2).ok_or(CliError("missing category name".to_string()))?;
-            Ok(Command::CategorySet(pkg.clone(), cat.clone()))
-        }
-        "remove" => {
-            let pkg = args.get(1).ok_or(CliError("missing package name".to_string()))?;
-            Ok(Command::CategoryRemove(pkg.clone()))
-        }
-        _ => Err(CliError(format!("unknown category subcommand '{}'", subcommand))),
-    }
 }
 
 fn parse_tweak_args(args: &[String]) -> Result<Command, CliError> {
@@ -139,10 +111,20 @@ fn parse_tweak_args(args: &[String]) -> Result<Command, CliError> {
     };
 
     match subcommand.as_str() {
-        "apply" => {
-            let profile_name = args.get(1).ok_or(CliError("missing profile name".to_string()))?;
-            let profile = profile_name.parse::<TweakProfile>().map_err(|e| CliError(e.to_string()))?;
-            Ok(Command::TweakApply(profile))
+        "run" => {
+            if args.len() < 2 {
+                return Err(CliError("missing tweak command".to_string()));
+            }
+            Ok(Command::TweakRun(args[1..].join(" ")))
+        }
+        "preset" => {
+            let profile_name = args
+                .get(1)
+                .ok_or(CliError("missing profile name".to_string()))?;
+            let profile = profile_name
+                .parse::<TweakProfile>()
+                .map_err(|e| CliError(e.to_string()))?;
+            Ok(Command::TweakPreset(profile))
         }
         "cache" => {
             if args.get(1).map(|s| s.as_str()) == Some("clear") {
@@ -151,10 +133,12 @@ fn parse_tweak_args(args: &[String]) -> Result<Command, CliError> {
                 Ok(Command::TweakShowCache)
             }
         }
-        _ => Err(CliError(format!("unknown tweak subcommand '{}'", subcommand))),
+        _ => Err(CliError(format!(
+            "unknown tweak subcommand '{}'",
+            subcommand
+        ))),
     }
 }
-
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -165,13 +149,29 @@ fn main() -> ExitCode {
         }
         Ok(Command::RunStatus) => status::run_status_cli(),
         Ok(Command::StartDaemon(features)) => status::start_daemon(features),
-        Ok(Command::CategoryList) => status::run_category_list_cli(),
-        Ok(Command::CategorySet(pkg, cat)) => status::run_category_set_cli(&pkg, &cat),
-        Ok(Command::CategoryRemove(pkg)) => status::run_category_remove_cli(&pkg),
-        Ok(Command::TweakApply(profile)) => {
-            let summary = tweaks::apply_tweak_profile(profile);
+        Ok(Command::TweakRun(command_line)) => {
+            let summary = match tweaks::run_tweak_command_line("cli", &command_line) {
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("error: {}", error);
+                    return ExitCode::from(2);
+                }
+            };
             println!("{}", serde_json::to_string_pretty(&summary).unwrap());
-            if summary.failed_writes > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+            if summary.failed_writes > 0 {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Ok(Command::TweakPreset(profile)) => {
+            let summary = tweaks::apply_tweak_preset(profile);
+            println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+            if summary.failed_writes > 0 {
+                ExitCode::from(1)
+            } else {
+                ExitCode::SUCCESS
+            }
         }
         Ok(Command::TweakShowCache) => {
             let cache = tweaks::TweakCache::load();
@@ -179,8 +179,8 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Command::TweakClearCache) => {
-            if let Err(e) = tweaks::TweakCache::clear() {
-                eprintln!("error: failed to clear tweak cache: {}", e);
+            if let Err(error) = tweaks::TweakCache::clear() {
+                eprintln!("error: failed to clear tweak cache: {}", error);
                 return ExitCode::from(1);
             }
             println!("Tweak cache cleared.");
@@ -197,7 +197,6 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coreshift_policy::runtime::status;
 
     fn to_str_vec(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
@@ -226,91 +225,64 @@ mod tests {
     }
 
     #[test]
-    fn test_category_list_parsing() {
+    fn test_start_feature_parsing() {
         assert_eq!(
-            parse_args(&to_str_vec(&["category", "list"])),
-            Ok(Command::CategoryList)
+            parse_args(&to_str_vec(&["start", "-f", "preload"])),
+            Ok(Command::StartDaemon(BTreeSet::from([Feature::Preload])))
+        );
+        assert_eq!(
+            parse_args(&to_str_vec(&["start", "--feature", "profile"])),
+            Ok(Command::StartDaemon(BTreeSet::from([Feature::Profile])))
+        );
+        assert_eq!(
+            parse_args(&to_str_vec(&["start", "--all"])),
+            Ok(Command::StartDaemon(ALL_FEATURES.iter().copied().collect()))
         );
     }
 
     #[test]
-    fn test_category_set_parsing() {
+    fn test_tweak_run_parsing() {
         assert_eq!(
-            parse_args(&to_str_vec(&["category", "set", "com.foo", "game"])),
-            Ok(Command::CategorySet(
-                "com.foo".to_string(),
-                "game".to_string()
+            parse_args(&to_str_vec(&[
+                "tweak",
+                "run",
+                "tweak",
+                "write",
+                "/proc/sys/vm/swappiness",
+                "5"
+            ])),
+            Ok(Command::TweakRun(
+                "tweak write /proc/sys/vm/swappiness 5".to_string()
             ))
         );
     }
 
     #[test]
-    fn test_category_remove_parsing() {
+    fn test_tweak_preset_parsing() {
         assert_eq!(
-            parse_args(&to_str_vec(&["category", "remove", "com.foo"])),
-            Ok(Command::CategoryRemove("com.foo".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_err_category_set_missing_args() {
-        assert!(parse_args(&to_str_vec(&["category", "set", "com.foo"])).is_err());
-        assert!(parse_args(&to_str_vec(&["category", "set"])).is_err());
-    }
-
-    #[test]
-    fn test_err_category_remove_missing_args() {
-        assert!(parse_args(&to_str_vec(&["category", "remove"])).is_err());
-    }
-
-    #[test]
-    fn test_err_category_unknown_subcommand() {
-        assert!(parse_args(&to_str_vec(&["category", "bogus"])).is_err());
-    }
-
-    #[test]
-    fn test_feature_flags_still_work() {
-        let expected = Command::StartDaemon(
-            [status::Feature::Profile].iter().cloned().collect(),
-        );
-        assert_eq!(parse_args(&to_str_vec(&["-f", "profile"])), Ok(expected));
-    }
-
-    #[test]
-    fn test_all_override_still_works() {
-        let expected = Command::StartDaemon(status::ALL_FEATURES.iter().cloned().collect());
-        assert_eq!(
-            parse_args(&to_str_vec(&["-f", "preload", "--feature", "--all"])),
-            Ok(expected)
-        );
-    }
-
-    #[test]
-    fn test_tweak_apply_parsing() {
-        assert_eq!(
-            parse_args(&to_str_vec(&["tweak", "apply", "performance"])),
-            Ok(Command::TweakApply(TweakProfile::Performance))
+            parse_args(&to_str_vec(&["tweak", "preset", "performance"])),
+            Ok(Command::TweakPreset(TweakProfile::Performance))
         );
     }
 
     #[test]
     fn test_tweak_cache_parsing() {
-        assert_eq!(parse_args(&to_str_vec(&["tweak", "cache"])), Ok(Command::TweakShowCache));
+        assert_eq!(
+            parse_args(&to_str_vec(&["tweak", "cache"])),
+            Ok(Command::TweakShowCache)
+        );
     }
 
     #[test]
     fn test_tweak_cache_clear_parsing() {
-        assert_eq!(parse_args(&to_str_vec(&["tweak", "cache", "clear"])), Ok(Command::TweakClearCache));
+        assert_eq!(
+            parse_args(&to_str_vec(&["tweak", "cache", "clear"])),
+            Ok(Command::TweakClearCache)
+        );
     }
 
     #[test]
-    fn test_err_tweak_invalid_profile() {
-        assert!(parse_args(&to_str_vec(&["tweak", "apply", "bogus"])).is_err());
-    }
-
-    #[test]
-    fn test_err_tweak_missing_args() {
-        assert!(parse_args(&to_str_vec(&["tweak", "apply"])).is_err());
-        assert!(parse_args(&to_str_vec(&["tweak"])).is_err());
+    fn test_removed_p_flag() {
+        assert!(parse_args(&to_str_vec(&["start", "-p", "preload"])).is_err());
     }
 }
