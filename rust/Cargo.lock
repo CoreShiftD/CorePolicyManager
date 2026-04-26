@@ -3,19 +3,37 @@
 version = 4
 
 [[package]]
-name = "coreshift-lowlevel"
-version = "0.2.0-preview.1"
-source = "git+https://github.com/CoreShiftD/coreshift-lowlevel?tag=v0.2.0-preview.1#2807fb6501a590da2cee965b839c573d015d9505"
+name = "corepolicy-manager-wrapper"
+version = "0.1.0"
+dependencies = [
+ "coreshift-policy",
+]
+
+[[package]]
+name = "coreshift-core"
+version = "0.1.1"
+source = "git+https://github.com/CoreShiftD/CoreShift-Core?tag=v0.1.1#27d5ff533adf946850a09db26bfd711e8ab1186b"
 dependencies = [
  "libc",
  "serde",
 ]
 
 [[package]]
-name = "coreshift-policy"
-version = "0.1.0-preview.2"
+name = "coreshift-engine"
+version = "0.1.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Engine?tag=v0.1.0#10533d749f054fe0bed9d3aa74944cd8d8e2f766"
 dependencies = [
- "coreshift-lowlevel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "coreshift-policy"
+version = "0.1.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Policy?tag=v0.1.0#164933b93eb57c089c92cc3cc7cb27241347541a"
+dependencies = [
+ "coreshift-core",
+ "coreshift-engine",
  "serde",
  "serde_json",
 ]

@@ -1,23 +1,14 @@
-# CoreShift Policy Rust Daemon
+# CorePolicyManager Rust Wrapper
 
-This `rust/` directory is the active native daemon source tree.
+This Rust crate is now a thin packaging wrapper around the released
+`coreshift-policy` crate.
 
-## Source of Truth
+It keeps the `corepolicy` binary entrypoint for Android packaging and release
+flows, but the reusable policy logic now lives in:
 
-- Production daemon crate: [Cargo.toml](/work/CorePolicyManager/rust/Cargo.toml)
-- Binary entrypoint: [src/main.rs](/work/CorePolicyManager/rust/src/main.rs)
-- Runtime orchestration: [src/runtime/daemon.rs](/work/CorePolicyManager/rust/src/runtime/daemon.rs)
-- Policy feature modules: [src/features/](/work/CorePolicyManager/rust/src/features)
+- `CoreShift-Core`
+- `CoreShift-Engine`
+- `CoreShift-Policy`
 
-## Boundaries
-
-- `coreshift-lowlevel` owns low-level OS primitives such as reactor, inotify, procfs helpers, and shutdown signal installation.
-- This crate owns daemon/runtime policy, foreground filtering, and preload path discovery.
-
-## Build
-
-```bash
-cargo build
-```
-
-The Android packaging script at [../scripts/build-rust-android.sh](/work/CorePolicyManager/scripts/build-rust-android.sh) builds this crate and copies the resulting `corepolicy` executable into the app's `jniLibs` payload.
+CorePolicyManager remains responsible for Android app integration, Magisk
+packaging, assets, and release glue.

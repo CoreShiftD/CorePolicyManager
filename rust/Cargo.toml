@@ -1,13 +1,13 @@
 [package]
-name = "coreshift-policy"
-version = "0.1.0-preview.2"
+name = "corepolicy-manager-wrapper"
+version = "0.1.0"
 edition = "2024"
+license = "MPL-2.0"
+description = "Wrapper crate that packages the CoreShift Policy daemon for CorePolicyManager"
 
 [[bin]]
 name = "corepolicy"
 path = "src/main.rs"
 
 [dependencies]
-coreshift-lowlevel = { git = "https://github.com/CoreShiftD/coreshift-lowlevel", tag = "v0.2.0-preview.1" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy", tag = "v0.1.0" }
