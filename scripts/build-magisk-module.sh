@@ -5,6 +5,19 @@ set -e
 cd "$(dirname "$0")/.."
 PROJECT_ROOT=$(pwd)
 RUST_ROOT="$PROJECT_ROOT/rust"
+ASSET_DIR="$PROJECT_ROOT/app/src/main/assets/coreshift"
+PROFILES_ASSET="$ASSET_DIR/profiles_category.json"
+BLACKLIST_ASSET="$ASSET_DIR/foreground_blacklist.json"
+
+if [ ! -f "$PROFILES_ASSET" ]; then
+    echo "Missing required asset: $PROFILES_ASSET" >&2
+    exit 1
+fi
+
+if [ ! -f "$BLACKLIST_ASSET" ]; then
+    echo "Missing required asset: $BLACKLIST_ASSET" >&2
+    exit 1
+fi
 
 echo "Ensuring Rust targets are available..."
 rustup target add aarch64-linux-android armv7-linux-androideabi
@@ -32,6 +45,10 @@ cp packaging/magisk/service.sh "$DIST_DIR/"
 cp packaging/magisk/customize.sh "$DIST_DIR/"
 cp packaging/magisk/uninstall.sh "$DIST_DIR/"
 
+echo "Copying default JSON assets..."
+cp "$PROFILES_ASSET" "$DIST_DIR/profiles_category.json"
+cp "$BLACKLIST_ASSET" "$DIST_DIR/foreground_blacklist.json"
+
 echo "Copying binaries..."
 TARGET_DIR=${CARGO_TARGET_DIR:-rust/target}
 cp "$TARGET_DIR/aarch64-linux-android/release/corepolicy" "$DIST_DIR/bin/arm64-v8a/corepolicy"
@@ -43,6 +60,8 @@ chmod 0755 "$DIST_DIR/customize.sh"
 chmod 0755 "$DIST_DIR/uninstall.sh"
 chmod 0755 "$DIST_DIR/bin/arm64-v8a/corepolicy"
 chmod 0755 "$DIST_DIR/bin/armeabi-v7a/corepolicy"
+chmod 0644 "$DIST_DIR/profiles_category.json"
+chmod 0644 "$DIST_DIR/foreground_blacklist.json"
 
 echo "Zipping module..."
 mkdir -p dist

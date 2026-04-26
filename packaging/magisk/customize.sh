@@ -33,4 +33,34 @@ ui_print "- Creating working directory..."
 mkdir -p /data/local/tmp/coreshift
 chmod 0755 /data/local/tmp/coreshift
 
+install_json_if_missing() {
+    src="$1"
+    dest="$2"
+    name="$3"
+
+    if [ -f "$dest" ]; then
+        ui_print "- Preserving existing $name"
+        return 0
+    fi
+
+    if [ ! -f "$src" ]; then
+        ui_print "! Warning: bundled $name not found"
+        return 0
+    fi
+
+    ui_print "- Installing default $name"
+    cp "$src" "$dest"
+    chmod 0644 "$dest"
+}
+
+ui_print "- Installing CoreShift data directory"
+install_json_if_missing \
+    "$MODPATH/profiles_category.json" \
+    "/data/local/tmp/coreshift/profiles_category.json" \
+    "profiles_category.json"
+install_json_if_missing \
+    "$MODPATH/foreground_blacklist.json" \
+    "/data/local/tmp/coreshift/foreground_blacklist.json" \
+    "foreground_blacklist.json"
+
 ui_print "- Installation complete!"
