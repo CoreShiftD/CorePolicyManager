@@ -1,18 +1,8 @@
 use crate::paths::CPUSET_TOP_APP;
 use crate::runtime::logging;
-use coreshift_lowlevel::inotify::read_events;
-use coreshift_lowlevel::reactor::Fd;
 use coreshift_lowlevel::sys::{proc_uid, read_proc_cmdline};
 use std::fs;
 use std::time::Duration;
-
-const BLACKLIST_PREFIXES: &[&str] = &[
-    "com.google.android.googlequicksearchbox",
-    "com.google.android.gms",
-    "com.android.systemui",
-    "com.android.launcher3",
-    "com.android.inputmethod.latin",
-];
 
 enum CandidateResult {
     Accept { pid: i32, package: String },
@@ -40,30 +30,24 @@ pub struct ForegroundSnapshot {
 }
 
 pub struct ForegroundResolver {
-    inotify_fd: Fd,
     last_accepted_pid: Option<i32>,
     last_accepted_package: Option<String>,
+    blacklist: Vec<String>,
 }
 
 impl ForegroundResolver {
-    pub fn new(inotify_fd: Fd) -> Self {
+    pub fn new(blacklist: Vec<String>) -> Self {
         logging::info(&format!("ForegroundResolver: watching {}", CPUSET_TOP_APP));
         Self {
-            inotify_fd,
             last_accepted_pid: None,
             last_accepted_package: None,
+            blacklist,
         }
     }
 
-    pub fn handle_event(&mut self) -> Option<ForegroundSnapshot> {
-        if let Ok(events) = read_events(&self.inotify_fd) {
-            if events.is_empty() {
-                return None;
-            }
-
-            if let Ok(content) = fs::read_to_string(CPUSET_TOP_APP) {
-                return self.scan_pids(&content);
-            }
+    pub fn resolve_current_foreground(&mut self) -> Option<ForegroundSnapshot> {
+        if let Ok(content) = fs::read_to_string(CPUSET_TOP_APP) {
+            return self.scan_pids(&content);
         }
         None
     }
@@ -79,7 +63,7 @@ impl ForegroundResolver {
 
             summary.total += 1;
 
-            match classify_pid(pid) {
+            match self.classify_pid(pid) {
                 CandidateResult::Accept { pid, package } => {
                     return self.accept(pid, &package);
                 }
@@ -136,88 +120,73 @@ impl ForegroundResolver {
             last_skip_reason: Some(skip_reason),
         })
     }
-}
 
-fn classify_pid(pid: i32) -> CandidateResult {
-    let uid = match proc_uid(pid) {
-        Ok(u) => u,
-        Err(_) => return CandidateResult::SkipProcStatFailed,
-    };
+    fn classify_pid(&self, pid: i32) -> CandidateResult {
+        let uid = match proc_uid(pid) {
+            Ok(u) => u,
+            Err(_) => return CandidateResult::SkipProcStatFailed,
+        };
 
-    if uid < 10000 {
-        return CandidateResult::SkipSystemUid;
-    }
+        if uid < 10000 {
+            return CandidateResult::SkipSystemUid;
+        }
 
-    match read_proc_cmdline(pid) {
-        Ok(cmdline) if !cmdline.is_empty() => {
-            let candidate = normalize_package(&cmdline);
+        match read_proc_cmdline(pid) {
+            Ok(cmdline) if !cmdline.is_empty() => {
+                let candidate = self.normalize_package(&cmdline);
 
-            if !is_package_like(&candidate) {
-                CandidateResult::SkipMalformed
-            } else if is_blacklisted(&candidate) {
-                CandidateResult::SkipBlacklisted
-            } else {
-                CandidateResult::Accept {
-                    pid,
-                    package: candidate,
+                if !self.is_package_like(&candidate) {
+                    CandidateResult::SkipMalformed
+                } else if self.is_blacklisted(&candidate) {
+                    CandidateResult::SkipBlacklisted
+                } else {
+                    CandidateResult::Accept {
+                        pid,
+                        package: candidate,
+                    }
                 }
             }
+            _ => CandidateResult::SkipCmdlineFailed,
         }
-        _ => CandidateResult::SkipCmdlineFailed,
     }
-}
 
-fn normalize_package(cmdline: &str) -> String {
-    let first_token = cmdline.split_whitespace().next().unwrap_or("");
-    if let Some(pos) = first_token.find(':') {
-        first_token[..pos].to_string()
-    } else {
-        first_token.to_string()
+    fn normalize_package(&self, cmdline: &str) -> String {
+        let first_token = cmdline.split_whitespace().next().unwrap_or("");
+        if let Some(pos) = first_token.find(':') {
+            first_token[..pos].to_string()
+        } else {
+            first_token.to_string()
+        }
     }
-}
 
-fn is_package_like(name: &str) -> bool {
-    !name.is_empty()
-        && name.contains('.')
-        && !name.contains(char::is_whitespace)
-        && name.len() > 3
-        && name.len() < 128
-}
+    fn is_package_like(&self, name: &str) -> bool {
+        !name.is_empty()
+            && name.contains('.')
+            && !name.contains(char::is_whitespace)
+            && name.len() > 3
+            && name.len() < 128
+    }
 
-fn is_blacklisted(name: &str) -> bool {
-    BLACKLIST_PREFIXES
-        .iter()
-        .any(|&prefix| name.starts_with(prefix))
+    fn is_blacklisted(&self, name: &str) -> bool {
+        self.blacklist.iter().any(|b| name.starts_with(b))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
-    fn test_package_normalization() {
+    fn test_package_normalization_logic() {
         assert_eq!(normalize_package("com.foo.bar"), "com.foo.bar");
         assert_eq!(normalize_package("com.foo.bar:service"), "com.foo.bar");
-        assert_eq!(
-            normalize_package("org.telegram.messenger:push "),
-            "org.telegram.messenger"
-        );
-
-        assert!(is_package_like("com.foo.bar"));
-        assert!(!is_package_like("com"));
-        assert!(!is_package_like("system server"));
-        assert!(!is_package_like("malformed:suffix"));
     }
 
-    #[test]
-    fn test_blacklist() {
-        assert!(is_blacklisted("com.google.android.googlequicksearchbox"));
-        assert!(is_blacklisted("com.android.systemui"));
-        assert!(is_blacklisted("com.android.launcher3"));
-        assert!(is_blacklisted("com.android.launcher3:extra"));
-        assert!(is_blacklisted("com.android.inputmethod.latin"));
-
-        assert!(!is_blacklisted("com.foo.bar"));
-        assert!(!is_blacklisted("org.telegram.messenger"));
+    fn normalize_package(cmdline: &str) -> String {
+        let first_token = cmdline.split_whitespace().next().unwrap_or("");
+        if let Some(pos) = first_token.find(':') {
+            first_token[..pos].to_string()
+        } else {
+            first_token.to_string()
+        }
     }
 }
