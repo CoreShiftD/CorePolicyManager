@@ -1,6 +1,6 @@
 use coreshift_policy::api::config::{DEFAULT_FEATURES as ALL_FEATURES, RuntimeFeature as Feature};
-use coreshift_policy::api::daemon as status_api;
-use coreshift_policy::api::features::{self as feature_api, TweakProfile};
+use coreshift_policy::features::tweaks::{self as tweak_api, TweakProfile};
+use coreshift_policy::runtime::status as status_api;
 use std::collections::BTreeSet;
 use std::process::ExitCode;
 
@@ -151,7 +151,7 @@ fn main() -> ExitCode {
         Ok(Command::RunStatus) => status_api::run_status_cli(),
         Ok(Command::StartDaemon(features)) => status_api::start_daemon(features),
         Ok(Command::TweakRun(command_line)) => {
-            let summary = match feature_api::run_tweak_command_line("cli", &command_line) {
+            let summary = match tweak_api::run_tweak_command_line("cli", &command_line) {
                 Ok(summary) => summary,
                 Err(error) => {
                     eprintln!("error: {}", error);
@@ -166,7 +166,7 @@ fn main() -> ExitCode {
             }
         }
         Ok(Command::TweakPreset(profile)) => {
-            let summary = feature_api::apply_tweak_preset(profile);
+            let summary = tweak_api::apply_tweak_preset(profile);
             println!("{}", serde_json::to_string_pretty(&summary).unwrap());
             if summary.failed_writes > 0 {
                 ExitCode::from(1)
@@ -175,12 +175,12 @@ fn main() -> ExitCode {
             }
         }
         Ok(Command::TweakShowCache) => {
-            let cache = feature_api::TweakCache::load();
+            let cache = tweak_api::TweakCache::load();
             println!("{}", serde_json::to_string_pretty(&cache).unwrap());
             ExitCode::SUCCESS
         }
         Ok(Command::TweakClearCache) => {
-            if let Err(error) = feature_api::TweakCache::clear() {
+            if let Err(error) = tweak_api::TweakCache::clear() {
                 eprintln!("error: failed to clear tweak cache: {}", error);
                 return ExitCode::from(1);
             }

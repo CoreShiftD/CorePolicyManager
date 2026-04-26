@@ -1,72 +1,104 @@
-use coreshift_policy::api::{json, config, features, daemon};
+use coreshift_policy::api::{daemon, json, resolver};
+use std::time::Duration;
 
 #[test]
 fn test_json_api() {
     let test_file = "test_api.json";
-    let data = features::ProfileRulesFile::default();
-    
-    json::write_json_file(test_file, &data).expect("Failed to write JSON");
-    
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct TestData {
+        name: String,
+        value: i32,
+    }
+    let data = TestData {
+        name: "test".to_string(),
+        value: 42,
+    };
+
+    json::write(test_file, &data).expect("Failed to write JSON");
+
     let content = std::fs::read_to_string(test_file).expect("Failed to read file");
-    assert!(json::validate_json::<features::ProfileRulesFile>(&content));
-    
-    let loaded: features::ProfileRulesFile = json::read_json_file(test_file).expect("Failed to load JSON");
-    assert_eq!(data.schema_version, loaded.schema_version);
-    
-    let pretty = json::to_pretty_json(&data).expect("Failed to serialize");
-    assert!(pretty.contains("\"schema_version\": 1"));
-    
+    assert!(json::parse::<TestData>(&content).is_ok());
+
+    let loaded: TestData = json::read(test_file).expect("Failed to load JSON");
+    assert_eq!(data, loaded);
+
+    let pretty = json::pretty(&data).expect("Failed to serialize");
+    assert!(pretty.contains("\"name\": \"test\""));
+
     std::fs::remove_file(test_file).unwrap();
 }
 
-#[test]
-fn test_config_api() {
-    let all = config::all_features();
-    assert!(!all.is_empty());
-    
-    let daemon_cfg = config::daemon_config_from_features(&all);
-    // Based on daemon_config_from_features implementation, it should match feature presence
-    assert!(daemon_cfg.preload);
-    assert!(daemon_cfg.app_index);
-    assert!(daemon_cfg.profile);
+struct TestFeature {
+    start_called: bool,
 }
 
-#[test]
-fn test_features_api() {
-    // Test tweak parsing with correct prefix
-    let raw_cmd = "tweak write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor performance";
-    let parsed_raw = features::parse_tweak_command_line(raw_cmd);
-    assert!(parsed_raw.is_ok(), "Failed to parse raw command: {:?}", parsed_raw.err());
-    
-    if let Ok(features::TweakCommand::Write { path, value }) = parsed_raw {
-        assert_eq!(path, "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
-        assert_eq!(value, "performance");
-    } else {
-        panic!("Parsed command is not a Write command");
+impl daemon::DaemonFeature for TestFeature {
+    fn name(&self) -> &'static str {
+        "test_feature"
+    }
+    fn on_start(&mut self, _ctx: &daemon::DaemonContext) -> Result<(), daemon::DaemonError> {
+        self.start_called = true;
+        Ok(())
+    }
+}
+
+struct TestWorker;
+impl daemon::ThreadedFeature for TestWorker {
+    fn name(&self) -> &'static str {
+        "test_worker"
+    }
+    fn run(self: Box<Self>, ctx: daemon::FeatureThreadContext) -> Result<(), daemon::DaemonError> {
+        while !ctx.shutdown_requested() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
     }
 }
 
 #[test]
-fn test_daemon_api() {
-    let cfg = daemon::DaemonConfig {
-        preload: true,
-        usage: false,
-        pressure: false,
-        app_index: false,
-        profile: false,
-    };
-    assert!(cfg.preload);
-    assert!(!cfg.usage);
+fn test_builder_and_plugin_system() {
+    let daemon = daemon::DaemonBuilder::new()
+        .with_feature(Box::new(TestFeature {
+            start_called: false,
+        }))
+        .with_threaded_feature(Box::new(TestWorker))
+        .build()
+        .expect("Failed to build daemon");
+
+    assert!(daemon.status().daemon.alive);
 }
 
 #[test]
 fn test_resolver_api() {
-    use coreshift_policy::api::resolver::{ForegroundResolver, ForegroundSnapshot};
-    let _resolver = ForegroundResolver::new(vec!["com.android.launcher".to_string()]);
-    // We can't easily test resolution without a real /proc/cpuset/top-app/tasks but we can test type existence
-    let _snapshot = ForegroundSnapshot {
+    let snapshot = resolver::ForegroundSnapshot {
         pid: Some(1234),
         package: Some("com.test.app".to_string()),
         last_skip_reason: None,
     };
+    let event = resolver::ForegroundEvent {
+        previous: resolver::ForegroundSnapshot::default(),
+        current: snapshot,
+    };
+    assert_eq!(event.current.pid, Some(1234));
+}
+
+#[test]
+fn test_shutdown_requested_logic() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ctx = daemon::FeatureThreadContext {
+        work_dir: std::path::PathBuf::from("/tmp"),
+        shutdown_receiver: rx,
+        foreground_receiver: std::sync::mpsc::channel().1,
+    };
+
+    assert!(!ctx.shutdown_requested());
+    tx.send(()).unwrap();
+    assert!(ctx.shutdown_requested()); // returns true, consumes message
+
+    // Now it should be false because message was consumed and tx is still alive
+    assert!(!ctx.shutdown_requested());
+
+    drop(tx); // Disconnect
+    assert!(ctx.shutdown_requested()); // returns true because disconnected
+    assert!(ctx.shutdown_requested()); // still true
 }

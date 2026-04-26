@@ -23,6 +23,7 @@ struct ScanSummary {
     proc_stat_failed: usize,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct ForegroundSnapshot {
     pub pid: Option<i32>,
     pub package: Option<String>,

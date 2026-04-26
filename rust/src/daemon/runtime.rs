@@ -1,3 +1,4 @@
+use crate::daemon::foreground::{ForegroundResolver, ForegroundSnapshot};
 use crate::features::app_index::AppIndexFeature;
 use crate::features::preload::{PreloadFeature, RuntimeAbi};
 use crate::features::profile::{
@@ -5,8 +6,7 @@ use crate::features::profile::{
     ProfileRulesFile, SelectedProfile, categories_file_path, profile_rules_file_path,
 };
 use crate::features::tweaks;
-use crate::paths::{BLACKLIST_FILE, CPUSET_TOP_APP};
-use crate::runtime::foreground::ForegroundResolver;
+use crate::paths::CPUSET_TOP_APP;
 use crate::runtime::logging;
 use crate::runtime::pressure::refresh_pressure_metrics;
 use crate::runtime::signals::SHUTDOWN;
@@ -141,17 +141,26 @@ impl CachedProfileRules {
     }
 }
 
+use crate::api::daemon::{
+    DaemonContext, DaemonFeature, FeatureThreadContext, ThreadedFeature,
+};
+use crate::api::resolver::ForegroundEvent;
+use std::sync::mpsc::{Sender, channel};
+use std::thread;
+
 pub struct Daemon {
     reactor: Reactor,
     status: DaemonStatus,
     last_written_status: Option<DaemonStatus>,
     status_dirty: bool,
+
+    // Core built-in state
     profile: ProfileFeature,
     category_db: CachedCategoryDb,
     profile_rules: CachedProfileRules,
     last_written_profile_status: Option<ProfileStatusFile>,
     profile_dirty: bool,
-    foreground: Option<ForegroundResolver>,
+    foreground_resolver: Option<ForegroundResolver>,
     preload: Option<PreloadFeature>,
     preload_status: PreloadStatusFile,
     last_written_preload_status: Option<PreloadStatusFile>,
@@ -159,14 +168,40 @@ pub struct Daemon {
     last_pressure_refresh_ms: u64,
     app_index: AppIndexFeature,
     last_tweak_signature: Option<String>,
+
+    // Plugin system
+    features: Vec<Box<dyn DaemonFeature>>,
+    worker_threads: Vec<thread::JoinHandle<()>>,
+    worker_shutdown_tx: Vec<Sender<()>>,
+    worker_foreground_tx: Vec<Sender<ForegroundEvent>>,
+
+    // Internal machinery
     event_buffer: Vec<Event>,
     inotify_token: Option<Token>,
     inotify_fd: Option<Fd>,
     cpuset_watch: Option<i32>,
+    work_dir: std::path::PathBuf,
+    poll_interval: std::time::Duration,
 }
 
 impl Daemon {
     pub fn new(config: DaemonConfig) -> Self {
+        Self::new_from_builder(
+            config,
+            Vec::new(),
+            Vec::new(),
+            std::path::PathBuf::from("/data/local/tmp/coreshift"),
+            std::time::Duration::from_millis(100),
+        )
+    }
+
+    pub fn new_from_builder(
+        config: DaemonConfig,
+        features: Vec<Box<dyn DaemonFeature>>,
+        threaded_features: Vec<Box<dyn ThreadedFeature>>,
+        work_dir: std::path::PathBuf,
+        poll_interval: std::time::Duration,
+    ) -> Self {
         let mut reactor = Reactor::new().expect("Failed to create reactor");
         let privilege = detect_privilege_mode();
         let mut status = DaemonStatus {
@@ -204,11 +239,12 @@ impl Daemon {
         let mut inotify_token = None;
         let mut inotify_fd = None;
         let mut cpuset_watch = None;
-        let foreground = match reactor.setup_inotify() {
+        let foreground_resolver = match reactor.setup_inotify() {
             Ok(fd) => {
                 inotify_token = reactor.inotify_token;
                 inotify_fd = Some(fd);
-                let blacklist = if let Ok(content) = fs::read_to_string(BLACKLIST_FILE) {
+                let blacklist_path = work_dir.join("foreground_blacklist.json");
+                let blacklist = if let Ok(content) = fs::read_to_string(&blacklist_path) {
                     serde_json::from_str::<serde_json::Value>(&content)
                         .map(|value| {
                             value["packages"]
@@ -249,13 +285,40 @@ impl Daemon {
             }
         };
 
-        let preload = if foreground.is_some() && config.preload {
+        let preload = if config.preload {
             Some(PreloadFeature::new())
         } else {
             None
         };
 
         let last_pressure_refresh_ms = status.pressure.last_refresh_ms;
+
+        let mut worker_threads = Vec::new();
+        let mut worker_shutdown_tx = Vec::new();
+        let mut worker_foreground_tx = Vec::new();
+
+        for feature in threaded_features {
+            let (shutdown_tx, shutdown_rx) = channel();
+            let (foreground_tx, foreground_rx) = channel();
+
+            let name = feature.name();
+            let feature_work_dir = work_dir.clone();
+
+            let handle = thread::spawn(move || {
+                let ctx = FeatureThreadContext {
+                    work_dir: feature_work_dir,
+                    shutdown_receiver: shutdown_rx,
+                    foreground_receiver: foreground_rx,
+                };
+                if let Err(e) = feature.run(ctx) {
+                    logging::error(&format!("Worker feature '{}' failed: {}", name, e));
+                }
+            });
+
+            worker_threads.push(handle);
+            worker_shutdown_tx.push(shutdown_tx);
+            worker_foreground_tx.push(foreground_tx);
+        }
 
         Self {
             reactor,
@@ -267,7 +330,7 @@ impl Daemon {
             profile_rules: CachedProfileRules::load(),
             last_written_profile_status: None,
             profile_dirty: true,
-            foreground,
+            foreground_resolver,
             preload,
             preload_status: PreloadStatusFile::default(),
             last_written_preload_status: None,
@@ -275,10 +338,16 @@ impl Daemon {
             last_pressure_refresh_ms,
             app_index,
             last_tweak_signature: None,
+            features,
+            worker_threads,
+            worker_shutdown_tx,
+            worker_foreground_tx,
             event_buffer: Vec::with_capacity(16),
             inotify_token,
             inotify_fd,
             cpuset_watch,
+            work_dir,
+            poll_interval,
         }
     }
 
@@ -381,7 +450,7 @@ impl Daemon {
     }
 
     fn handle_inotify_ready(&mut self) {
-        if self.foreground.is_none() {
+        if self.foreground_resolver.is_none() {
             return;
         }
 
@@ -403,7 +472,7 @@ impl Daemon {
 
         if foreground_changed
             && let Some(snapshot) = self
-                .foreground
+                .foreground_resolver
                 .as_mut()
                 .and_then(|foreground| foreground.resolve_current_foreground())
         {
@@ -450,6 +519,35 @@ impl Daemon {
             if prev_package.as_deref() != snapshot.package.as_deref() {
                 self.profile_dirty = true;
             }
+        }
+
+        let previous_foreground_snapshot = ForegroundSnapshot {
+            pid: previous_foreground.pid,
+            package: previous_foreground.package,
+            last_skip_reason: None,
+        };
+
+        let foreground_event = ForegroundEvent {
+            previous: previous_foreground_snapshot,
+            current: snapshot.clone(),
+        };
+
+        // Notify plugins
+        let ctx = DaemonContext {
+            work_dir: self.work_dir.clone(),
+            status: self.status.clone(),
+        };
+        for feature in &mut self.features {
+            if let Err(e) = feature.on_foreground_changed(&ctx, &foreground_event) {
+                logging::error(&format!(
+                    "Feature '{}' error on foreground change: {}",
+                    feature.name(),
+                    e
+                ));
+            }
+        }
+        for tx in &self.worker_foreground_tx {
+            let _ = tx.send(foreground_event.clone());
         }
 
         if let Some(pkg) = snapshot.package.as_deref() {
@@ -525,13 +623,53 @@ impl Daemon {
         self.last_tweak_signature = Some(signature);
     }
 
+    pub fn status(&self) -> &DaemonStatus {
+        &self.status
+    }
+
     pub fn run(&mut self) {
         logging::info("CoreShift Policy Daemon started.");
+
+        // on_start
+        let ctx = DaemonContext {
+            work_dir: self.work_dir.clone(),
+            status: self.status.clone(),
+        };
+        for feature in &mut self.features {
+            if let Err(e) = feature.on_start(&ctx) {
+                logging::error(&format!(
+                    "Feature '{}' error on start: {}",
+                    feature.name(),
+                    e
+                ));
+            }
+        }
+
         self.write_status_files_if_needed(true);
 
         while !SHUTDOWN.load(Ordering::SeqCst) {
             self.event_buffer.clear();
-            match self.reactor.wait(&mut self.event_buffer, 16, -1) {
+
+            // on_tick
+            let ctx = DaemonContext {
+                work_dir: self.work_dir.clone(),
+                status: self.status.clone(),
+            };
+            for feature in &mut self.features {
+                if let Err(e) = feature.on_tick(&ctx) {
+                    logging::error(&format!(
+                        "Feature '{}' error on tick: {}",
+                        feature.name(),
+                        e
+                    ));
+                }
+            }
+
+            match self.reactor.wait(
+                &mut self.event_buffer,
+                16,
+                self.poll_interval.as_millis() as i32,
+            ) {
                 Ok(_) => {
                     let mut inotify_ready = false;
                     for event in &self.event_buffer {
@@ -555,6 +693,30 @@ impl Daemon {
         }
 
         logging::info("Shutdown requested. Cleaning up...");
+
+        // on_shutdown
+        let ctx = DaemonContext {
+            work_dir: self.work_dir.clone(),
+            status: self.status.clone(),
+        };
+        for feature in &mut self.features {
+            if let Err(e) = feature.on_shutdown(&ctx) {
+                logging::error(&format!(
+                    "Feature '{}' error on shutdown: {}",
+                    feature.name(),
+                    e
+                ));
+            }
+        }
+        for tx in &self.worker_shutdown_tx {
+            let _ = tx.send(());
+        }
+
+        // Wait for workers
+        for handle in self.worker_threads.drain(..) {
+            let _ = handle.join();
+        }
+
         self.status.daemon.alive = false;
         self.status_dirty = true;
         self.write_status_files_if_needed(true);
