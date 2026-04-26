@@ -1,7 +1,8 @@
 use crate::features::app_index::AppIndexFeature;
-use crate::features::preload::PreloadFeature;
+use crate::features::preload::{PreloadFeature, RuntimeAbi};
 use crate::features::profile::{
-    CategoryDatabase, ProfileClass, ProfileFeature, categories_file_path,
+    CategoryDatabase, PrivilegeMode, ProfileClass, ProfileFeature, ProfileRulesFile,
+    SelectedProfile, categories_file_path, profile_rules_file_path,
 };
 use crate::paths::{BLACKLIST_FILE, CPUSET_TOP_APP};
 use crate::runtime::foreground::ForegroundResolver;
@@ -9,11 +10,12 @@ use crate::runtime::logging;
 use crate::runtime::pressure::refresh_pressure_metrics;
 use crate::runtime::signals::SHUTDOWN;
 use crate::runtime::status::{
-    DaemonStatus, FeatureFlags, PreloadStatusFile, PressureStatus, ProfileStatusFile,
-    read_device_uptime_secs,
+    DaemonInfo, DaemonStatus, FeatureFlags, PreloadStatusFile, PressureStatus, ProfileAppStat,
+    ProfileStatusFile, read_device_uptime_secs,
 };
 use coreshift_lowlevel::inotify::{InotifyEvent, MODIFY_MASK, add_watch, read_events};
 use coreshift_lowlevel::reactor::{Event, Fd, Reactor, Token};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -21,11 +23,32 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const PRESSURE_REFRESH_INTERVAL_MS: u64 = 5_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DaemonConfig {
+    pub preload: bool,
+    pub usage: bool,
+    pub pressure: bool,
+    pub app_index: bool,
+    pub profile: bool,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            preload: true,
+            usage: true,
+            pressure: true,
+            app_index: true,
+            profile: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CachedCategoryDb {
     db: CategoryDatabase,
     mtime: Option<SystemTime>,
-    by_package: std::collections::HashMap<String, ProfileClass>,
+    by_package: HashMap<String, ProfileClass>,
 }
 
 impl CachedCategoryDb {
@@ -55,10 +78,8 @@ impl CachedCategoryDb {
         false
     }
 
-    fn build_reverse_index(
-        db: &CategoryDatabase,
-    ) -> std::collections::HashMap<String, ProfileClass> {
-        let mut by_package = std::collections::HashMap::new();
+    fn build_reverse_index(db: &CategoryDatabase) -> HashMap<String, ProfileClass> {
+        let mut by_package = HashMap::new();
         for (category, packages) in &db.categories {
             let class = match category.as_str() {
                 "game" => ProfileClass::Game,
@@ -83,6 +104,38 @@ impl CachedCategoryDb {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CachedProfileRules {
+    rules: ProfileRulesFile,
+    mtime: Option<SystemTime>,
+}
+
+impl CachedProfileRules {
+    fn load() -> Self {
+        let rules = ProfileRulesFile::load();
+        let mtime = fs::metadata(profile_rules_file_path())
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
+        Self { rules, mtime }
+    }
+
+    fn refresh_if_changed(&mut self) -> bool {
+        let current_mtime = fs::metadata(profile_rules_file_path())
+            .ok()
+            .and_then(|metadata| metadata.modified().ok());
+        if current_mtime != self.mtime {
+            self.rules = ProfileRulesFile::load();
+            self.mtime = current_mtime;
+            return true;
+        }
+        false
+    }
+
+    fn select(&self, class: &ProfileClass, privilege: &PrivilegeMode) -> SelectedProfile {
+        self.rules.resolve(class, privilege)
+    }
+}
+
 pub struct Daemon {
     reactor: Reactor,
     status: DaemonStatus,
@@ -90,6 +143,7 @@ pub struct Daemon {
     status_dirty: bool,
     profile: ProfileFeature,
     category_db: CachedCategoryDb,
+    profile_rules: CachedProfileRules,
     last_written_profile_status: Option<ProfileStatusFile>,
     profile_dirty: bool,
     foreground: Option<ForegroundResolver>,
@@ -106,35 +160,37 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new(preload_only: bool) -> Self {
+    pub fn new(config: DaemonConfig) -> Self {
         let mut reactor = Reactor::new().expect("Failed to create reactor");
+        let privilege = detect_privilege_mode();
         let mut status = DaemonStatus {
-            daemon: crate::runtime::status::DaemonInfo {
+            daemon: DaemonInfo {
                 alive: true,
                 started_ms: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
+                privilege: privilege.clone(),
                 device_uptime_secs: read_device_uptime_secs(),
             },
             ..Default::default()
         };
 
         let mut pressure_metrics = crate::runtime::pressure::PressureMetrics::default();
-        refresh_pressure_metrics(&mut pressure_metrics);
-        status.pressure = PressureStatus::from_metrics(&pressure_metrics);
+        if config.pressure {
+            refresh_pressure_metrics(&mut pressure_metrics);
+            status.pressure = PressureStatus::from_metrics(&pressure_metrics);
+        }
 
-        let profile_enabled = !preload_only;
-        let preload_enabled = true;
-        let app_index = AppIndexFeature::new(true, crate::features::preload::RuntimeAbi::current());
+        let app_index = AppIndexFeature::new(config.app_index, RuntimeAbi::current());
         status.features = FeatureFlags {
-            preload: preload_enabled,
-            usage: profile_enabled,
-            pressure: true,
+            preload: config.preload,
+            usage: config.usage,
+            profile: config.profile,
+            pressure: config.pressure,
             app_index: app_index.enabled(),
         };
 
-        // Startup Diagnostics
         if !Path::new(CPUSET_TOP_APP).exists() {
             logging::warn(&format!("{} unavailable. Degrading.", CPUSET_TOP_APP));
         }
@@ -148,12 +204,13 @@ impl Daemon {
                 inotify_fd = Some(fd);
                 let blacklist = if let Ok(content) = fs::read_to_string(BLACKLIST_FILE) {
                     serde_json::from_str::<serde_json::Value>(&content)
-                        .map(|v| {
-                            v["packages"]
+                        .map(|value| {
+                            value["packages"]
                                 .as_array()
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .map(|packages| {
+                                    packages
+                                        .iter()
+                                        .filter_map(|entry| entry.as_str().map(str::to_string))
                                         .collect()
                                 })
                                 .unwrap_or_else(Vec::new)
@@ -166,10 +223,10 @@ impl Daemon {
                 if let Some(inotify_fd_ref) = inotify_fd.as_ref() {
                     match add_watch(inotify_fd_ref, CPUSET_TOP_APP, MODIFY_MASK) {
                         Ok(wd) => cpuset_watch = Some(wd),
-                        Err(e) => {
+                        Err(error) => {
                             logging::error(&format!(
                                 "Failed to add watch on {}: {}",
-                                CPUSET_TOP_APP, e
+                                CPUSET_TOP_APP, error
                             ));
                         }
                     }
@@ -180,20 +237,18 @@ impl Daemon {
                     None
                 }
             }
-            Err(e) => {
-                logging::error(&format!("Failed to setup inotify: {}", e));
+            Err(error) => {
+                logging::error(&format!("Failed to setup inotify: {}", error));
                 None
             }
         };
 
-        let preload = if foreground.is_some() {
+        let preload = if foreground.is_some() && config.preload {
             Some(PreloadFeature::new())
         } else {
             None
         };
 
-        let profile = ProfileFeature::default();
-        let preload_status = PreloadStatusFile::default();
         let last_pressure_refresh_ms = status.pressure.last_refresh_ms;
 
         Self {
@@ -201,15 +256,16 @@ impl Daemon {
             status,
             last_written_status: None,
             status_dirty: true,
-            profile,
+            profile: ProfileFeature::default(),
             category_db: CachedCategoryDb::load(),
+            profile_rules: CachedProfileRules::load(),
             last_written_profile_status: None,
-            profile_dirty: profile_enabled,
+            profile_dirty: true,
             foreground,
             preload,
-            preload_status,
+            preload_status: PreloadStatusFile::default(),
             last_written_preload_status: None,
-            preload_dirty: preload_enabled,
+            preload_dirty: config.preload,
             last_pressure_refresh_ms,
             app_index,
             event_buffer: Vec::with_capacity(16),
@@ -219,65 +275,99 @@ impl Daemon {
         }
     }
 
-    fn write_status_files_if_needed(&mut self, force: bool) {
-        if self.status.features.usage && self.category_db.refresh_if_changed() {
+    fn profile_subsystem_enabled(&self) -> bool {
+        self.status.features.usage || self.status.features.profile
+    }
+
+    fn refresh_profile_caches(&mut self) {
+        if self.profile_subsystem_enabled()
+            && (self.category_db.refresh_if_changed() || self.profile_rules.refresh_if_changed())
+        {
             self.profile_dirty = true;
         }
+    }
+
+    fn current_profile_class(&self) -> ProfileClass {
+        self.category_db
+            .classify(self.status.foreground.package.as_deref())
+    }
+
+    fn current_selected_profile(&self) -> SelectedProfile {
+        let class = self.current_profile_class();
+        self.profile_rules
+            .select(&class, &self.status.daemon.privilege)
+    }
+
+    fn build_profile_status(&self) -> ProfileStatusFile {
+        let class = self.current_profile_class();
+        let selected_profile = self
+            .profile_rules
+            .select(&class, &self.status.daemon.privilege);
+        let (foreground_switch_count, top_apps) = if self.status.features.usage {
+            (
+                self.profile.foreground_switch_count,
+                self.profile
+                    .snapshot_top_apps()
+                    .into_iter()
+                    .map(|(package, total_secs)| ProfileAppStat {
+                        package,
+                        total_secs,
+                    })
+                    .collect(),
+            )
+        } else {
+            (0, Vec::new())
+        };
+
+        ProfileStatusFile {
+            schema_version: 1,
+            current_class: class.to_string(),
+            privilege: self.status.daemon.privilege.to_string(),
+            selected_profile,
+            foreground_switch_count,
+            top_apps,
+        }
+    }
+
+    fn write_status_files_if_needed(&mut self, force: bool) {
+        self.refresh_profile_caches();
 
         if force || self.status_dirty {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            if self.should_refresh_pressure(force, now_ms) {
+            if self.status.features.pressure && self.should_refresh_pressure(force, now_ms) {
                 let mut pressure_metrics = crate::runtime::pressure::PressureMetrics::default();
                 refresh_pressure_metrics(&mut pressure_metrics);
                 self.last_pressure_refresh_ms = pressure_metrics.last_refresh_ms;
                 self.status.pressure = PressureStatus::from_metrics(&pressure_metrics);
             }
             self.status.daemon.device_uptime_secs = read_device_uptime_secs();
-            if let Err(e) = self.status.write_if_changed(&mut self.last_written_status) {
-                logging::error(&format!("Status write failed: {}", e));
+            if let Err(error) = self.status.write_if_changed(&mut self.last_written_status) {
+                logging::error(&format!("Status write failed: {}", error));
             } else {
                 self.status_dirty = false;
             }
         }
 
-        if self.status.features.usage && (force || self.profile_dirty) {
-            let class = self
-                .category_db
-                .classify(self.status.foreground.package.as_deref());
-            let recommendation = ProfileFeature::get_recommendation(&class);
-            let profile_status = ProfileStatusFile {
-                schema_version: 1,
-                foreground_switch_count: self.profile.foreground_switch_count,
-                top_apps: self
-                    .profile
-                    .snapshot_top_apps()
-                    .into_iter()
-                    .map(
-                        |(package, total_secs)| crate::runtime::status::ProfileAppStat {
-                            package,
-                            total_secs,
-                        },
-                    )
-                    .collect(),
-                current_class: class.to_string(),
-                recommendation: recommendation.to_string(),
-            };
-            if let Err(e) = profile_status.write_if_changed(&mut self.last_written_profile_status) {
-                logging::error(&format!("Profile status write failed: {}", e));
+        if self.profile_subsystem_enabled() && (force || self.profile_dirty) {
+            let profile_status = self.build_profile_status();
+            if let Err(error) =
+                profile_status.write_if_changed(&mut self.last_written_profile_status)
+            {
+                logging::error(&format!("Profile status write failed: {}", error));
             } else {
                 self.profile_dirty = false;
             }
         }
 
         if self.status.features.preload && (force || self.preload_dirty) {
-            if let Err(e) = self
+            if let Err(error) = self
                 .preload_status
                 .write_if_changed(&mut self.last_written_preload_status)
             {
-                logging::error(&format!("Preload status write failed: {}", e));
+                logging::error(&format!("Preload status write failed: {}", error));
             } else {
                 self.preload_dirty = false;
             }
@@ -346,7 +436,7 @@ impl Daemon {
 
         if self.status.foreground != previous_foreground {
             self.status_dirty = true;
-            self.profile_dirty = self.status.features.usage;
+            self.profile_dirty = self.profile_subsystem_enabled();
         }
 
         if self.status.features.usage {
@@ -361,18 +451,31 @@ impl Daemon {
             }
         }
 
-        if let Some(pkg) = snapshot.package.as_deref()
-            && let Some(preload) = &mut self.preload
-        {
-            let previous_preload_status = self.preload_status.clone();
-            let candidates = self.app_index.get_candidates(pkg);
-            preload.on_foreground_package(
-                pkg,
-                candidates.as_deref().unwrap_or(&[]),
-                &mut self.preload_status,
-            );
-            if self.preload_status != previous_preload_status {
-                self.preload_dirty = true;
+        if let Some(pkg) = snapshot.package.as_deref() {
+            self.refresh_profile_caches();
+            let allow_preload = if self.status.features.profile {
+                self.current_selected_profile().preload
+            } else {
+                true
+            };
+            if allow_preload {
+                let candidates = if self.status.features.app_index {
+                    self.app_index.get_candidates(pkg)
+                } else {
+                    None
+                };
+                let Some(preload) = &mut self.preload else {
+                    return;
+                };
+                let previous_preload_status = self.preload_status.clone();
+                preload.on_foreground_package(
+                    pkg,
+                    candidates.as_deref().unwrap_or(&[]),
+                    &mut self.preload_status,
+                );
+                if self.preload_status != previous_preload_status {
+                    self.preload_dirty = true;
+                }
             }
         }
     }
@@ -398,9 +501,9 @@ impl Daemon {
 
                     self.write_status_files_if_needed(false);
                 }
-                Err(e) => {
+                Err(error) => {
                     if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-                        logging::error(&format!("Reactor wait error: {}\n", e));
+                        logging::error(&format!("Reactor wait error: {}\n", error));
                     }
                 }
             }
@@ -412,6 +515,36 @@ impl Daemon {
         self.write_status_files_if_needed(true);
         self.app_index.shutdown();
         logging::info("CoreShift Policy Daemon stopped.");
+    }
+}
+
+fn detect_privilege_mode() -> PrivilegeMode {
+    if let Some(uid) = std::env::var_os("COREPOLICY_TEST_UID")
+        .and_then(|value| value.into_string().ok())
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        return privilege_mode_from_uid(uid);
+    }
+
+    let Some(content) = fs::read_to_string("/proc/self/status").ok() else {
+        return PrivilegeMode::Unknown;
+    };
+    let Some(uid_line) = content.lines().find(|line| line.starts_with("Uid:")) else {
+        return PrivilegeMode::Unknown;
+    };
+    let uid = uid_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u32>().ok());
+    uid.map(privilege_mode_from_uid)
+        .unwrap_or(PrivilegeMode::Unknown)
+}
+
+fn privilege_mode_from_uid(uid: u32) -> PrivilegeMode {
+    match uid {
+        0 => PrivilegeMode::Root,
+        2000 => PrivilegeMode::Shell,
+        _ => PrivilegeMode::Unknown,
     }
 }
 
@@ -439,9 +572,19 @@ mod tests {
         }
     }
 
+    fn with_test_profile_rules_file(path: &Path, f: impl FnOnce()) {
+        unsafe {
+            std::env::set_var("COREPOLICY_TEST_PROFILE_RULES_FILE", path);
+        }
+        f();
+        unsafe {
+            std::env::remove_var("COREPOLICY_TEST_PROFILE_RULES_FILE");
+        }
+    }
+
     #[test]
     fn foreground_event_updates_inline_features_without_extra_worker_logic() {
-        let mut daemon = Daemon::new(false);
+        let mut daemon = Daemon::new(DaemonConfig::default());
         let before = daemon.app_index.name();
         daemon.process_foreground_snapshot(ForegroundSnapshot {
             pid: Some(1234),
@@ -457,6 +600,7 @@ mod tests {
         assert_eq!(daemon.status.foreground.pid, Some(1234));
         assert!(daemon.status.foreground.session_started_ms.is_some());
         assert!(daemon.status.features.usage);
+        assert!(daemon.status.features.profile);
         assert!(daemon.status_dirty);
         assert!(daemon.profile_dirty);
     }
@@ -516,10 +660,57 @@ mod tests {
 
     #[test]
     fn psi_refresh_is_throttled() {
-        let mut daemon = Daemon::new(false);
+        let mut daemon = Daemon::new(DaemonConfig::default());
         daemon.last_pressure_refresh_ms = now_ms();
         assert!(!daemon.should_refresh_pressure(false, daemon.last_pressure_refresh_ms + 1_000));
         assert!(daemon.should_refresh_pressure(false, daemon.last_pressure_refresh_ms + 5_000));
         assert!(daemon.should_refresh_pressure(true, daemon.last_pressure_refresh_ms + 1_000));
+    }
+
+    #[test]
+    fn profile_rules_select_by_privilege() {
+        let root =
+            std::env::temp_dir().join(format!("coreshift_profile_rules_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let categories_path = root.join("profiles_category.json");
+        let rules_path = root.join("profile_rules.json");
+        fs::write(
+            &categories_path,
+            r#"{"version":1,"updated_ms":1,"categories":{"game":["com.example.game"],"social":[],"tool":[],"launcher":[],"keyboard":[],"system":[]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &rules_path,
+            r#"{"schema_version":1,"rules":{"game":{"root":{"preload":true,"priority":"performance","commands":[]},"shell":{"preload":false,"priority":"balanced","commands":[]}}}}"#,
+        )
+        .unwrap();
+
+        with_test_categories_file(&categories_path, || {
+            with_test_profile_rules_file(&rules_path, || {
+                unsafe {
+                    std::env::set_var("COREPOLICY_TEST_UID", "0");
+                }
+                let mut daemon = Daemon::new(DaemonConfig::default());
+                daemon.process_foreground_snapshot(ForegroundSnapshot {
+                    pid: Some(1234),
+                    package: Some("com.example.game".to_string()),
+                    last_skip_reason: None,
+                });
+                let profile_status = daemon.build_profile_status();
+                assert_eq!(profile_status.current_class, "game");
+                assert_eq!(profile_status.privilege, "root");
+                assert!(profile_status.selected_profile.preload);
+                assert_eq!(
+                    profile_status.selected_profile.priority,
+                    crate::features::profile::ProfilePriority::Performance
+                );
+                unsafe {
+                    std::env::remove_var("COREPOLICY_TEST_UID");
+                }
+            });
+        });
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

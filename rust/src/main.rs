@@ -1,5 +1,8 @@
 use coreshift_policy::features::profile::CategoryDatabase;
-use coreshift_policy::runtime::{daemon::Daemon, logging, signals, status};
+use coreshift_policy::runtime::{
+    daemon::{Daemon, DaemonConfig},
+    logging, signals, status,
+};
 use std::collections::BTreeSet;
 use std::process::ExitCode;
 
@@ -9,11 +12,11 @@ enum CliFeature {
     Usage,
     Pressure,
     AppIndex,
+    Profile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StartConfig {
-    preload_only: bool,
     requested: BTreeSet<CliFeature>,
 }
 
@@ -22,7 +25,6 @@ enum Command {
     ShowHelp,
     Start(StartConfig),
     Status,
-    Profile(Vec<String>),
     Unknown(String),
 }
 
@@ -33,16 +35,13 @@ Usage:
   corepolicy help
   corepolicy status
   corepolicy start [--all] [-f FEATURE...]
-  corepolicy profile ...
 
 Features:
   preload
   usage
   pressure
   app_index
-
-Compatibility:
-  profile         Deprecated alias for usage"
+  profile"
 }
 
 fn print_help() {
@@ -52,9 +51,10 @@ fn print_help() {
 fn parse_feature_name(value: &str) -> Result<CliFeature, String> {
     match value {
         "preload" => Ok(CliFeature::Preload),
-        "usage" | "profile" => Ok(CliFeature::Usage),
+        "usage" => Ok(CliFeature::Usage),
         "pressure" => Ok(CliFeature::Pressure),
         "app_index" => Ok(CliFeature::AppIndex),
+        "profile" => Ok(CliFeature::Profile),
         _ => Err(format!("error: unknown feature '{}'", value)),
     }
 }
@@ -81,20 +81,21 @@ where
                 requested.insert(feature);
                 explicit = true;
             }
-            "-p" => {
-                eprintln!("-p has been removed. Use -f or --feature.");
-                return Err(ExitCode::from(2));
-            }
             "--all" => {
                 requested.insert(CliFeature::Preload);
                 requested.insert(CliFeature::Usage);
                 requested.insert(CliFeature::Pressure);
                 requested.insert(CliFeature::AppIndex);
+                requested.insert(CliFeature::Profile);
                 explicit = true;
             }
             "-h" | "--help" => {
                 print_help();
                 return Err(ExitCode::SUCCESS);
+            }
+            "-p" => {
+                eprintln!("-p has been removed. Use -f or --feature.");
+                return Err(ExitCode::from(2));
             }
             value => {
                 eprintln!("error: unknown start argument '{}'", value);
@@ -103,22 +104,31 @@ where
         }
     }
 
-    let preload_only = explicit
-        && requested.contains(&CliFeature::Preload)
-        && !requested.contains(&CliFeature::Usage)
-        && !requested.contains(&CliFeature::Pressure)
-        && !requested.contains(&CliFeature::AppIndex);
+    if !explicit {
+        requested.insert(CliFeature::Preload);
+        requested.insert(CliFeature::Usage);
+        requested.insert(CliFeature::Pressure);
+        requested.insert(CliFeature::AppIndex);
+        requested.insert(CliFeature::Profile);
+    }
 
-    Ok(StartConfig {
-        preload_only,
-        requested,
-    })
+    Ok(StartConfig { requested })
+}
+
+fn daemon_config_from_start(config: &StartConfig) -> DaemonConfig {
+    DaemonConfig {
+        preload: config.requested.contains(&CliFeature::Preload),
+        usage: config.requested.contains(&CliFeature::Usage),
+        pressure: config.requested.contains(&CliFeature::Pressure),
+        app_index: config.requested.contains(&CliFeature::AppIndex),
+        profile: config.requested.contains(&CliFeature::Profile),
+    }
 }
 
 fn start_daemon(config: StartConfig) -> ExitCode {
     logging::init();
     signals::setup();
-    let mut daemon = Daemon::new(config.preload_only);
+    let mut daemon = Daemon::new(daemon_config_from_start(&config));
     daemon.run();
     ExitCode::SUCCESS
 }
@@ -132,112 +142,19 @@ where
 
     match first_arg.as_deref() {
         None => Ok(Command::ShowHelp),
-        Some("start") => match parse_start_args(args) {
-            Ok(config) => Ok(Command::Start(config)),
-            Err(code) => Err(code),
-        },
+        Some("start") => parse_start_args(args).map(Command::Start),
         Some("-f" | "--feature" | "--all") => {
             let mut forwarded = vec![first_arg.unwrap_or_default()];
             forwarded.extend(args);
-            match parse_start_args(forwarded) {
-                Ok(config) => Ok(Command::Start(config)),
-                Err(code) => Err(code),
-            }
+            parse_start_args(forwarded).map(Command::Start)
         }
         Some("-p") => {
             eprintln!("-p has been removed. Use -f or --feature.");
             Err(ExitCode::from(2))
         }
         Some("status") => Ok(Command::Status),
-        Some("profile") => Ok(Command::Profile(args.collect())),
         Some("help" | "--help" | "-h") => Ok(Command::ShowHelp),
         Some(cmd) => Ok(Command::Unknown(cmd.to_string())),
-    }
-}
-
-fn handle_profile_cmd<I>(mut args: I) -> ExitCode
-where
-    I: Iterator<Item = String>,
-{
-    let cmd = args.next();
-    let mut db = CategoryDatabase::load();
-    match cmd.as_deref() {
-        Some("list") => {
-            for (cat, pkgs) in &db.categories {
-                println!("{}: {} apps", cat, pkgs.len());
-            }
-            ExitCode::SUCCESS
-        }
-        Some("show") => {
-            let Some(cat) = args.next() else {
-                eprintln!("Usage: corepolicy profile show <category>");
-                return ExitCode::from(2);
-            };
-            let Some(pkgs) = db.categories.get(&cat) else {
-                eprintln!("error: unsupported category '{}'", cat);
-                return ExitCode::from(1);
-            };
-            for pkg in pkgs {
-                println!("{}", pkg);
-            }
-            ExitCode::SUCCESS
-        }
-        Some("add") => {
-            let Some(cat) = args.next() else {
-                eprintln!("Usage: corepolicy profile add <category> <package>");
-                return ExitCode::from(2);
-            };
-            let Some(pkg) = args.next() else {
-                eprintln!("Usage: corepolicy profile add <category> <package>");
-                return ExitCode::from(2);
-            };
-            if db.add(&cat, &pkg) {
-                if let Err(error) = db.save() {
-                    eprintln!("error: failed to save profile database: {}", error);
-                    return ExitCode::from(1);
-                }
-            } else {
-                eprintln!("error: unsupported category '{}'", cat);
-                return ExitCode::from(1);
-            }
-            ExitCode::SUCCESS
-        }
-        Some("remove") => {
-            let Some(pkg) = args.next() else {
-                eprintln!("Usage: corepolicy profile remove <package>");
-                return ExitCode::from(2);
-            };
-            db.remove(&pkg);
-            if let Err(error) = db.save() {
-                eprintln!("error: failed to save profile database: {}", error);
-                return ExitCode::from(1);
-            }
-            ExitCode::SUCCESS
-        }
-        Some("classify") => {
-            let Some(pkg) = args.next() else {
-                eprintln!("Usage: corepolicy profile classify <package>");
-                return ExitCode::from(2);
-            };
-            println!("{}", db.classify(&pkg));
-            ExitCode::SUCCESS
-        }
-        Some("validate") => {
-            println!("Validating categories...");
-            let mut seen = std::collections::HashSet::new();
-            for pkgs in db.categories.values() {
-                for pkg in pkgs {
-                    if !seen.insert(pkg) {
-                        eprintln!("Duplicate package: {}", pkg);
-                    }
-                }
-            }
-            ExitCode::SUCCESS
-        }
-        _ => {
-            eprintln!("Usage: corepolicy profile [list|show|add|remove|classify|validate]");
-            ExitCode::from(2)
-        }
     }
 }
 
@@ -250,7 +167,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Start(config)) => start_daemon(config),
         Ok(Command::Status) => {
-            let db = CategoryDatabase::load();
+            let db = CategoryDatabase::default();
             match status::read_public_status(&db) {
                 Some(public) => {
                     println!("{}", serde_json::to_string_pretty(&public).unwrap());
@@ -262,7 +179,6 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Ok(Command::Profile(args)) => handle_profile_cmd(args.into_iter()),
         Ok(Command::Unknown(cmd)) => {
             eprintln!("error: unknown argument '{}'", cmd);
             print_help();
@@ -274,22 +190,10 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
-    fn with_test_categories_file(path: &Path, f: impl FnOnce()) {
-        unsafe {
-            std::env::set_var("COREPOLICY_TEST_CATEGORIES_FILE", path);
-        }
-        f();
-        unsafe {
-            std::env::remove_var("COREPOLICY_TEST_CATEGORIES_FILE");
-        }
-    }
 
     #[test]
     fn short_feature_flag_works() {
         let config = parse_start_args(vec!["-f".to_string(), "preload".to_string()]).unwrap();
-        assert!(config.preload_only);
         assert!(config.requested.contains(&CliFeature::Preload));
     }
 
@@ -299,7 +203,6 @@ mod tests {
             parse_cli_args(Vec::<String>::new()).unwrap(),
             Command::ShowHelp
         );
-        assert_eq!(render_help(), render_help());
     }
 
     #[test]
@@ -330,7 +233,6 @@ mod tests {
     #[test]
     fn long_feature_flag_works() {
         let config = parse_start_args(vec!["--feature".to_string(), "usage".to_string()]).unwrap();
-        assert!(!config.preload_only);
         assert!(config.requested.contains(&CliFeature::Usage));
     }
 
@@ -343,66 +245,18 @@ mod tests {
     }
 
     #[test]
-    fn profile_alias_maps_to_usage() {
+    fn profile_feature_is_supported() {
         let config = parse_start_args(vec!["-f".to_string(), "profile".to_string()]).unwrap();
-        assert!(config.requested.contains(&CliFeature::Usage));
-        assert!(!config.preload_only);
+        assert!(config.requested.contains(&CliFeature::Profile));
     }
 
     #[test]
     fn all_flag_works() {
         let config = parse_start_args(vec!["--all".to_string()]).unwrap();
-        assert!(!config.preload_only);
         assert!(config.requested.contains(&CliFeature::Preload));
         assert!(config.requested.contains(&CliFeature::Usage));
         assert!(config.requested.contains(&CliFeature::Pressure));
         assert!(config.requested.contains(&CliFeature::AppIndex));
-    }
-
-    #[test]
-    fn profile_add_missing_args_returns_nonzero() {
-        assert_ne!(
-            handle_profile_cmd(vec!["add".to_string()].into_iter()),
-            ExitCode::SUCCESS
-        );
-        assert_ne!(
-            handle_profile_cmd(vec!["add".to_string(), "game".to_string()].into_iter()),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn profile_remove_missing_arg_returns_nonzero() {
-        assert_ne!(
-            handle_profile_cmd(vec!["remove".to_string()].into_iter()),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn profile_show_invalid_category_returns_nonzero() {
-        assert_ne!(
-            handle_profile_cmd(vec!["show".to_string(), "invalid".to_string()].into_iter()),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn profile_save_failure_returns_nonzero() {
-        let categories_path = Path::new("/proc/self/status");
-
-        with_test_categories_file(categories_path, || {
-            assert_ne!(
-                handle_profile_cmd(
-                    vec![
-                        "add".to_string(),
-                        "game".to_string(),
-                        "com.example.game".to_string()
-                    ]
-                    .into_iter()
-                ),
-                ExitCode::SUCCESS
-            );
-        });
+        assert!(config.requested.contains(&CliFeature::Profile));
     }
 }

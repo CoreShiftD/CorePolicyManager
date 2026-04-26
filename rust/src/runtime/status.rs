@@ -1,4 +1,6 @@
-use crate::features::profile::{CategoryDatabase, ProfileFeature};
+use crate::features::profile::{
+    CategoryDatabase, PrivilegeMode, ProfileFeature, ProfilePriority, SelectedProfile,
+};
 use crate::paths::{APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE};
 use crate::runtime::foreground::ForegroundSnapshot;
 use crate::runtime::pressure::PressureMetrics;
@@ -36,6 +38,7 @@ pub struct DaemonStatus {
 pub struct DaemonInfo {
     pub alive: bool,
     pub started_ms: u64,
+    pub privilege: PrivilegeMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_uptime_secs: Option<u64>,
 }
@@ -51,8 +54,9 @@ pub struct ForegroundInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeatureFlags {
     pub preload: bool,
-    #[serde(alias = "profile")]
     pub usage: bool,
+    #[serde(default)]
+    pub profile: bool,
     pub pressure: bool,
     pub app_index: bool,
 }
@@ -70,10 +74,11 @@ pub struct PressureStatus {
 pub struct ProfileStatusFile {
     #[serde(default = "schema_version_1")]
     pub schema_version: u32,
+    pub current_class: String,
+    pub privilege: String,
+    pub selected_profile: SelectedProfile,
     pub foreground_switch_count: u64,
     pub top_apps: Vec<ProfileAppStat>,
-    pub current_class: String,
-    pub recommendation: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
@@ -125,7 +130,7 @@ pub struct PublicStatus {
     pub features: FeatureFlags,
     pub pressure: PublicPressure,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<PublicProfile>,
+    pub profile: Option<PublicProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preload: Option<PublicPreload>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -142,7 +147,8 @@ pub struct PublicPressure {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct PublicProfile {
     pub class: String,
-    pub recommendation: String,
+    pub privilege: String,
+    pub selected_profile: SelectedProfile,
     pub switch_count: u64,
     pub top_apps: Vec<ProfileAppStat>,
 }
@@ -176,10 +182,14 @@ impl Default for ProfileStatusFile {
     fn default() -> Self {
         Self {
             schema_version: schema_version_1(),
+            current_class: String::new(),
+            privilege: PrivilegeMode::Unknown.to_string(),
+            selected_profile: SelectedProfile {
+                preload: false,
+                priority: ProfilePriority::Neutral,
+            },
             foreground_switch_count: 0,
             top_apps: Vec::new(),
-            current_class: String::new(),
-            recommendation: String::new(),
         }
     }
 }
@@ -252,9 +262,10 @@ impl ProfileStatusFile {
         profile: &ProfileFeature,
         current_pkg: Option<&str>,
         db: &CategoryDatabase,
+        privilege: &PrivilegeMode,
+        selected_profile: SelectedProfile,
     ) -> Self {
         let class = db.classify(current_pkg.unwrap_or(""));
-        let recommendation = ProfileFeature::get_recommendation(&class);
         let top_apps = profile
             .snapshot_top_apps()
             .into_iter()
@@ -266,10 +277,11 @@ impl ProfileStatusFile {
 
         Self {
             schema_version: 1,
+            current_class: class.to_string(),
+            privilege: privilege.to_string(),
+            selected_profile,
             foreground_switch_count: profile.foreground_switch_count,
             top_apps,
-            current_class: class.to_string(),
-            recommendation: recommendation.to_string(),
         }
     }
 
@@ -371,10 +383,11 @@ pub fn read_public_status_from_paths(
             memory_avg10: core.pressure.memory_avg10,
             io_avg10: core.pressure.io_avg10,
         },
-        usage: if core.features.usage {
+        profile: if core.features.profile || core.features.usage {
             profile.map(|profile| PublicProfile {
                 class: profile.current_class,
-                recommendation: profile.recommendation,
+                privilege: profile.privilege,
+                selected_profile: profile.selected_profile,
                 switch_count: profile.foreground_switch_count,
                 top_apps: profile.top_apps,
             })
@@ -449,6 +462,7 @@ mod tests {
             daemon: DaemonInfo {
                 alive: true,
                 started_ms: 1,
+                privilege: PrivilegeMode::Root,
                 device_uptime_secs: Some(42),
             },
             foreground: ForegroundInfo {
@@ -459,6 +473,7 @@ mod tests {
             features: FeatureFlags {
                 preload: true,
                 usage: true,
+                profile: true,
                 pressure: true,
                 app_index: true,
             },
@@ -492,7 +507,7 @@ mod tests {
         let db = CategoryDatabase::default();
         let public =
             read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
-        assert!(public.usage.is_none());
+        assert!(public.profile.is_none());
     }
 
     #[test]
@@ -528,13 +543,17 @@ mod tests {
             Path::new(&profile),
             &ProfileStatusFile {
                 schema_version: 1,
+                current_class: "game".to_string(),
+                privilege: "root".to_string(),
+                selected_profile: SelectedProfile {
+                    preload: true,
+                    priority: ProfilePriority::Performance,
+                },
                 foreground_switch_count: 7,
                 top_apps: vec![ProfileAppStat {
                     package: "com.example.game".to_string(),
                     total_secs: 99,
                 }],
-                current_class: "game".to_string(),
-                recommendation: "performance".to_string(),
             },
         );
         write_json(
@@ -572,6 +591,7 @@ mod tests {
         let (core, profile, preload, app_index) = test_paths("flags");
         let mut core_status = core_status();
         core_status.features.usage = false;
+        core_status.features.profile = false;
         core_status.features.preload = false;
         core_status.features.app_index = false;
         write_json(Path::new(&core), &core_status);
@@ -580,7 +600,11 @@ mod tests {
             &ProfileStatusFile {
                 schema_version: 1,
                 current_class: "social".to_string(),
-                recommendation: "balanced".to_string(),
+                privilege: "shell".to_string(),
+                selected_profile: SelectedProfile {
+                    preload: true,
+                    priority: ProfilePriority::Balanced,
+                },
                 ..Default::default()
             },
         );
@@ -605,9 +629,10 @@ mod tests {
         let public =
             read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
         assert!(!public.features.usage);
+        assert!(!public.features.profile);
         assert!(!public.features.preload);
         assert!(!public.features.app_index);
-        assert!(public.usage.is_none());
+        assert!(public.profile.is_none());
         assert!(public.preload.is_none());
         assert!(public.app_index.is_none());
     }
@@ -640,9 +665,9 @@ mod tests {
         fs::write(
             &core,
             r#"{
-  "daemon": {"alive": true, "started_ms": 1},
+  "daemon": {"alive": true, "started_ms": 1, "privilege": "root"},
   "foreground": {"package": "com.example.game", "pid": 1234, "session_started_ms": 11},
-  "features": {"preload": true, "profile": true, "pressure": true, "app_index": true},
+  "features": {"preload": true, "profile": true, "usage": true, "pressure": true, "app_index": true},
   "pressure": {"supported": true, "cpu_avg10": 1.0, "memory_avg10": 0.0, "io_avg10": 0.0, "last_refresh_ms": 20}
 }"#,
         )
@@ -650,10 +675,11 @@ mod tests {
         fs::write(
             &profile,
             r#"{
+  "privilege": "root",
+  "selected_profile": {"preload": true, "priority": "performance"},
   "foreground_switch_count": 7,
   "top_apps": [],
-  "current_class": "game",
-  "recommendation": "performance"
+  "current_class": "game"
 }"#,
         )
         .unwrap();

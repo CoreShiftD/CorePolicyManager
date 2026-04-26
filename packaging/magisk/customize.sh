@@ -62,5 +62,9 @@ install_json_if_missing \
     "$MODPATH/foreground_blacklist.json" \
     "/data/local/tmp/coreshift/foreground_blacklist.json" \
     "foreground_blacklist.json"
+install_json_if_missing \
+    "$MODPATH/profile_rules.json" \
+    "/data/local/tmp/coreshift/profile_rules.json" \
+    "profile_rules.json"
 
 ui_print "- Installation complete!"

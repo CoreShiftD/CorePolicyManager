@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CATEGORIES_FILE: &str = "/data/local/tmp/coreshift/profiles_category.json";
+pub const PROFILE_RULES_FILE: &str = "/data/local/tmp/coreshift/profile_rules.json";
 
 pub(crate) fn categories_file_path() -> PathBuf {
     if let Some(path) = std::env::var_os("COREPOLICY_TEST_CATEGORIES_FILE") {
@@ -15,7 +16,15 @@ pub(crate) fn categories_file_path() -> PathBuf {
     PathBuf::from(CATEGORIES_FILE)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) fn profile_rules_file_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("COREPOLICY_TEST_PROFILE_RULES_FILE") {
+        return PathBuf::from(path);
+    }
+
+    PathBuf::from(PROFILE_RULES_FILE)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileClass {
     Game,
@@ -29,37 +38,180 @@ pub enum ProfileClass {
 
 impl fmt::Display for ProfileClass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            ProfileClass::Game => "game",
-            ProfileClass::Social => "social",
-            ProfileClass::Tool => "tool",
-            ProfileClass::Launcher => "launcher",
-            ProfileClass::Keyboard => "keyboard",
-            ProfileClass::System => "system",
-            ProfileClass::Unknown => "unknown",
+        let value = match self {
+            Self::Game => "game",
+            Self::Social => "social",
+            Self::Tool => "tool",
+            Self::Launcher => "launcher",
+            Self::Keyboard => "keyboard",
+            Self::System => "system",
+            Self::Unknown => "unknown",
         };
-        write!(f, "{}", s)
+        write!(f, "{}", value)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivilegeMode {
+    Root,
+    Shell,
+    #[default]
+    Unknown,
+}
+
+impl fmt::Display for PrivilegeMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Root => "root",
+            Self::Shell => "shell",
+            Self::Unknown => "unknown",
+        };
+        write!(f, "{}", value)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfilePriority {
+    Performance,
+    Balanced,
+    #[default]
+    Neutral,
+}
+
+impl fmt::Display for ProfilePriority {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Performance => "performance",
+            Self::Balanced => "balanced",
+            Self::Neutral => "neutral",
+        };
+        write!(f, "{}", value)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRuleAction {
+    pub preload: bool,
+    pub priority: ProfilePriority,
+    pub commands: Vec<String>,
+}
+
+impl Default for ProfileRuleAction {
+    fn default() -> Self {
+        Self {
+            preload: false,
+            priority: ProfilePriority::Neutral,
+            commands: Vec::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct SelectedProfile {
+    pub preload: bool,
+    pub priority: ProfilePriority,
+}
+
+impl SelectedProfile {
+    pub fn neutral() -> Self {
+        Self::default()
+    }
+}
+
+impl From<&ProfileRuleAction> for SelectedProfile {
+    fn from(value: &ProfileRuleAction) -> Self {
+        Self {
+            preload: value.preload,
+            priority: value.priority.clone(),
+        }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProfileRecommendation {
-    Performance,
-    Balanced,
-    Conservative,
-    Neutral,
+pub struct ProfileRulesFile {
+    pub schema_version: u32,
+    pub rules: HashMap<String, HashMap<String, ProfileRuleAction>>,
 }
 
-impl fmt::Display for ProfileRecommendation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            ProfileRecommendation::Performance => "performance",
-            ProfileRecommendation::Balanced => "balanced",
-            ProfileRecommendation::Conservative => "conservative",
-            ProfileRecommendation::Neutral => "neutral",
-        };
-        write!(f, "{}", s)
+impl Default for ProfileRulesFile {
+    fn default() -> Self {
+        let mut rules = HashMap::new();
+        rules.insert(
+            "game".to_string(),
+            HashMap::from([
+                (
+                    "root".to_string(),
+                    ProfileRuleAction {
+                        preload: true,
+                        priority: ProfilePriority::Performance,
+                        commands: Vec::new(),
+                    },
+                ),
+                (
+                    "shell".to_string(),
+                    ProfileRuleAction {
+                        preload: true,
+                        priority: ProfilePriority::Balanced,
+                        commands: Vec::new(),
+                    },
+                ),
+            ]),
+        );
+        rules.insert(
+            "social".to_string(),
+            HashMap::from([
+                (
+                    "root".to_string(),
+                    ProfileRuleAction {
+                        preload: true,
+                        priority: ProfilePriority::Balanced,
+                        commands: Vec::new(),
+                    },
+                ),
+                (
+                    "shell".to_string(),
+                    ProfileRuleAction {
+                        preload: true,
+                        priority: ProfilePriority::Balanced,
+                        commands: Vec::new(),
+                    },
+                ),
+            ]),
+        );
+        rules.insert(
+            "tool".to_string(),
+            HashMap::from([
+                ("root".to_string(), ProfileRuleAction::default()),
+                ("shell".to_string(), ProfileRuleAction::default()),
+            ]),
+        );
+
+        Self {
+            schema_version: 1,
+            rules,
+        }
+    }
+}
+
+impl ProfileRulesFile {
+    pub fn load() -> Self {
+        if let Ok(content) = fs::read_to_string(profile_rules_file_path()) {
+            serde_json::from_str(&content).unwrap_or_else(|_| Self::default())
+        } else {
+            Self::default()
+        }
+    }
+
+    pub fn resolve(&self, class: &ProfileClass, privilege: &PrivilegeMode) -> SelectedProfile {
+        let class_key = class.to_string();
+        let privilege_key = privilege.to_string();
+        self.rules
+            .get(&class_key)
+            .and_then(|rules| rules.get(&privilege_key))
+            .map(SelectedProfile::from)
+            .unwrap_or_else(SelectedProfile::neutral)
     }
 }
 
@@ -81,7 +233,6 @@ impl ProfileFeature {
             return;
         }
 
-        // Close previous session
         if let (Some(pkg), Some(session_started_ms)) = (prev_pkg, prev_session_started_ms) {
             let elapsed = now_ms.saturating_sub(session_started_ms) / 1000;
             *self.top_apps.entry(pkg.to_string()).or_insert(0) += elapsed;
@@ -91,32 +242,21 @@ impl ProfileFeature {
             self.foreground_switch_count += 1;
         }
 
-        // Enforce max 64 apps
         if self.top_apps.len() > 64
             && let Some(min_key) = self
                 .top_apps
                 .iter()
-                .min_by_key(|&(_, v)| v)
-                .map(|(k, _)| k.clone())
+                .min_by_key(|&(_, value)| value)
+                .map(|(key, _)| key.clone())
         {
             self.top_apps.remove(&min_key);
         }
     }
 
     pub fn snapshot_top_apps(&self) -> Vec<(String, u64)> {
-        let top_apps = self.top_apps.clone();
-        let mut sorted_apps: Vec<_> = top_apps.into_iter().collect();
+        let mut sorted_apps: Vec<_> = self.top_apps.clone().into_iter().collect();
         sorted_apps.sort_by_key(|&(_, total)| std::cmp::Reverse(total));
         sorted_apps
-    }
-
-    pub fn get_recommendation(class: &ProfileClass) -> ProfileRecommendation {
-        match class {
-            ProfileClass::Game => ProfileRecommendation::Performance,
-            ProfileClass::Social | ProfileClass::Tool => ProfileRecommendation::Balanced,
-            ProfileClass::Launcher | ProfileClass::Keyboard => ProfileRecommendation::Conservative,
-            ProfileClass::System | ProfileClass::Unknown => ProfileRecommendation::Neutral,
-        }
     }
 }
 
@@ -130,9 +270,9 @@ pub struct CategoryDatabase {
 impl CategoryDatabase {
     pub fn load() -> Self {
         if let Ok(content) = fs::read_to_string(categories_file_path()) {
-            serde_json::from_str(&content).unwrap_or_else(|_| CategoryDatabase::default())
+            serde_json::from_str(&content).unwrap_or_else(|_| Self::default())
         } else {
-            CategoryDatabase::default()
+            Self::default()
         }
     }
 
@@ -161,7 +301,7 @@ impl CategoryDatabase {
 
     pub fn classify(&self, pkg: &str) -> ProfileClass {
         for (cat, pkgs) in &self.categories {
-            if pkgs.iter().any(|p| p == pkg) {
+            if pkgs.iter().any(|entry| entry == pkg) {
                 return match cat.as_str() {
                     "game" => ProfileClass::Game,
                     "social" => ProfileClass::Social,
@@ -181,7 +321,7 @@ impl CategoryDatabase {
             return false;
         }
         for pkgs in self.categories.values_mut() {
-            pkgs.retain(|p| p != pkg);
+            pkgs.retain(|entry| entry != pkg);
         }
         self.categories
             .entry(cat.to_string())
@@ -194,7 +334,7 @@ impl CategoryDatabase {
 
     pub fn remove(&mut self, pkg: &str) {
         for pkgs in self.categories.values_mut() {
-            pkgs.retain(|p| p != pkg);
+            pkgs.retain(|entry| entry != pkg);
         }
     }
 }

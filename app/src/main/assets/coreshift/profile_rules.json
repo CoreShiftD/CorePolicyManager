@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "game": {
+      "root": {
+        "preload": true,
+        "priority": "performance",
+        "commands": []
+      },
+      "shell": {
+        "preload": true,
+        "priority": "balanced",
+        "commands": []
+      }
+    },
+    "social": {
+      "root": {
+        "preload": true,
+        "priority": "balanced",
+        "commands": []
+      },
+      "shell": {
+        "preload": true,
+        "priority": "balanced",
+        "commands": []
+      }
+    },
+    "tool": {
+      "root": {
+        "preload": false,
+        "priority": "neutral",
+        "commands": []
+      },
+      "shell": {
+        "preload": false,
+        "priority": "neutral",
+        "commands": []
+      }
+    }
+  }
+}
