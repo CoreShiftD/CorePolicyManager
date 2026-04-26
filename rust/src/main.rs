@@ -18,30 +18,39 @@ struct StartConfig {
     requested: BTreeSet<CliFeature>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Command {
+    ShowHelp,
+    Start(StartConfig),
+    Status,
+    Profile(Vec<String>),
+    Unknown(String),
+}
+
+fn render_help() -> &'static str {
+    "CoreShift Policy CLI
+
+Usage:
+  corepolicy help
+  corepolicy status
+  corepolicy start [--all] [-f FEATURE...]
+  corepolicy stop
+  corepolicy restart
+  corepolicy profile ...
+
+Features:
+  preload
+  usage
+  pressure
+  app_index
+
+Compatibility:
+  -p FEATURE      Deprecated alias for -f FEATURE
+  profile         Deprecated alias for usage"
+}
+
 fn print_help() {
-    println!("CoreShift Policy");
-    println!("Usage: corepolicy [start] [flags] [command]");
-    println!();
-    println!("Start Flags:");
-    println!("  -f, --feature FEATURE   Enable preview feature selection");
-    println!("  -p FEATURE             Deprecated alias for -f FEATURE");
-    println!("  --all                  Enable all preview features");
-    println!("  -h, --help             Show this help");
-    println!();
-    println!("Feature Names:");
-    println!("  preload");
-    println!("  usage");
-    println!("  pressure");
-    println!("  app_index");
-    println!();
-    println!("Compatibility:");
-    println!("  profile                Deprecated alias for usage");
-    println!();
-    println!("Commands:");
-    println!("  start          Start the daemon");
-    println!("  status         Show current daemon status (from status.json)");
-    println!("  profile ...    Manage app profile categories");
-    println!("  help           Show this help");
+    println!("{}", render_help());
 }
 
 fn parse_feature_name(value: &str) -> Result<CliFeature, String> {
@@ -132,6 +141,34 @@ fn start_daemon(config: StartConfig) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn parse_cli_args<I>(args: I) -> Result<Command, ExitCode>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut args = args.into_iter();
+    let first_arg = args.next();
+
+    match first_arg.as_deref() {
+        None => Ok(Command::ShowHelp),
+        Some("start") => match parse_start_args(args) {
+            Ok(config) => Ok(Command::Start(config)),
+            Err(code) => Err(code),
+        },
+        Some("-f" | "--feature" | "-p" | "--all") => {
+            let mut forwarded = vec![first_arg.unwrap_or_default()];
+            forwarded.extend(args);
+            match parse_start_args(forwarded) {
+                Ok(config) => Ok(Command::Start(config)),
+                Err(code) => Err(code),
+            }
+        }
+        Some("status") => Ok(Command::Status),
+        Some("profile") => Ok(Command::Profile(args.collect())),
+        Some("help" | "--help" | "-h") => Ok(Command::ShowHelp),
+        Some(cmd) => Ok(Command::Unknown(cmd.to_string())),
+    }
+}
+
 fn handle_profile_cmd<I>(mut args: I) -> ExitCode
 where
     I: Iterator<Item = String>,
@@ -219,28 +256,14 @@ where
 }
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let first_arg = args.next();
-
-    match first_arg.as_deref() {
-        None => start_daemon(StartConfig {
-            preload_only: false,
-            used_deprecated_p: false,
-            requested: BTreeSet::new(),
-        }),
-        Some("start") => match parse_start_args(args) {
-            Ok(config) => start_daemon(config),
-            Err(code) => code,
-        },
-        Some("-f" | "--feature" | "-p" | "--all") => {
-            let mut forwarded = vec![first_arg.unwrap_or_default()];
-            forwarded.extend(args);
-            match parse_start_args(forwarded) {
-                Ok(config) => start_daemon(config),
-                Err(code) => code,
-            }
+    match parse_cli_args(std::env::args().skip(1)) {
+        Err(code) => code,
+        Ok(Command::ShowHelp) => {
+            print_help();
+            ExitCode::SUCCESS
         }
-        Some("status") => {
+        Ok(Command::Start(config)) => start_daemon(config),
+        Ok(Command::Status) => {
             let db = CategoryDatabase::load();
             match status::read_public_status(&db) {
                 Some(public) => {
@@ -253,12 +276,8 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some("profile") => handle_profile_cmd(args),
-        Some("help" | "--help" | "-h") => {
-            print_help();
-            ExitCode::SUCCESS
-        }
-        Some(cmd) => {
+        Ok(Command::Profile(args)) => handle_profile_cmd(args.into_iter()),
+        Ok(Command::Unknown(cmd)) => {
             eprintln!("error: unknown argument '{}'", cmd);
             print_help();
             ExitCode::from(2)
@@ -286,6 +305,40 @@ mod tests {
         let config = parse_start_args(vec!["-f".to_string(), "preload".to_string()]).unwrap();
         assert!(config.preload_only);
         assert!(config.requested.contains(&CliFeature::Preload));
+    }
+
+    #[test]
+    fn no_arg_invocation_shows_help() {
+        assert_eq!(
+            parse_cli_args(Vec::<String>::new()).unwrap(),
+            Command::ShowHelp
+        );
+        assert_eq!(render_help(), render_help());
+    }
+
+    #[test]
+    fn help_command_shows_same_help() {
+        assert_eq!(
+            parse_cli_args(vec!["help".to_string()]).unwrap(),
+            Command::ShowHelp
+        );
+        assert_eq!(render_help(), render_help());
+    }
+
+    #[test]
+    fn unknown_command_exits_nonzero() {
+        match parse_cli_args(vec!["bogus".to_string()]).unwrap() {
+            Command::Unknown(cmd) => assert_eq!(cmd, "bogus"),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_arg_invocation_has_no_side_effects() {
+        assert_eq!(
+            parse_cli_args(Vec::<String>::new()).unwrap(),
+            Command::ShowHelp
+        );
     }
 
     #[test]
