@@ -129,7 +129,7 @@ impl Daemon {
         let app_index = AppIndexFeature::new(true, crate::features::preload::RuntimeAbi::current());
         status.features = FeatureFlags {
             preload: preload_enabled,
-            profile: profile_enabled,
+            usage: profile_enabled,
             pressure: true,
             app_index: app_index.enabled(),
         };
@@ -220,7 +220,7 @@ impl Daemon {
     }
 
     fn write_status_files_if_needed(&mut self, force: bool) {
-        if self.status.features.profile && self.category_db.refresh_if_changed() {
+        if self.status.features.usage && self.category_db.refresh_if_changed() {
             self.profile_dirty = true;
         }
 
@@ -243,7 +243,7 @@ impl Daemon {
             }
         }
 
-        if self.status.features.profile && (force || self.profile_dirty) {
+        if self.status.features.usage && (force || self.profile_dirty) {
             let class = self
                 .category_db
                 .classify(self.status.foreground.package.as_deref());
@@ -346,10 +346,10 @@ impl Daemon {
 
         if self.status.foreground != previous_foreground {
             self.status_dirty = true;
-            self.profile_dirty = self.status.features.profile;
+            self.profile_dirty = self.status.features.usage;
         }
 
-        if self.status.features.profile {
+        if self.status.features.usage {
             self.profile.on_foreground_changed(
                 prev_package.as_deref(),
                 snapshot.package.as_deref(),
@@ -456,7 +456,7 @@ mod tests {
         );
         assert_eq!(daemon.status.foreground.pid, Some(1234));
         assert!(daemon.status.foreground.session_started_ms.is_some());
-        assert!(daemon.status.features.profile);
+        assert!(daemon.status.features.usage);
         assert!(daemon.status_dirty);
         assert!(daemon.profile_dirty);
     }

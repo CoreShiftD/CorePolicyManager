@@ -1,19 +1,135 @@
 use coreshift_policy::features::profile::CategoryDatabase;
 use coreshift_policy::runtime::{daemon::Daemon, logging, signals, status};
+use std::collections::BTreeSet;
 use std::process::ExitCode;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CliFeature {
+    Preload,
+    Usage,
+    Pressure,
+    AppIndex,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartConfig {
+    preload_only: bool,
+    used_deprecated_p: bool,
+    requested: BTreeSet<CliFeature>,
+}
 
 fn print_help() {
     println!("CoreShift Policy");
-    println!("Usage: corepolicy [flags] [command]");
+    println!("Usage: corepolicy [start] [flags] [command]");
     println!();
-    println!("Flags:");
-    println!("  -p             Preload-only daemon mode");
-    println!("  -h, --help     Show this help");
+    println!("Start Flags:");
+    println!("  -f, --feature FEATURE   Enable preview feature selection");
+    println!("  -p FEATURE             Deprecated alias for -f FEATURE");
+    println!("  --all                  Enable all preview features");
+    println!("  -h, --help             Show this help");
+    println!();
+    println!("Feature Names:");
+    println!("  preload");
+    println!("  usage");
+    println!("  pressure");
+    println!("  app_index");
+    println!();
+    println!("Compatibility:");
+    println!("  profile                Deprecated alias for usage");
     println!();
     println!("Commands:");
+    println!("  start          Start the daemon");
     println!("  status         Show current daemon status (from status.json)");
     println!("  profile ...    Manage app profile categories");
     println!("  help           Show this help");
+}
+
+fn parse_feature_name(value: &str) -> Result<CliFeature, String> {
+    match value {
+        "preload" => Ok(CliFeature::Preload),
+        "usage" | "profile" => Ok(CliFeature::Usage),
+        "pressure" => Ok(CliFeature::Pressure),
+        "app_index" => Ok(CliFeature::AppIndex),
+        _ => Err(format!("error: unknown feature '{}'", value)),
+    }
+}
+
+fn parse_start_args<I>(args: I) -> Result<StartConfig, ExitCode>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut used_deprecated_p = false;
+    let mut requested = BTreeSet::new();
+    let mut explicit = false;
+    let mut args = args.into_iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-f" | "--feature" => {
+                let Some(value) = args.next() else {
+                    eprintln!("Usage: corepolicy start -f <feature> [--feature <feature> ...]");
+                    return Err(ExitCode::from(2));
+                };
+                let Ok(feature) = parse_feature_name(&value) else {
+                    eprintln!("error: unknown feature '{}'", value);
+                    return Err(ExitCode::from(2));
+                };
+                requested.insert(feature);
+                explicit = true;
+            }
+            "-p" => {
+                let Some(value) = args.next() else {
+                    eprintln!("Usage: corepolicy start -p <feature>");
+                    return Err(ExitCode::from(2));
+                };
+                let Ok(feature) = parse_feature_name(&value) else {
+                    eprintln!("error: unknown feature '{}'", value);
+                    return Err(ExitCode::from(2));
+                };
+                requested.insert(feature);
+                explicit = true;
+                used_deprecated_p = true;
+            }
+            "--all" => {
+                requested.insert(CliFeature::Preload);
+                requested.insert(CliFeature::Usage);
+                requested.insert(CliFeature::Pressure);
+                requested.insert(CliFeature::AppIndex);
+                explicit = true;
+            }
+            "-h" | "--help" => {
+                print_help();
+                return Err(ExitCode::SUCCESS);
+            }
+            value => {
+                eprintln!("error: unknown start argument '{}'", value);
+                return Err(ExitCode::from(2));
+            }
+        }
+    }
+
+    let preload_only = explicit
+        && requested.contains(&CliFeature::Preload)
+        && !requested.contains(&CliFeature::Usage)
+        && !requested.contains(&CliFeature::Pressure)
+        && !requested.contains(&CliFeature::AppIndex);
+
+    Ok(StartConfig {
+        preload_only,
+        used_deprecated_p,
+        requested,
+    })
+}
+
+fn start_daemon(config: StartConfig) -> ExitCode {
+    if config.used_deprecated_p {
+        eprintln!("warning: '-p FEATURE' is deprecated; use '-f FEATURE' or '--feature FEATURE'");
+    }
+    logging::init();
+    signals::setup();
+    let mut daemon = Daemon::new(config.preload_only);
+    daemon.run();
+    ExitCode::SUCCESS
 }
 
 fn handle_profile_cmd<I>(mut args: I) -> ExitCode
@@ -107,19 +223,22 @@ fn main() -> ExitCode {
     let first_arg = args.next();
 
     match first_arg.as_deref() {
-        None => {
-            logging::init();
-            signals::setup();
-            let mut daemon = Daemon::new(false);
-            daemon.run();
-            ExitCode::SUCCESS
-        }
-        Some("-p") => {
-            logging::init();
-            signals::setup();
-            let mut daemon = Daemon::new(true);
-            daemon.run();
-            ExitCode::SUCCESS
+        None => start_daemon(StartConfig {
+            preload_only: false,
+            used_deprecated_p: false,
+            requested: BTreeSet::new(),
+        }),
+        Some("start") => match parse_start_args(args) {
+            Ok(config) => start_daemon(config),
+            Err(code) => code,
+        },
+        Some("-f" | "--feature" | "-p" | "--all") => {
+            let mut forwarded = vec![first_arg.unwrap_or_default()];
+            forwarded.extend(args);
+            match parse_start_args(forwarded) {
+                Ok(config) => start_daemon(config),
+                Err(code) => code,
+            }
         }
         Some("status") => {
             let db = CategoryDatabase::load();
@@ -160,6 +279,44 @@ mod tests {
         unsafe {
             std::env::remove_var("COREPOLICY_TEST_CATEGORIES_FILE");
         }
+    }
+
+    #[test]
+    fn short_feature_flag_works() {
+        let config = parse_start_args(vec!["-f".to_string(), "preload".to_string()]).unwrap();
+        assert!(config.preload_only);
+        assert!(config.requested.contains(&CliFeature::Preload));
+    }
+
+    #[test]
+    fn long_feature_flag_works() {
+        let config = parse_start_args(vec!["--feature".to_string(), "usage".to_string()]).unwrap();
+        assert!(!config.preload_only);
+        assert!(config.requested.contains(&CliFeature::Usage));
+    }
+
+    #[test]
+    fn deprecated_p_still_works() {
+        let config = parse_start_args(vec!["-p".to_string(), "preload".to_string()]).unwrap();
+        assert!(config.preload_only);
+        assert!(config.used_deprecated_p);
+    }
+
+    #[test]
+    fn profile_alias_maps_to_usage() {
+        let config = parse_start_args(vec!["-f".to_string(), "profile".to_string()]).unwrap();
+        assert!(config.requested.contains(&CliFeature::Usage));
+        assert!(!config.preload_only);
+    }
+
+    #[test]
+    fn all_flag_works() {
+        let config = parse_start_args(vec!["--all".to_string()]).unwrap();
+        assert!(!config.preload_only);
+        assert!(config.requested.contains(&CliFeature::Preload));
+        assert!(config.requested.contains(&CliFeature::Usage));
+        assert!(config.requested.contains(&CliFeature::Pressure));
+        assert!(config.requested.contains(&CliFeature::AppIndex));
     }
 
     #[test]

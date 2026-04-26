@@ -51,7 +51,8 @@ pub struct ForegroundInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct FeatureFlags {
     pub preload: bool,
-    pub profile: bool,
+    #[serde(alias = "profile")]
+    pub usage: bool,
     pub pressure: bool,
     pub app_index: bool,
 }
@@ -124,7 +125,7 @@ pub struct PublicStatus {
     pub features: FeatureFlags,
     pub pressure: PublicPressure,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<PublicProfile>,
+    pub usage: Option<PublicProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preload: Option<PublicPreload>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,7 +371,7 @@ pub fn read_public_status_from_paths(
             memory_avg10: core.pressure.memory_avg10,
             io_avg10: core.pressure.io_avg10,
         },
-        profile: if core.features.profile {
+        usage: if core.features.usage {
             profile.map(|profile| PublicProfile {
                 class: profile.current_class,
                 recommendation: profile.recommendation,
@@ -457,7 +458,7 @@ mod tests {
             },
             features: FeatureFlags {
                 preload: true,
-                profile: true,
+                usage: true,
                 pressure: true,
                 app_index: true,
             },
@@ -491,7 +492,7 @@ mod tests {
         let db = CategoryDatabase::default();
         let public =
             read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
-        assert!(public.profile.is_none());
+        assert!(public.usage.is_none());
     }
 
     #[test]
@@ -570,7 +571,7 @@ mod tests {
     fn feature_flags_only_sourced_from_status_json() {
         let (core, profile, preload, app_index) = test_paths("flags");
         let mut core_status = core_status();
-        core_status.features.profile = false;
+        core_status.features.usage = false;
         core_status.features.preload = false;
         core_status.features.app_index = false;
         write_json(Path::new(&core), &core_status);
@@ -603,10 +604,10 @@ mod tests {
         let db = CategoryDatabase::default();
         let public =
             read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
-        assert!(!public.features.profile);
+        assert!(!public.features.usage);
         assert!(!public.features.preload);
         assert!(!public.features.app_index);
-        assert!(public.profile.is_none());
+        assert!(public.usage.is_none());
         assert!(public.preload.is_none());
         assert!(public.app_index.is_none());
     }
