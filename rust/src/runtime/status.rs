@@ -1,13 +1,21 @@
 use crate::features::profile::{
     CategoryDatabase, PrivilegeMode, ProfileFeature, ProfilePriority, SelectedProfile,
 };
-use crate::paths::{APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE};
+use crate::features::tweaks::{TweakStatus, TWEAK_STATUS_FILE};
+use crate::paths::{
+    APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE,
+};
+use crate::runtime::daemon::{Daemon, DaemonConfig};
 use crate::runtime::foreground::ForegroundSnapshot;
+use crate::runtime::logging;
 use crate::runtime::pressure::PressureMetrics;
+use crate::runtime::signals;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn schema_version_1() -> u32 {
@@ -116,6 +124,8 @@ pub struct AppIndexStatusFile {
     pub last_error: Option<String>,
 }
 
+// --- Status Types for Public API ---
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct PublicStatus {
     pub alive: bool,
@@ -135,6 +145,8 @@ pub struct PublicStatus {
     pub preload: Option<PublicPreload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_index: Option<PublicAppIndex>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tweak: Option<TweakStatus>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -342,6 +354,7 @@ pub fn read_public_status(db: &CategoryDatabase) -> Option<PublicStatus> {
         PROFILE_STATUS_FILE,
         PRELOAD_STATUS_FILE,
         APP_INDEX_STATUS_FILE,
+        TWEAK_STATUS_FILE,
         db,
     )
 }
@@ -351,12 +364,14 @@ pub fn read_public_status_from_paths(
     profile_path: &str,
     preload_path: &str,
     app_index_path: &str,
+    tweak_path: &str,
     _db: &CategoryDatabase,
 ) -> Option<PublicStatus> {
     let core: DaemonStatus = read_json_file(core_path)?;
     let profile: Option<ProfileStatusFile> = read_json_file(profile_path);
     let preload: Option<PreloadStatusFile> = read_json_file(preload_path);
     let app_index: Option<AppIndexStatusFile> = read_json_file(app_index_path);
+    let tweak: Option<TweakStatus> = read_json_file(tweak_path);
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -411,6 +426,7 @@ pub fn read_public_status_from_paths(
         } else {
             None
         },
+        tweak,
     })
 }
 
@@ -426,6 +442,92 @@ fn read_json_file<T: DeserializeOwned>(path: &str) -> Option<T> {
     serde_json::from_str(&content).ok()
 }
 
+// --- CLI Command Implementations ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Feature {
+    Preload,
+    Usage,
+    Pressure,
+    AppIndex,
+    Profile,
+}
+
+pub const ALL_FEATURES: [Feature; 5] = [
+    Feature::Preload,
+    Feature::Usage,
+    Feature::Pressure,
+    Feature::AppIndex,
+    Feature::Profile,
+];
+
+pub fn start_daemon(features: BTreeSet<Feature>) -> ExitCode {
+    if features.is_empty() {
+        eprintln!("error: at least one feature must be specified to start the daemon.");
+        // Can't call print_help() from here easily, main will do it.
+        return ExitCode::from(2);
+    }
+    logging::init();
+    signals::setup();
+    let config = DaemonConfig {
+        preload: features.contains(&Feature::Preload),
+        usage: features.contains(&Feature::Usage),
+        pressure: features.contains(&Feature::Pressure),
+        app_index: features.contains(&Feature::AppIndex),
+        profile: features.contains(&Feature::Profile),
+    };
+    let mut daemon = Daemon::new(config);
+    daemon.run();
+    ExitCode::SUCCESS
+}
+
+pub fn run_status_cli() -> ExitCode {
+    let db = CategoryDatabase::load();
+    match read_public_status(&db) {
+        Some(public) => {
+            println!("{}", serde_json::to_string_pretty(&public).unwrap());
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("error: could not read status.json (daemon not running?)");
+            ExitCode::from(1)
+        }
+    }
+}
+
+pub fn run_category_list_cli() -> ExitCode {
+    let db = CategoryDatabase::load();
+    println!("{}", serde_json::to_string_pretty(&db).unwrap());
+    ExitCode::SUCCESS
+}
+
+pub fn run_category_set_cli(package: &str, category: &str) -> ExitCode {
+    if !CategoryDatabase::is_supported_category(category) {
+        eprintln!("error: unsupported category '{}'.", category);
+        eprintln!("Available categories: game, social, tool, launcher, keyboard, system");
+        return ExitCode::from(2);
+    }
+    let mut db = CategoryDatabase::load();
+    db.add(category, package);
+    if let Err(e) = db.save() {
+        eprintln!("error: failed to save category database: {}", e);
+        return ExitCode::from(1);
+    }
+    println!("'{}' set to category '{}'.", package, category);
+    ExitCode::SUCCESS
+}
+
+pub fn run_category_remove_cli(package: &str) -> ExitCode {
+    let mut db = CategoryDatabase::load();
+    db.remove(package);
+    if let Err(e) = db.save() {
+        eprintln!("error: failed to save category database: {}", e);
+        return ExitCode::from(1);
+    }
+    println!("'{}' removed from all categories.", package);
+    ExitCode::SUCCESS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,7 +536,7 @@ mod tests {
         fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
     }
 
-    fn test_paths(name: &str) -> (String, String, String, String) {
+    fn test_paths(name: &str) -> (String, String, String, String, String) {
         let root = std::env::temp_dir().join(format!(
             "coreshift_status_test_{}_{}",
             name,
@@ -453,10 +555,11 @@ mod tests {
             root.join("app_index_status.json")
                 .to_string_lossy()
                 .into_owned(),
+            root.join("tweak_status.json").to_string_lossy().into_owned(),
         )
     }
 
-    fn core_status() -> DaemonStatus {
+    fn core_status_default() -> DaemonStatus {
         DaemonStatus {
             schema_version: 1,
             daemon: DaemonInfo {
@@ -489,53 +592,74 @@ mod tests {
 
     #[test]
     fn cli_computes_uptime_and_session() {
-        let (core, profile, preload, app_index) = test_paths("uptime");
-        write_json(Path::new(&core), &core_status());
+        let (core, profile, preload, app_index, tweak) = test_paths("uptime");
+        write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         assert!(public.uptime_secs > 0);
         assert!(public.session_secs > 0);
     }
 
     #[test]
     fn missing_profile_file_degrades_gracefully() {
-        let (core, profile, preload, app_index) = test_paths("missing_profile");
-        write_json(Path::new(&core), &core_status());
+        let (core, profile, preload, app_index, tweak) = test_paths("missing_profile");
+        write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         assert!(public.profile.is_none());
     }
 
     #[test]
     fn missing_preload_file_degrades_gracefully() {
-        let (core, profile, preload, app_index) = test_paths("missing_preload");
-        write_json(Path::new(&core), &core_status());
+        let (core, profile, preload, app_index, tweak) = test_paths("missing_preload");
+        write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         assert!(public.preload.is_none());
     }
 
     #[test]
     fn missing_index_file_degrades_gracefully() {
-        let (core, profile, preload, app_index) = test_paths("missing_index");
-        write_json(Path::new(&core), &core_status());
+        let (core, profile, preload, app_index, tweak) = test_paths("missing_index");
+        write_json(Path::new(&core), &core_status_default());
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         assert!(public.app_index.is_none());
     }
 
     #[test]
+    fn missing_tweak_file_degrades_gracefully() {
+        let (core, profile, preload, app_index, tweak) = test_paths("missing_tweak");
+        write_json(Path::new(&core), &core_status_default());
+
+        let db = CategoryDatabase::default();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
+        assert!(public.tweak.is_none());
+    }
+
+    #[test]
     fn no_duplicated_fields_in_merged_output() {
-        let (core, profile, preload, app_index) = test_paths("dedupe");
-        write_json(Path::new(&core), &core_status());
+        let (core, profile, preload, app_index, tweak) = test_paths("dedupe");
+        write_json(Path::new(&core), &core_status_default());
 
         let mut db = CategoryDatabase::default();
         assert!(db.add("game", "com.example.game"));
@@ -575,21 +699,40 @@ mod tests {
                 ..Default::default()
             },
         );
+        write_json(
+            Path::new(&tweak),
+            &TweakStatus {
+                schema_version: 1,
+                last_profile: "balance".to_string(),
+                last_applied_ms: 100,
+                summary: crate::features::tweaks::TweakApplySummary {
+                    profile_name: "balance".to_string(),
+                    attempted_writes: 5,
+                    successful_writes: 3,
+                    skipped_writes: 1,
+                    failed_writes: 1,
+                    first_error: Some("test error".to_string()),
+                },
+            },
+        );
 
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         let json = serde_json::to_value(public).unwrap();
         let object = json.as_object().unwrap();
         assert!(!object.contains_key("started_ms"));
         assert!(!object.contains_key("session_started_ms"));
         assert!(!object.contains_key("enabled"));
         assert!(object.contains_key("features"));
+        assert!(object.contains_key("tweak"));
     }
 
     #[test]
     fn feature_flags_only_sourced_from_status_json() {
-        let (core, profile, preload, app_index) = test_paths("flags");
-        let mut core_status = core_status();
+        let (core, profile, preload, app_index, tweak) = test_paths("flags");
+        let mut core_status = core_status_default();
         core_status.features.usage = false;
         core_status.features.profile = false;
         core_status.features.preload = false;
@@ -624,10 +767,21 @@ mod tests {
                 ..Default::default()
             },
         );
+        write_json(
+            Path::new(&tweak),
+            &TweakStatus {
+                schema_version: 1,
+                last_profile: "performance".to_string(),
+                last_applied_ms: 200,
+                summary: crate::features::tweaks::TweakApplySummary::default(),
+            },
+        );
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         assert!(!public.features.usage);
         assert!(!public.features.profile);
         assert!(!public.features.preload);
@@ -635,18 +789,21 @@ mod tests {
         assert!(public.profile.is_none());
         assert!(public.preload.is_none());
         assert!(public.app_index.is_none());
+        assert!(public.tweak.is_some());
     }
 
     #[test]
     fn device_uptime_omitted_cleanly_when_unavailable() {
-        let (core, profile, preload, app_index) = test_paths("device_uptime");
-        let mut core_status = core_status();
+        let (core, profile, preload, app_index, tweak) = test_paths("device_uptime");
+        let mut core_status = core_status_default();
         core_status.daemon.device_uptime_secs = None;
         write_json(Path::new(&core), &core_status);
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         let json = serde_json::to_value(public).unwrap();
         assert!(json.get("device_uptime_secs").is_none());
     }
@@ -661,7 +818,7 @@ mod tests {
 
     #[test]
     fn old_files_without_schema_version_still_parse() {
-        let (core, profile, preload, app_index) = test_paths("old_schema");
+        let (core, profile, preload, app_index, tweak) = test_paths("old_schema");
         fs::write(
             &core,
             r#"{
@@ -712,19 +869,33 @@ mod tests {
 }"#,
         )
         .unwrap();
+        fs::write(
+            &tweak,
+            r#"{
+  "schema_version": 1,
+  "last_profile": "power",
+  "last_applied_ms": 300,
+  "summary": {"profile_name": "power", "attempted_writes": 1, "successful_writes": 1, "skipped_writes": 0, "failed_writes": 0, "first_error": null}
+}"#,
+        )
+        .unwrap();
 
         let db = CategoryDatabase::default();
-        let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let public = read_public_status_from_paths(
+            &core, &profile, &preload, &app_index, &tweak, &db,
+        )
+        .unwrap();
         assert!(public.alive);
 
         let core_raw: DaemonStatus = read_json_file(&core).unwrap();
         let profile_raw: ProfileStatusFile = read_json_file(&profile).unwrap();
         let preload_raw: PreloadStatusFile = read_json_file(&preload).unwrap();
         let app_index_raw: AppIndexStatusFile = read_json_file(&app_index).unwrap();
+        let tweak_raw: TweakStatus = read_json_file(&tweak).unwrap();
         assert_eq!(core_raw.schema_version, 1);
         assert_eq!(profile_raw.schema_version, 1);
         assert_eq!(preload_raw.schema_version, 1);
         assert_eq!(app_index_raw.schema_version, 1);
+        assert_eq!(tweak_raw.schema_version, 1);
     }
 }

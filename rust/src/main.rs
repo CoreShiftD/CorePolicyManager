@@ -1,27 +1,7 @@
-use coreshift_policy::features::profile::CategoryDatabase;
-use coreshift_policy::runtime::{
-    daemon::{Daemon, DaemonConfig},
-    logging, signals, status,
-};
+use coreshift_policy::features::tweaks::{self, TweakProfile};
+use coreshift_policy::runtime::status::{self, Feature, ALL_FEATURES};
 use std::collections::BTreeSet;
 use std::process::ExitCode;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Feature {
-    Preload,
-    Usage,
-    Pressure,
-    AppIndex,
-    Profile,
-}
-
-const ALL_FEATURES: [Feature; 5] = [
-    Feature::Preload,
-    Feature::Usage,
-    Feature::Pressure,
-    Feature::AppIndex,
-    Feature::Profile,
-];
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -31,6 +11,9 @@ enum Command {
     CategoryList,
     CategorySet(String, String),
     CategoryRemove(String),
+    TweakApply(TweakProfile),
+    TweakShowCache,
+    TweakClearCache,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,9 +38,10 @@ Usage:
   corepolicy [ -f <feature> | --feature <feature> ... | -f --all | --feature --all ]
   corepolicy status
   corepolicy category <subcommand>
+  corepolicy tweak <subcommand>
   corepolicy help
 
-Arguments:
+Feature Flags:
   -f, --feature <feature>   Enable a specific feature. Can be repeated.
   -f, --feature --all       Enable all available features. This overrides any
                             other features specified.
@@ -67,16 +51,11 @@ Commands:
   category list             List all packages and their assigned categories.
   category set <pkg> <cat>  Assign a package to a profile category.
   category remove <pkg>     Remove a package from all profile categories.
+  tweak apply <profile>     Apply a system-wide tweak profile (balance, performance, power).
+  tweak cache               Show the discovered system values in the tweak cache.
+  tweak cache clear         Clear the tweak cache.
   help, -h, --help          Print this help message.
-
-If invoked with feature flags, the daemon will start.
-If invoked with no arguments, this help message is printed.
-
-Available features:
-  preload, usage, pressure, app_index, profile
-
-Available categories:
-  game, social, tool, launcher, keyboard, system"
+"
     );
 }
 
@@ -85,8 +64,12 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
         return Ok(Command::ShowHelp);
     }
 
-    if !args.is_empty() && args[0] == "category" {
-        return parse_category_args(&args[1..]);
+    if !args.is_empty() {
+        match args[0].as_str() {
+            "category" => return parse_category_args(&args[1..]),
+            "tweak" => return parse_tweak_args(&args[1..]),
+            _ => {}
+        }
     }
 
     if args.len() == 1 {
@@ -97,6 +80,7 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
         }
     }
 
+    // Fallback to feature parsing
     let mut features = BTreeSet::new();
     let mut all_requested = false;
     let mut iter = args.iter().peekable();
@@ -114,17 +98,6 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
                 let feature = parse_feature_name(value)?;
                 features.insert(feature);
             }
-            "--all" => {
-                return Err(CliError(
-                    "'--all' can only be used after '-f' or '--feature'".to_string(),
-                ));
-            }
-            "help" | "-h" | "--help" => {
-                return Err(CliError(format!(
-                    "unexpected help command '{}' in this position",
-                    arg
-                )));
-            }
             other => {
                 return Err(CliError(format!("unknown argument '{}'", other)));
             }
@@ -134,14 +107,9 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
     if all_requested {
         return Ok(Command::StartDaemon(ALL_FEATURES.iter().copied().collect()));
     }
-
     if features.is_empty() {
-        if !args.is_empty() {
-            return Err(CliError("no features specified".to_string()));
-        }
-        return Ok(Command::ShowHelp);
+        return Err(CliError("no features specified or unknown command".to_string()));
     }
-
     Ok(Command::StartDaemon(features))
 }
 
@@ -153,99 +121,40 @@ fn parse_category_args(args: &[String]) -> Result<Command, CliError> {
     match subcommand.as_str() {
         "list" => Ok(Command::CategoryList),
         "set" => {
-            let Some(package) = args.get(1) else {
-                return Err(CliError(
-                    "missing package name for 'category set'".to_string(),
-                ));
-            };
-            let Some(category) = args.get(2) else {
-                return Err(CliError(
-                    "missing category name for 'category set'".to_string(),
-                ));
-            };
-            Ok(Command::CategorySet(package.clone(), category.clone()))
+            let pkg = args.get(1).ok_or(CliError("missing package name".to_string()))?;
+            let cat = args.get(2).ok_or(CliError("missing category name".to_string()))?;
+            Ok(Command::CategorySet(pkg.clone(), cat.clone()))
         }
         "remove" => {
-            let Some(package) = args.get(1) else {
-                return Err(CliError(
-                    "missing package name for 'category remove'".to_string(),
-                ));
-            };
-            Ok(Command::CategoryRemove(package.clone()))
+            let pkg = args.get(1).ok_or(CliError("missing package name".to_string()))?;
+            Ok(Command::CategoryRemove(pkg.clone()))
         }
-        _ => Err(CliError(format!(
-            "unknown category subcommand '{}'",
-            subcommand
-        ))),
+        _ => Err(CliError(format!("unknown category subcommand '{}'", subcommand))),
     }
 }
 
-fn start_daemon(features: BTreeSet<Feature>) -> ExitCode {
-    if features.is_empty() {
-        eprintln!("error: at least one feature must be specified to start the daemon.");
-        print_help();
-        return ExitCode::from(2);
-    }
-    logging::init();
-    signals::setup();
-    let config = DaemonConfig {
-        preload: features.contains(&Feature::Preload),
-        usage: features.contains(&Feature::Usage),
-        pressure: features.contains(&Feature::Pressure),
-        app_index: features.contains(&Feature::AppIndex),
-        profile: features.contains(&Feature::Profile),
+fn parse_tweak_args(args: &[String]) -> Result<Command, CliError> {
+    let Some(subcommand) = args.first() else {
+        return Err(CliError("missing tweak subcommand".to_string()));
     };
-    let mut daemon = Daemon::new(config);
-    daemon.run();
-    ExitCode::SUCCESS
-}
 
-fn run_status() -> ExitCode {
-    let db = CategoryDatabase::default();
-    match status::read_public_status(&db) {
-        Some(public) => {
-            println!("{}", serde_json::to_string_pretty(&public).unwrap());
-            ExitCode::SUCCESS
+    match subcommand.as_str() {
+        "apply" => {
+            let profile_name = args.get(1).ok_or(CliError("missing profile name".to_string()))?;
+            let profile = profile_name.parse::<TweakProfile>().map_err(|e| CliError(e.to_string()))?;
+            Ok(Command::TweakApply(profile))
         }
-        None => {
-            eprintln!("error: could not read status.json (daemon not running?)");
-            ExitCode::from(1)
+        "cache" => {
+            if args.get(1).map(|s| s.as_str()) == Some("clear") {
+                Ok(Command::TweakClearCache)
+            } else {
+                Ok(Command::TweakShowCache)
+            }
         }
+        _ => Err(CliError(format!("unknown tweak subcommand '{}'", subcommand))),
     }
 }
 
-fn run_category_list() -> ExitCode {
-    let db = CategoryDatabase::load();
-    println!("{}", serde_json::to_string_pretty(&db).unwrap());
-    ExitCode::SUCCESS
-}
-
-fn run_category_set(package: &str, category: &str) -> ExitCode {
-    if !CategoryDatabase::is_supported_category(category) {
-        eprintln!("error: unsupported category '{}'.", category);
-        eprintln!("Available categories: game, social, tool, launcher, keyboard, system");
-        return ExitCode::from(2);
-    }
-    let mut db = CategoryDatabase::load();
-    db.add(category, package);
-    if let Err(e) = db.save() {
-        eprintln!("error: failed to save category database: {}", e);
-        return ExitCode::from(1);
-    }
-    println!("'{}' set to category '{}'.", package, category);
-    ExitCode::SUCCESS
-}
-
-fn run_category_remove(package: &str) -> ExitCode {
-    let mut db = CategoryDatabase::load();
-    db.remove(package);
-    if let Err(e) = db.save() {
-        eprintln!("error: failed to save category database: {}", e);
-        return ExitCode::from(1);
-    }
-    println!("'{}' removed from all categories.", package);
-    ExitCode::SUCCESS
-}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -254,11 +163,29 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Command::RunStatus) => run_status(),
-        Ok(Command::StartDaemon(features)) => start_daemon(features),
-        Ok(Command::CategoryList) => run_category_list(),
-        Ok(Command::CategorySet(pkg, cat)) => run_category_set(&pkg, &cat),
-        Ok(Command::CategoryRemove(pkg)) => run_category_remove(&pkg),
+        Ok(Command::RunStatus) => status::run_status_cli(),
+        Ok(Command::StartDaemon(features)) => status::start_daemon(features),
+        Ok(Command::CategoryList) => status::run_category_list_cli(),
+        Ok(Command::CategorySet(pkg, cat)) => status::run_category_set_cli(&pkg, &cat),
+        Ok(Command::CategoryRemove(pkg)) => status::run_category_remove_cli(&pkg),
+        Ok(Command::TweakApply(profile)) => {
+            let summary = tweaks::apply_tweak_profile(profile);
+            println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+            if summary.failed_writes > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+        }
+        Ok(Command::TweakShowCache) => {
+            let cache = tweaks::TweakCache::load();
+            println!("{}", serde_json::to_string_pretty(&cache).unwrap());
+            ExitCode::SUCCESS
+        }
+        Ok(Command::TweakClearCache) => {
+            if let Err(e) = tweaks::TweakCache::clear() {
+                eprintln!("error: failed to clear tweak cache: {}", e);
+                return ExitCode::from(1);
+            }
+            println!("Tweak cache cleared.");
+            ExitCode::SUCCESS
+        }
         Err(CliError(msg)) => {
             eprintln!("error: {}", msg);
             print_help();
@@ -270,6 +197,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use coreshift_policy::runtime::status;
 
     fn to_str_vec(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
@@ -284,6 +212,7 @@ mod tests {
     fn test_help_variants() {
         assert_eq!(parse_args(&to_str_vec(&["help"])), Ok(Command::ShowHelp));
         assert_eq!(parse_args(&to_str_vec(&["-h"])), Ok(Command::ShowHelp));
+        assert_eq!(parse_args(&to_str_vec(&["--help"])), Ok(Command::ShowHelp));
     }
 
     #[test]
@@ -341,16 +270,47 @@ mod tests {
 
     #[test]
     fn test_feature_flags_still_work() {
-        let expected = Command::StartDaemon([Feature::Profile].iter().cloned().collect());
+        let expected = Command::StartDaemon(
+            [status::Feature::Profile].iter().cloned().collect(),
+        );
         assert_eq!(parse_args(&to_str_vec(&["-f", "profile"])), Ok(expected));
     }
 
     #[test]
     fn test_all_override_still_works() {
-        let expected = Command::StartDaemon(ALL_FEATURES.iter().cloned().collect());
+        let expected = Command::StartDaemon(status::ALL_FEATURES.iter().cloned().collect());
         assert_eq!(
             parse_args(&to_str_vec(&["-f", "preload", "--feature", "--all"])),
             Ok(expected)
         );
+    }
+
+    #[test]
+    fn test_tweak_apply_parsing() {
+        assert_eq!(
+            parse_args(&to_str_vec(&["tweak", "apply", "performance"])),
+            Ok(Command::TweakApply(TweakProfile::Performance))
+        );
+    }
+
+    #[test]
+    fn test_tweak_cache_parsing() {
+        assert_eq!(parse_args(&to_str_vec(&["tweak", "cache"])), Ok(Command::TweakShowCache));
+    }
+
+    #[test]
+    fn test_tweak_cache_clear_parsing() {
+        assert_eq!(parse_args(&to_str_vec(&["tweak", "cache", "clear"])), Ok(Command::TweakClearCache));
+    }
+
+    #[test]
+    fn test_err_tweak_invalid_profile() {
+        assert!(parse_args(&to_str_vec(&["tweak", "apply", "bogus"])).is_err());
+    }
+
+    #[test]
+    fn test_err_tweak_missing_args() {
+        assert!(parse_args(&to_str_vec(&["tweak", "apply"])).is_err());
+        assert!(parse_args(&to_str_vec(&["tweak"])).is_err());
     }
 }
