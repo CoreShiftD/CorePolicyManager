@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "updated_ms": 1777150000000,
+  "packages": [
+    "com.android.inputmethod.latin",
+    "com.android.launcher3",
+    "com.android.systemui",
+    "com.google.android.gms",
+    "com.google.android.googlequicksearchbox"
+  ]
+}

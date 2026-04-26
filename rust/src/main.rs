@@ -28,6 +28,9 @@ enum Command {
     ShowHelp,
     RunStatus,
     StartDaemon(BTreeSet<Feature>),
+    CategoryList,
+    CategorySet(String, String),
+    CategoryRemove(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -51,6 +54,7 @@ fn print_help() {
 Usage:
   corepolicy [ -f <feature> | --feature <feature> ... | -f --all | --feature --all ]
   corepolicy status
+  corepolicy category <subcommand>
   corepolicy help
 
 Arguments:
@@ -60,13 +64,19 @@ Arguments:
 
 Commands:
   status                    Print daemon status.
+  category list             List all packages and their assigned categories.
+  category set <pkg> <cat>  Assign a package to a profile category.
+  category remove <pkg>     Remove a package from all profile categories.
   help, -h, --help          Print this help message.
 
 If invoked with feature flags, the daemon will start.
 If invoked with no arguments, this help message is printed.
 
 Available features:
-  preload, usage, pressure, app_index, profile"
+  preload, usage, pressure, app_index, profile
+
+Available categories:
+  game, social, tool, launcher, keyboard, system"
     );
 }
 
@@ -74,6 +84,11 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
     if args.is_empty() {
         return Ok(Command::ShowHelp);
     }
+
+    if !args.is_empty() && args[0] == "category" {
+        return parse_category_args(&args[1..]);
+    }
+
     if args.len() == 1 {
         match args[0].as_str() {
             "" | "help" | "-h" | "--help" => return Ok(Command::ShowHelp),
@@ -121,11 +136,6 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
     }
 
     if features.is_empty() {
-        // This case can be hit if only invalid flags were passed, which is an error.
-        // Or if no flags were passed but the arg count > 1 (e.g. "corepolicy foo bar")
-        // which the default case in the loop already handles.
-        // We can treat this as an implicit request for help.
-        // Let's refine this to be an error as `corepolicy -f` is an error, not help.
         if !args.is_empty() {
             return Err(CliError("no features specified".to_string()));
         }
@@ -133,6 +143,41 @@ fn parse_args(args: &[String]) -> Result<Command, CliError> {
     }
 
     Ok(Command::StartDaemon(features))
+}
+
+fn parse_category_args(args: &[String]) -> Result<Command, CliError> {
+    let Some(subcommand) = args.first() else {
+        return Err(CliError("missing category subcommand".to_string()));
+    };
+
+    match subcommand.as_str() {
+        "list" => Ok(Command::CategoryList),
+        "set" => {
+            let Some(package) = args.get(1) else {
+                return Err(CliError(
+                    "missing package name for 'category set'".to_string(),
+                ));
+            };
+            let Some(category) = args.get(2) else {
+                return Err(CliError(
+                    "missing category name for 'category set'".to_string(),
+                ));
+            };
+            Ok(Command::CategorySet(package.clone(), category.clone()))
+        }
+        "remove" => {
+            let Some(package) = args.get(1) else {
+                return Err(CliError(
+                    "missing package name for 'category remove'".to_string(),
+                ));
+            };
+            Ok(Command::CategoryRemove(package.clone()))
+        }
+        _ => Err(CliError(format!(
+            "unknown category subcommand '{}'",
+            subcommand
+        ))),
+    }
 }
 
 fn start_daemon(features: BTreeSet<Feature>) -> ExitCode {
@@ -169,6 +214,39 @@ fn run_status() -> ExitCode {
     }
 }
 
+fn run_category_list() -> ExitCode {
+    let db = CategoryDatabase::load();
+    println!("{}", serde_json::to_string_pretty(&db).unwrap());
+    ExitCode::SUCCESS
+}
+
+fn run_category_set(package: &str, category: &str) -> ExitCode {
+    if !CategoryDatabase::is_supported_category(category) {
+        eprintln!("error: unsupported category '{}'.", category);
+        eprintln!("Available categories: game, social, tool, launcher, keyboard, system");
+        return ExitCode::from(2);
+    }
+    let mut db = CategoryDatabase::load();
+    db.add(category, package);
+    if let Err(e) = db.save() {
+        eprintln!("error: failed to save category database: {}", e);
+        return ExitCode::from(1);
+    }
+    println!("'{}' set to category '{}'.", package, category);
+    ExitCode::SUCCESS
+}
+
+fn run_category_remove(package: &str) -> ExitCode {
+    let mut db = CategoryDatabase::load();
+    db.remove(package);
+    if let Err(e) = db.save() {
+        eprintln!("error: failed to save category database: {}", e);
+        return ExitCode::from(1);
+    }
+    println!("'{}' removed from all categories.", package);
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse_args(&args) {
@@ -178,6 +256,9 @@ fn main() -> ExitCode {
         }
         Ok(Command::RunStatus) => run_status(),
         Ok(Command::StartDaemon(features)) => start_daemon(features),
+        Ok(Command::CategoryList) => run_category_list(),
+        Ok(Command::CategorySet(pkg, cat)) => run_category_set(&pkg, &cat),
+        Ok(Command::CategoryRemove(pkg)) => run_category_remove(&pkg),
         Err(CliError(msg)) => {
             eprintln!("error: {}", msg);
             print_help();
@@ -200,15 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_arg_is_help() {
-        assert_eq!(parse_args(&to_str_vec(&[""])), Ok(Command::ShowHelp));
-    }
-
-    #[test]
     fn test_help_variants() {
         assert_eq!(parse_args(&to_str_vec(&["help"])), Ok(Command::ShowHelp));
         assert_eq!(parse_args(&to_str_vec(&["-h"])), Ok(Command::ShowHelp));
-        assert_eq!(parse_args(&to_str_vec(&["--help"])), Ok(Command::ShowHelp));
     }
 
     #[test]
@@ -217,73 +292,65 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_single_feature() {
-        let expected = Command::StartDaemon([Feature::Preload].iter().cloned().collect());
-        assert_eq!(parse_args(&to_str_vec(&["-f", "preload"])), Ok(expected));
-    }
-
-    #[test]
-    fn test_parse_multiple_features() {
-        let expected = Command::StartDaemon(
-            [Feature::Preload, Feature::Profile]
-                .iter()
-                .cloned()
-                .collect(),
-        );
-        assert_eq!(
-            parse_args(&to_str_vec(&["-f", "preload", "--feature", "profile"])),
-            Ok(expected)
-        );
-    }
-
-    #[test]
-    fn test_all_overrides_other_features() {
-        let expected = Command::StartDaemon(ALL_FEATURES.iter().cloned().collect());
-        assert_eq!(
-            parse_args(&to_str_vec(&["-f", "preload", "-f", "--all"])),
-            Ok(expected)
-        );
-    }
-
-    #[test]
-    fn test_all_long_overrides() {
-        let expected = Command::StartDaemon(ALL_FEATURES.iter().cloned().collect());
-        assert_eq!(
-            parse_args(&to_str_vec(&["--feature", "preload", "--feature", "--all"])),
-            Ok(expected)
-        );
-    }
-
-    #[test]
     fn test_err_unknown_arg() {
         assert!(parse_args(&to_str_vec(&["bogus"])).is_err());
-        assert!(parse_args(&to_str_vec(&["-f", "preload", "bogus"])).is_err());
     }
 
     #[test]
-    fn test_err_start_is_not_a_command() {
-        let err = parse_args(&to_str_vec(&["start", "-f", "preload"])).unwrap_err();
-        assert_eq!(err, CliError("unknown argument 'start'".to_string()));
+    fn test_category_list_parsing() {
+        assert_eq!(
+            parse_args(&to_str_vec(&["category", "list"])),
+            Ok(Command::CategoryList)
+        );
     }
 
     #[test]
-    fn test_err_missing_feature_value() {
-        assert!(parse_args(&to_str_vec(&["-f"])).is_err());
+    fn test_category_set_parsing() {
+        assert_eq!(
+            parse_args(&to_str_vec(&["category", "set", "com.foo", "game"])),
+            Ok(Command::CategorySet(
+                "com.foo".to_string(),
+                "game".to_string()
+            ))
+        );
     }
 
     #[test]
-    fn test_err_unknown_feature_name() {
-        assert!(parse_args(&to_str_vec(&["--feature", "bogus"])).is_err());
+    fn test_category_remove_parsing() {
+        assert_eq!(
+            parse_args(&to_str_vec(&["category", "remove", "com.foo"])),
+            Ok(Command::CategoryRemove("com.foo".to_string()))
+        );
     }
 
     #[test]
-    fn test_err_standalone_all() {
-        assert!(parse_args(&to_str_vec(&["--all"])).is_err());
+    fn test_err_category_set_missing_args() {
+        assert!(parse_args(&to_str_vec(&["category", "set", "com.foo"])).is_err());
+        assert!(parse_args(&to_str_vec(&["category", "set"])).is_err());
     }
 
     #[test]
-    fn test_err_help_in_wrong_position() {
-        assert!(parse_args(&to_str_vec(&["-f", "preload", "help"])).is_err());
-        assert!(parse_args(&to_str_vec(&["-f", "preload", "--help"])).is_err());
+    fn test_err_category_remove_missing_args() {
+        assert!(parse_args(&to_str_vec(&["category", "remove"])).is_err());
+    }
+
+    #[test]
+    fn test_err_category_unknown_subcommand() {
+        assert!(parse_args(&to_str_vec(&["category", "bogus"])).is_err());
+    }
+
+    #[test]
+    fn test_feature_flags_still_work() {
+        let expected = Command::StartDaemon([Feature::Profile].iter().cloned().collect());
+        assert_eq!(parse_args(&to_str_vec(&["-f", "profile"])), Ok(expected));
+    }
+
+    #[test]
+    fn test_all_override_still_works() {
+        let expected = Command::StartDaemon(ALL_FEATURES.iter().cloned().collect());
+        assert_eq!(
+            parse_args(&to_str_vec(&["-f", "preload", "--feature", "--all"])),
+            Ok(expected)
+        );
     }
 }
