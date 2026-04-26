@@ -585,14 +585,13 @@ mod tests {
     #[test]
     fn foreground_event_updates_inline_features_without_extra_worker_logic() {
         let mut daemon = Daemon::new(DaemonConfig::default());
-        let before = daemon.app_index.name();
+
         daemon.process_foreground_snapshot(ForegroundSnapshot {
             pid: Some(1234),
             package: Some("com.example.app".to_string()),
             last_skip_reason: None,
         });
 
-        assert_eq!(before, "app_index");
         assert_eq!(
             daemon.status.foreground.package.as_deref(),
             Some("com.example.app")

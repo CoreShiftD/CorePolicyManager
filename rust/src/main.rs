@@ -49,7 +49,7 @@ fn print_help() {
         "CoreShift Policy Daemon CLI
 
 Usage:
-  corepolicy [ -f <feature> | --feature <feature> ... | -f --all ]
+  corepolicy [ -f <feature> | --feature <feature> ... | -f --all | --feature --all ]
   corepolicy status
   corepolicy help
 

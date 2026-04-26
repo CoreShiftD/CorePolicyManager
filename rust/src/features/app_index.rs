@@ -118,10 +118,6 @@ impl AppIndexFeature {
         }
     }
 
-    pub fn name(&self) -> &'static str {
-        "app_index"
-    }
-
     pub fn enabled(&self) -> bool {
         self.enabled
     }
