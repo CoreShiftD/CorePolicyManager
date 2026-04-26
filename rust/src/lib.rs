@@ -1,5 +1,5 @@
 pub mod api;
-pub mod daemon;
+mod daemon;
 pub mod features;
-pub mod paths;
+mod paths;
 pub mod runtime;

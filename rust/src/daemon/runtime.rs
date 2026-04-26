@@ -1,3 +1,4 @@
+use crate::api::config::DaemonConfig;
 use crate::daemon::foreground::{ForegroundResolver, ForegroundSnapshot};
 use crate::features::app_index::AppIndexFeature;
 use crate::features::preload::{PreloadFeature, RuntimeAbi};
@@ -25,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const PRESSURE_REFRESH_INTERVAL_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DaemonConfig {
+pub struct CorePolicyFeatureFlags {
     pub preload: bool,
     pub usage: bool,
     pub pressure: bool,
@@ -33,7 +34,19 @@ pub struct DaemonConfig {
     pub profile: bool,
 }
 
-impl Default for DaemonConfig {
+impl CorePolicyFeatureFlags {
+    const fn disabled() -> Self {
+        Self {
+            preload: false,
+            usage: false,
+            pressure: false,
+            app_index: false,
+            profile: false,
+        }
+    }
+}
+
+impl Default for CorePolicyFeatureFlags {
     fn default() -> Self {
         Self {
             preload: true,
@@ -141,9 +154,7 @@ impl CachedProfileRules {
     }
 }
 
-use crate::api::daemon::{
-    DaemonContext, DaemonFeature, FeatureThreadContext, ThreadedFeature,
-};
+use crate::api::daemon::{DaemonContext, DaemonFeature, FeatureThreadContext, ThreadedFeature};
 use crate::api::resolver::ForegroundEvent;
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
@@ -186,21 +197,41 @@ pub struct Daemon {
 
 impl Daemon {
     pub fn new(config: DaemonConfig) -> Self {
-        Self::new_from_builder(
+        Self::new_internal(
+            CorePolicyFeatureFlags::disabled(),
             config,
             Vec::new(),
             Vec::new(),
-            std::path::PathBuf::from("/data/local/tmp/coreshift"),
-            std::time::Duration::from_millis(100),
         )
     }
 
-    pub fn new_from_builder(
+    pub(crate) fn new_from_builder(
         config: DaemonConfig,
         features: Vec<Box<dyn DaemonFeature>>,
         threaded_features: Vec<Box<dyn ThreadedFeature>>,
-        work_dir: std::path::PathBuf,
-        poll_interval: std::time::Duration,
+    ) -> Self {
+        Self::new_internal(
+            CorePolicyFeatureFlags::disabled(),
+            config,
+            features,
+            threaded_features,
+        )
+    }
+
+    pub(crate) fn new_with_corepolicy_features(feature_flags: CorePolicyFeatureFlags) -> Self {
+        Self::new_internal(
+            feature_flags,
+            DaemonConfig::default(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    fn new_internal(
+        feature_flags: CorePolicyFeatureFlags,
+        config: DaemonConfig,
+        features: Vec<Box<dyn DaemonFeature>>,
+        threaded_features: Vec<Box<dyn ThreadedFeature>>,
     ) -> Self {
         let mut reactor = Reactor::new().expect("Failed to create reactor");
         let privilege = detect_privilege_mode();
@@ -218,17 +249,17 @@ impl Daemon {
         };
 
         let mut pressure_metrics = crate::runtime::pressure::PressureMetrics::default();
-        if config.pressure {
+        if feature_flags.pressure {
             refresh_pressure_metrics(&mut pressure_metrics);
             status.pressure = PressureStatus::from_metrics(&pressure_metrics);
         }
 
-        let app_index = AppIndexFeature::new(config.app_index, RuntimeAbi::current());
+        let app_index = AppIndexFeature::new(feature_flags.app_index, RuntimeAbi::current());
         status.features = FeatureFlags {
-            preload: config.preload,
-            usage: config.usage,
-            profile: config.profile,
-            pressure: config.pressure,
+            preload: feature_flags.preload,
+            usage: feature_flags.usage,
+            profile: feature_flags.profile,
+            pressure: feature_flags.pressure,
             app_index: app_index.enabled(),
         };
 
@@ -243,7 +274,7 @@ impl Daemon {
             Ok(fd) => {
                 inotify_token = reactor.inotify_token;
                 inotify_fd = Some(fd);
-                let blacklist_path = work_dir.join("foreground_blacklist.json");
+                let blacklist_path = config.work_dir.join("foreground_blacklist.json");
                 let blacklist = if let Ok(content) = fs::read_to_string(&blacklist_path) {
                     serde_json::from_str::<serde_json::Value>(&content)
                         .map(|value| {
@@ -285,7 +316,7 @@ impl Daemon {
             }
         };
 
-        let preload = if config.preload {
+        let preload = if feature_flags.preload {
             Some(PreloadFeature::new())
         } else {
             None
@@ -302,7 +333,7 @@ impl Daemon {
             let (foreground_tx, foreground_rx) = channel();
 
             let name = feature.name();
-            let feature_work_dir = work_dir.clone();
+            let feature_work_dir = config.work_dir.clone();
 
             let handle = thread::spawn(move || {
                 let ctx = FeatureThreadContext {
@@ -334,7 +365,7 @@ impl Daemon {
             preload,
             preload_status: PreloadStatusFile::default(),
             last_written_preload_status: None,
-            preload_dirty: config.preload,
+            preload_dirty: feature_flags.preload,
             last_pressure_refresh_ms,
             app_index,
             last_tweak_signature: None,
@@ -346,8 +377,8 @@ impl Daemon {
             inotify_token,
             inotify_fd,
             cpuset_watch,
-            work_dir,
-            poll_interval,
+            work_dir: config.work_dir,
+            poll_interval: config.poll_interval,
         }
     }
 
@@ -831,7 +862,7 @@ mod tests {
 
     #[test]
     fn foreground_event_updates_inline_features_without_extra_worker_logic() {
-        let mut daemon = Daemon::new(DaemonConfig::default());
+        let mut daemon = Daemon::new_with_corepolicy_features(CorePolicyFeatureFlags::default());
 
         daemon.process_foreground_snapshot(ForegroundSnapshot {
             pid: Some(1234),
@@ -908,7 +939,7 @@ mod tests {
 
     #[test]
     fn psi_refresh_is_throttled() {
-        let mut daemon = Daemon::new(DaemonConfig::default());
+        let mut daemon = Daemon::new_with_corepolicy_features(CorePolicyFeatureFlags::default());
         daemon.last_pressure_refresh_ms = now_ms();
         assert!(!daemon.should_refresh_pressure(false, daemon.last_pressure_refresh_ms + 1_000));
         assert!(daemon.should_refresh_pressure(false, daemon.last_pressure_refresh_ms + 5_000));
@@ -940,7 +971,8 @@ mod tests {
                 unsafe {
                     std::env::set_var("COREPOLICY_TEST_UID", "0");
                 }
-                let mut daemon = Daemon::new(DaemonConfig::default());
+                let mut daemon =
+                    Daemon::new_with_corepolicy_features(CorePolicyFeatureFlags::default());
                 daemon.process_foreground_snapshot(ForegroundSnapshot {
                     pid: Some(1234),
                     package: Some("com.example.game".to_string()),
@@ -990,7 +1022,8 @@ mod tests {
                     unsafe {
                         std::env::set_var("COREPOLICY_TEST_UID", "0");
                     }
-                    let mut daemon = Daemon::new(DaemonConfig::default());
+                    let mut daemon =
+                        Daemon::new_with_corepolicy_features(CorePolicyFeatureFlags::default());
                     daemon.process_foreground_snapshot(ForegroundSnapshot {
                         pid: Some(100),
                         package: Some("com.example.game".to_string()),
@@ -1039,7 +1072,8 @@ mod tests {
                     unsafe {
                         std::env::set_var("COREPOLICY_TEST_UID", "0");
                     }
-                    let mut daemon = Daemon::new(DaemonConfig::default());
+                    let mut daemon =
+                        Daemon::new_with_corepolicy_features(CorePolicyFeatureFlags::default());
                     daemon.process_foreground_snapshot(ForegroundSnapshot {
                         pid: Some(100),
                         package: Some("com.example.game".to_string()),

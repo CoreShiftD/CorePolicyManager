@@ -1,3 +1,6 @@
+pub use crate::api::config::DaemonConfig;
+pub use crate::daemon::runtime::Daemon;
+
 use crate::api::resolver::ForegroundEvent;
 use crate::runtime::status::DaemonStatus;
 use std::path::PathBuf;
@@ -84,15 +87,11 @@ pub trait ThreadedFeature: Send + 'static {
     fn run(self: Box<Self>, ctx: FeatureThreadContext) -> Result<(), DaemonError>;
 }
 
-pub use crate::daemon::runtime::{Daemon, DaemonConfig};
-
 /// Builder for constructing a Daemon instance.
 pub struct DaemonBuilder {
     config: DaemonConfig,
     features: Vec<Box<dyn DaemonFeature>>,
     threaded_features: Vec<Box<dyn ThreadedFeature>>,
-    work_dir: PathBuf,
-    poll_interval: Duration,
 }
 
 impl DaemonBuilder {
@@ -101,8 +100,6 @@ impl DaemonBuilder {
             config: DaemonConfig::default(),
             features: Vec::new(),
             threaded_features: Vec::new(),
-            work_dir: PathBuf::from("/data/local/tmp/coreshift"),
-            poll_interval: Duration::from_millis(100),
         }
     }
 
@@ -122,23 +119,20 @@ impl DaemonBuilder {
     }
 
     pub fn with_work_dir(mut self, work_dir: PathBuf) -> Self {
-        self.work_dir = work_dir;
+        self.config.work_dir = work_dir;
         self
     }
 
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
-        self.poll_interval = interval;
+        self.config.poll_interval = interval;
         self
     }
 
     pub fn build(self) -> Result<Daemon, DaemonError> {
-        // Implementation will be moved/adapted in Daemon::new
         Ok(Daemon::new_from_builder(
             self.config,
             self.features,
             self.threaded_features,
-            self.work_dir,
-            self.poll_interval,
         ))
     }
 }

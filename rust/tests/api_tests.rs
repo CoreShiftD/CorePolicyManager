@@ -1,14 +1,23 @@
-use coreshift_policy::api::{daemon, json, resolver};
-use std::time::Duration;
+use coreshift_policy::api::{
+    DaemonBuilder, DaemonContext, DaemonError, DaemonFeature, FeatureThreadContext,
+    ThreadedFeature, json, resolver,
+};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 #[test]
 fn test_json_api() {
     let test_file = "test_api.json";
+
     #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
     struct TestData {
         name: String,
         value: i32,
     }
+
     let data = TestData {
         name: "test".to_string(),
         value: 42,
@@ -28,44 +37,61 @@ fn test_json_api() {
     std::fs::remove_file(test_file).unwrap();
 }
 
-struct TestFeature {
-    start_called: bool,
-}
+struct InlineFeature;
 
-impl daemon::DaemonFeature for TestFeature {
+impl DaemonFeature for InlineFeature {
     fn name(&self) -> &'static str {
-        "test_feature"
+        "inline_feature"
     }
-    fn on_start(&mut self, _ctx: &daemon::DaemonContext) -> Result<(), daemon::DaemonError> {
-        self.start_called = true;
+
+    fn on_start(&mut self, _ctx: &DaemonContext) -> Result<(), DaemonError> {
         Ok(())
     }
 }
 
-struct TestWorker;
-impl daemon::ThreadedFeature for TestWorker {
+struct TestWorker {
+    started: Arc<AtomicBool>,
+}
+
+impl ThreadedFeature for TestWorker {
     fn name(&self) -> &'static str {
         "test_worker"
     }
-    fn run(self: Box<Self>, ctx: daemon::FeatureThreadContext) -> Result<(), daemon::DaemonError> {
-        while !ctx.shutdown_requested() {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+
+    fn run(self: Box<Self>, _ctx: FeatureThreadContext) -> Result<(), DaemonError> {
+        self.started.store(true, Ordering::SeqCst);
         Ok(())
     }
 }
 
 #[test]
-fn test_builder_and_plugin_system() {
-    let daemon = daemon::DaemonBuilder::new()
-        .with_feature(Box::new(TestFeature {
-            start_called: false,
-        }))
-        .with_threaded_feature(Box::new(TestWorker))
+fn test_builder_registers_inline_feature() {
+    let daemon = DaemonBuilder::new()
+        .with_feature(Box::new(InlineFeature))
         .build()
         .expect("Failed to build daemon");
 
     assert!(daemon.status().daemon.alive);
+}
+
+#[test]
+fn test_builder_registers_threaded_feature() {
+    let started = Arc::new(AtomicBool::new(false));
+
+    let daemon = DaemonBuilder::new()
+        .with_threaded_feature(Box::new(TestWorker {
+            started: Arc::clone(&started),
+        }))
+        .build()
+        .expect("Failed to build daemon");
+
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline && !started.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(daemon.status().daemon.alive);
+    assert!(started.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -85,20 +111,19 @@ fn test_resolver_api() {
 #[test]
 fn test_shutdown_requested_logic() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let ctx = daemon::FeatureThreadContext {
+    let ctx = FeatureThreadContext {
         work_dir: std::path::PathBuf::from("/tmp"),
         shutdown_receiver: rx,
         foreground_receiver: std::sync::mpsc::channel().1,
     };
 
     assert!(!ctx.shutdown_requested());
-    tx.send(()).unwrap();
-    assert!(ctx.shutdown_requested()); // returns true, consumes message
 
-    // Now it should be false because message was consumed and tx is still alive
+    tx.send(()).unwrap();
+    assert!(ctx.shutdown_requested());
     assert!(!ctx.shutdown_requested());
 
-    drop(tx); // Disconnect
-    assert!(ctx.shutdown_requested()); // returns true because disconnected
-    assert!(ctx.shutdown_requested()); // still true
+    drop(tx);
+    assert!(ctx.shutdown_requested());
+    assert!(ctx.shutdown_requested());
 }

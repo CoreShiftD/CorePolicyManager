@@ -1,6 +1,6 @@
-use coreshift_policy::api::config::{DEFAULT_FEATURES as ALL_FEATURES, RuntimeFeature as Feature};
 use coreshift_policy::features::tweaks::{self as tweak_api, TweakProfile};
 use coreshift_policy::runtime::status as status_api;
+use coreshift_policy::runtime::status::{ALL_FEATURES, Feature};
 use std::collections::BTreeSet;
 use std::process::ExitCode;
 

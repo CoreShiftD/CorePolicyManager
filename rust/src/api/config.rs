@@ -1,24 +1,18 @@
-use crate::daemon::runtime::DaemonConfig;
-use crate::runtime::status::{ALL_FEATURES, Feature};
-use std::collections::BTreeSet;
+use std::path::PathBuf;
+use std::time::Duration;
 
-pub use crate::daemon::runtime::DaemonConfig as RuntimeConfig;
-pub use crate::runtime::status::{
-    ALL_FEATURES as DEFAULT_FEATURES, Feature as RuntimeFeature, FeatureFlags,
-};
-
-/// Converts a set of features into a DaemonConfig.
-pub fn daemon_config_from_features(features: &BTreeSet<Feature>) -> DaemonConfig {
-    DaemonConfig {
-        preload: features.contains(&Feature::Preload),
-        usage: features.contains(&Feature::Usage),
-        pressure: features.contains(&Feature::Pressure),
-        app_index: features.contains(&Feature::AppIndex),
-        profile: features.contains(&Feature::Profile),
-    }
+/// Framework-level configuration for a daemon instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonConfig {
+    pub work_dir: PathBuf,
+    pub poll_interval: Duration,
 }
 
-/// Returns a set containing all available features.
-pub fn all_features() -> BTreeSet<Feature> {
-    ALL_FEATURES.iter().copied().collect()
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            work_dir: PathBuf::from("/data/local/tmp/coreshift"),
+            poll_interval: Duration::from_millis(100),
+        }
+    }
 }

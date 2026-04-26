@@ -83,11 +83,6 @@ pub fn dedup_debug(key: &str, msg: &str, min_interval: Duration) {
     dedup_log(Level::Debug, key, msg, min_interval);
 }
 
-/// Log only if message with this key hasn't been logged in the last duration
-pub fn dedup_info(key: &str, msg: &str, min_interval: Duration) {
-    dedup_log(Level::Info, key, msg, min_interval);
-}
-
 fn dedup_log(level: Level, key: &str, msg: &str, min_interval: Duration) {
     if matches!(level, Level::Debug) && !debug_enabled() {
         return;

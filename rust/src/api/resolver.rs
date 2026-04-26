@@ -1,5 +1,4 @@
 pub use crate::daemon::foreground::{ForegroundResolver, ForegroundSnapshot};
-pub use crate::runtime::status::ForegroundInfo;
 
 /// Represents a change in the foreground application.
 #[derive(Debug, Clone, PartialEq, Eq)]

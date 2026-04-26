@@ -67,7 +67,7 @@ struct AppIndexInner {
     control: Mutex<WorkerControl>,
 }
 
-pub struct AppIndexFeature {
+pub(crate) struct AppIndexFeature {
     enabled: bool,
     inner: Arc<AppIndexInner>,
     command_writer: Option<UnixStream>,

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 const PRELOAD_COOLDOWN: Duration = Duration::from_secs(300); // 5 minutes
 
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
-pub enum RuntimeAbi {
+pub(crate) enum RuntimeAbi {
     #[default]
     Arm64,
     Arm32,
@@ -24,7 +24,7 @@ impl RuntimeAbi {
     }
 }
 
-pub struct PreloadFeature {
+pub(crate) struct PreloadFeature {
     cooldowns: HashMap<String, Instant>,
 }
 

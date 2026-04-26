@@ -1,8 +1,6 @@
 use crate::daemon::foreground::ForegroundSnapshot;
-use crate::daemon::runtime::{Daemon, DaemonConfig};
-use crate::features::profile::{
-    CategoryDatabase, PrivilegeMode, ProfileFeature, ProfilePriority, SelectedProfile,
-};
+use crate::daemon::runtime::{CorePolicyFeatureFlags, Daemon};
+use crate::features::profile::{CategoryDatabase, PrivilegeMode, ProfilePriority, SelectedProfile};
 use crate::features::tweaks::{TWEAK_STATUS_FILE, TweakStatus};
 use crate::paths::{APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE};
 use crate::runtime::logging;
@@ -268,33 +266,6 @@ impl PressureStatus {
 }
 
 impl ProfileStatusFile {
-    pub fn from_feature(
-        profile: &ProfileFeature,
-        current_pkg: Option<&str>,
-        db: &CategoryDatabase,
-        privilege: &PrivilegeMode,
-        selected_profile: SelectedProfile,
-    ) -> Self {
-        let class = db.classify(current_pkg.unwrap_or(""));
-        let top_apps = profile
-            .snapshot_top_apps()
-            .into_iter()
-            .map(|(package, total_secs)| ProfileAppStat {
-                package,
-                total_secs,
-            })
-            .collect();
-
-        Self {
-            schema_version: 1,
-            current_class: class.to_string(),
-            privilege: privilege.to_string(),
-            selected_profile,
-            foreground_switch_count: profile.foreground_switch_count,
-            top_apps,
-        }
-    }
-
     pub fn write_if_changed(
         &self,
         last_written: &mut Option<ProfileStatusFile>,
@@ -346,14 +317,13 @@ where
     Ok(true)
 }
 
-pub fn read_public_status(db: &CategoryDatabase) -> Option<PublicStatus> {
+pub fn read_public_status() -> Option<PublicStatus> {
     read_public_status_from_paths(
         STATUS_FILE,
         PROFILE_STATUS_FILE,
         PRELOAD_STATUS_FILE,
         APP_INDEX_STATUS_FILE,
         TWEAK_STATUS_FILE,
-        db,
     )
 }
 
@@ -363,7 +333,6 @@ pub fn read_public_status_from_paths(
     preload_path: &str,
     app_index_path: &str,
     tweak_path: &str,
-    _db: &CategoryDatabase,
 ) -> Option<PublicStatus> {
     let core: DaemonStatus = read_json_file(core_path)?;
     let profile: Option<ProfileStatusFile> = read_json_file(profile_path);
@@ -467,21 +436,20 @@ pub fn start_daemon(features: BTreeSet<Feature>) -> ExitCode {
     }
     logging::init();
     signals::setup();
-    let config = DaemonConfig {
+    let config = CorePolicyFeatureFlags {
         preload: features.contains(&Feature::Preload),
         usage: features.contains(&Feature::Usage),
         pressure: features.contains(&Feature::Pressure),
         app_index: features.contains(&Feature::AppIndex),
         profile: features.contains(&Feature::Profile),
     };
-    let mut daemon = Daemon::new(config);
+    let mut daemon = Daemon::new_with_corepolicy_features(config);
     daemon.run();
     ExitCode::SUCCESS
 }
 
 pub fn run_status_cli() -> ExitCode {
-    let db = CategoryDatabase::load();
-    match read_public_status(&db) {
+    match read_public_status() {
         Some(public) => {
             println!("{}", serde_json::to_string_pretty(&public).unwrap());
             ExitCode::SUCCESS
@@ -595,10 +563,8 @@ mod tests {
         let (core, profile, preload, app_index, tweak) = test_paths("uptime");
         write_json(Path::new(&core), &core_status_default());
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(public.uptime_secs > 0);
         assert!(public.session_secs > 0);
     }
@@ -608,10 +574,8 @@ mod tests {
         let (core, profile, preload, app_index, tweak) = test_paths("missing_profile");
         write_json(Path::new(&core), &core_status_default());
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(public.profile.is_none());
     }
 
@@ -620,10 +584,8 @@ mod tests {
         let (core, profile, preload, app_index, tweak) = test_paths("missing_preload");
         write_json(Path::new(&core), &core_status_default());
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(public.preload.is_none());
     }
 
@@ -632,10 +594,8 @@ mod tests {
         let (core, profile, preload, app_index, tweak) = test_paths("missing_index");
         write_json(Path::new(&core), &core_status_default());
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(public.app_index.is_none());
     }
 
@@ -644,10 +604,8 @@ mod tests {
         let (core, profile, preload, app_index, tweak) = test_paths("missing_tweak");
         write_json(Path::new(&core), &core_status_default());
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(public.tweak.is_none());
     }
 
@@ -717,8 +675,7 @@ mod tests {
         );
 
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         let json = serde_json::to_value(public).unwrap();
         let object = json.as_object().unwrap();
         assert!(!object.contains_key("started_ms"));
@@ -779,10 +736,8 @@ mod tests {
             },
         );
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(!public.features.usage);
         assert!(!public.features.profile);
         assert!(!public.features.preload);
@@ -800,10 +755,8 @@ mod tests {
         core_status.daemon.device_uptime_secs = None;
         write_json(Path::new(&core), &core_status);
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         let json = serde_json::to_value(public).unwrap();
         assert!(json.get("device_uptime_secs").is_none());
     }
@@ -880,10 +833,8 @@ mod tests {
         )
         .unwrap();
 
-        let db = CategoryDatabase::default();
         let public =
-            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak, &db)
-                .unwrap();
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &tweak).unwrap();
         assert!(public.alive);
 
         let core_raw: DaemonStatus = read_json_file(&core).unwrap();

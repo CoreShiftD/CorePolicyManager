@@ -224,7 +224,7 @@ impl ProfileRulesFile {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-pub struct ProfileFeature {
+pub(crate) struct ProfileFeature {
     pub foreground_switch_count: u64,
     pub top_apps: HashMap<String, u64>,
 }
