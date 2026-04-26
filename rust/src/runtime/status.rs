@@ -8,6 +8,10 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn schema_version_1() -> u32 {
+    1
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PreloadResult {
@@ -18,8 +22,10 @@ pub enum PreloadResult {
     NoCandidates,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DaemonStatus {
+    #[serde(default = "schema_version_1")]
+    pub schema_version: u32,
     pub daemon: DaemonInfo,
     pub foreground: ForegroundInfo,
     pub features: FeatureFlags,
@@ -59,8 +65,10 @@ pub struct PressureStatus {
     pub last_refresh_ms: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ProfileStatusFile {
+    #[serde(default = "schema_version_1")]
+    pub schema_version: u32,
     pub foreground_switch_count: u64,
     pub top_apps: Vec<ProfileAppStat>,
     pub current_class: String,
@@ -73,8 +81,10 @@ pub struct ProfileAppStat {
     pub total_secs: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PreloadStatusFile {
+    #[serde(default = "schema_version_1")]
+    pub schema_version: u32,
     pub last_package: Option<String>,
     pub file_count: usize,
     pub files_failed: usize,
@@ -85,8 +95,10 @@ pub struct PreloadStatusFile {
     pub result: Option<PreloadResult>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppIndexStatusFile {
+    #[serde(default = "schema_version_1")]
+    pub schema_version: u32,
     pub ready: bool,
     pub packages: usize,
     pub built_ms: u64,
@@ -147,6 +159,63 @@ pub struct PublicAppIndex {
     pub stale: bool,
 }
 
+impl Default for DaemonStatus {
+    fn default() -> Self {
+        Self {
+            schema_version: schema_version_1(),
+            daemon: DaemonInfo::default(),
+            foreground: ForegroundInfo::default(),
+            features: FeatureFlags::default(),
+            pressure: PressureStatus::default(),
+        }
+    }
+}
+
+impl Default for ProfileStatusFile {
+    fn default() -> Self {
+        Self {
+            schema_version: schema_version_1(),
+            foreground_switch_count: 0,
+            top_apps: Vec::new(),
+            current_class: String::new(),
+            recommendation: String::new(),
+        }
+    }
+}
+
+impl Default for PreloadStatusFile {
+    fn default() -> Self {
+        Self {
+            schema_version: schema_version_1(),
+            last_package: None,
+            file_count: 0,
+            files_failed: 0,
+            bytes: 0,
+            discovery_ms: 0,
+            readahead_ms: 0,
+            total_ms: 0,
+            result: None,
+        }
+    }
+}
+
+impl Default for AppIndexStatusFile {
+    fn default() -> Self {
+        Self {
+            schema_version: schema_version_1(),
+            ready: false,
+            packages: 0,
+            built_ms: 0,
+            rebuild_ms: 0,
+            duration_ms: 0,
+            stale: false,
+            rebuild_success_count: 0,
+            rebuild_fail_count: 0,
+            last_error: None,
+        }
+    }
+}
+
 impl DaemonStatus {
     pub fn apply_foreground_snapshot(&mut self, snapshot: &ForegroundSnapshot) {
         self.foreground.pid = snapshot.pid;
@@ -195,6 +264,7 @@ impl ProfileStatusFile {
             .collect();
 
         Self {
+            schema_version: 1,
             foreground_switch_count: profile.foreground_switch_count,
             top_apps,
             current_class: class.to_string(),
@@ -374,6 +444,7 @@ mod tests {
 
     fn core_status() -> DaemonStatus {
         DaemonStatus {
+            schema_version: 1,
             daemon: DaemonInfo {
                 alive: true,
                 started_ms: 1,
@@ -455,6 +526,7 @@ mod tests {
         write_json(
             Path::new(&profile),
             &ProfileStatusFile {
+                schema_version: 1,
                 foreground_switch_count: 7,
                 top_apps: vec![ProfileAppStat {
                     package: "com.example.game".to_string(),
@@ -467,6 +539,7 @@ mod tests {
         write_json(
             Path::new(&preload),
             &PreloadStatusFile {
+                schema_version: 1,
                 total_ms: 3,
                 result: Some(PreloadResult::Ok),
                 ..Default::default()
@@ -475,6 +548,7 @@ mod tests {
         write_json(
             Path::new(&app_index),
             &AppIndexStatusFile {
+                schema_version: 1,
                 ready: true,
                 packages: 10,
                 stale: false,
@@ -503,6 +577,7 @@ mod tests {
         write_json(
             Path::new(&profile),
             &ProfileStatusFile {
+                schema_version: 1,
                 current_class: "social".to_string(),
                 recommendation: "balanced".to_string(),
                 ..Default::default()
@@ -511,6 +586,7 @@ mod tests {
         write_json(
             Path::new(&preload),
             &PreloadStatusFile {
+                schema_version: 1,
                 result: Some(PreloadResult::Ok),
                 ..Default::default()
             },
@@ -518,6 +594,7 @@ mod tests {
         write_json(
             Path::new(&app_index),
             &AppIndexStatusFile {
+                schema_version: 1,
                 ready: true,
                 ..Default::default()
             },
@@ -546,5 +623,81 @@ mod tests {
             read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
         let json = serde_json::to_value(public).unwrap();
         assert!(json.get("device_uptime_secs").is_none());
+    }
+
+    #[test]
+    fn schema_version_appears_in_all_raw_status_structs() {
+        assert_eq!(DaemonStatus::default().schema_version, 1);
+        assert_eq!(ProfileStatusFile::default().schema_version, 1);
+        assert_eq!(PreloadStatusFile::default().schema_version, 1);
+        assert_eq!(AppIndexStatusFile::default().schema_version, 1);
+    }
+
+    #[test]
+    fn old_files_without_schema_version_still_parse() {
+        let (core, profile, preload, app_index) = test_paths("old_schema");
+        fs::write(
+            &core,
+            r#"{
+  "daemon": {"alive": true, "started_ms": 1},
+  "foreground": {"package": "com.example.game", "pid": 1234, "session_started_ms": 11},
+  "features": {"preload": true, "profile": true, "pressure": true, "app_index": true},
+  "pressure": {"supported": true, "cpu_avg10": 1.0, "memory_avg10": 0.0, "io_avg10": 0.0, "last_refresh_ms": 20}
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            &profile,
+            r#"{
+  "foreground_switch_count": 7,
+  "top_apps": [],
+  "current_class": "game",
+  "recommendation": "performance"
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            &preload,
+            r#"{
+  "last_package": "com.example.game",
+  "file_count": 1,
+  "files_failed": 0,
+  "bytes": 1,
+  "discovery_ms": 1,
+  "readahead_ms": 1,
+  "total_ms": 2,
+  "result": "ok"
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            &app_index,
+            r#"{
+  "ready": true,
+  "packages": 3,
+  "built_ms": 1,
+  "rebuild_ms": 2,
+  "duration_ms": 3,
+  "stale": false,
+  "rebuild_success_count": 1,
+  "rebuild_fail_count": 0,
+  "last_error": null
+}"#,
+        )
+        .unwrap();
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        assert!(public.alive);
+
+        let core_raw: DaemonStatus = read_json_file(&core).unwrap();
+        let profile_raw: ProfileStatusFile = read_json_file(&profile).unwrap();
+        let preload_raw: PreloadStatusFile = read_json_file(&preload).unwrap();
+        let app_index_raw: AppIndexStatusFile = read_json_file(&app_index).unwrap();
+        assert_eq!(core_raw.schema_version, 1);
+        assert_eq!(profile_raw.schema_version, 1);
+        assert_eq!(preload_raw.schema_version, 1);
+        assert_eq!(app_index_raw.schema_version, 1);
     }
 }

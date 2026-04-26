@@ -1,4 +1,5 @@
 use crate::features::preload::RuntimeAbi;
+use crate::runtime::logging;
 use crate::runtime::status::AppIndexStatusFile;
 use coreshift_lowlevel::inotify::{PACKAGE_FILE_MASK, add_watch, read_events};
 use coreshift_lowlevel::reactor::{Fd, Reactor};
@@ -7,7 +8,7 @@ use std::fs;
 use std::os::fd::IntoRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -99,7 +100,7 @@ impl AppIndexFeature {
             .expect("failed to set command writer nonblocking");
 
         {
-            let mut control = inner.control.lock().unwrap();
+            let mut control = lock_control(&inner, "initial request generation");
             control.requested_generation = 1;
         }
 
@@ -126,10 +127,7 @@ impl AppIndexFeature {
     }
 
     pub fn get_candidates(&self, package: &str) -> Option<Arc<[PathBuf]>> {
-        self.inner
-            .state
-            .read()
-            .unwrap()
+        lock_state_read(&self.inner, "get_candidates")
             .entries
             .get(package)
             .map(|entry| Arc::clone(&entry.candidates))
@@ -154,7 +152,7 @@ impl AppIndexFeature {
     #[cfg(test)]
     fn request_rebuild_from_root(&self, data_app: &Path) -> u64 {
         let generation = {
-            let mut control = self.inner.control.lock().unwrap();
+            let mut control = lock_control(&self.inner, "request_rebuild_from_root");
             control.requested_generation += 1;
             control.requested_generation
         };
@@ -167,7 +165,7 @@ impl AppIndexFeature {
     fn wait_for_generation(&self, generation: u64, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
-            if self.inner.control.lock().unwrap().completed_generation >= generation {
+            if lock_control(&self.inner, "wait_for_generation").completed_generation >= generation {
                 return true;
             }
             if Instant::now() >= deadline {
@@ -179,12 +177,14 @@ impl AppIndexFeature {
 
     #[cfg(test)]
     fn force_last_rebuild_ms(&self, rebuild_ms: u64) {
-        self.inner.state.write().unwrap().stats.rebuild_ms = rebuild_ms;
+        lock_state_write(&self.inner, "force_last_rebuild_ms")
+            .stats
+            .rebuild_ms = rebuild_ms;
     }
 
     #[cfg(test)]
     fn snapshot_metrics(&self) -> (u64, u64) {
-        let state = self.inner.state.read().unwrap();
+        let state = lock_state_read(&self.inner, "snapshot_metrics");
         (
             state.metrics.rebuild_success_count,
             state.metrics.rebuild_fail_count,
@@ -278,7 +278,7 @@ fn worker_loop(inner: Arc<AppIndexInner>, abi: RuntimeAbi, command_reader: UnixS
 
         if command_ready {
             drain_command_fd(&command_fd);
-            if inner.control.lock().unwrap().shutdown {
+            if lock_control(&inner, "worker shutdown check").shutdown {
                 break;
             }
         }
@@ -289,7 +289,7 @@ fn worker_loop(inner: Arc<AppIndexInner>, abi: RuntimeAbi, command_reader: UnixS
             && let Ok(inotify_events) = read_events(inotify_fd)
             && inotify_events.iter().any(|event| event.wd == package_watch)
         {
-            let mut control = inner.control.lock().unwrap();
+            let mut control = lock_control(&inner, "package watch generation bump");
             control.requested_generation += 1;
         }
     }
@@ -302,7 +302,7 @@ fn try_rebuild(
     last_written_status: &mut Option<AppIndexStatusFile>,
 ) -> bool {
     let requested_generation = {
-        let control = inner.control.lock().unwrap();
+        let control = lock_control(inner, "try_rebuild requested generation");
         if control.requested_generation <= control.completed_generation {
             return false;
         }
@@ -311,9 +311,9 @@ fn try_rebuild(
 
     let rebuild_ms = unix_time_ms();
     {
-        let mut state = inner.state.write().unwrap();
+        let mut state = lock_state_write(inner, "try_rebuild start");
         if rebuild_ms.saturating_sub(state.stats.rebuild_ms) < REBUILD_DEBOUNCE.as_millis() as u64 {
-            let mut control = inner.control.lock().unwrap();
+            let mut control = lock_control(inner, "try_rebuild debounce");
             control.completed_generation = requested_generation;
             return false;
         }
@@ -330,7 +330,7 @@ fn try_rebuild(
         Ok(entries) => {
             let status = {
                 let built_ms = unix_time_ms();
-                let mut state = inner.state.write().unwrap();
+                let mut state = lock_state_write(inner, "try_rebuild success");
                 state.entries = entries;
                 state.stats.built_ms = built_ms;
                 state.stats.duration_ms = start.elapsed().as_millis() as u64;
@@ -353,7 +353,7 @@ fn try_rebuild(
         }
     }
 
-    let mut control = inner.control.lock().unwrap();
+    let mut control = lock_control(inner, "try_rebuild completion");
     control.completed_generation = requested_generation;
     true
 }
@@ -365,7 +365,7 @@ fn update_failure_status(
     last_written_status: &mut Option<AppIndexStatusFile>,
 ) {
     let status = {
-        let mut state = inner.state.write().unwrap();
+        let mut state = lock_state_write(inner, "update_failure_status");
         state.stats.duration_ms = duration_ms;
         state.stats.ready = false;
         state.stats.stale = true;
@@ -374,6 +374,51 @@ fn update_failure_status(
         persisted_status(&state)
     };
     let _ = status.write_if_changed(last_written_status);
+}
+
+fn lock_control<'a>(inner: &'a AppIndexInner, context: &str) -> MutexGuard<'a, WorkerControl> {
+    match inner.control.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            logging::error(&format!(
+                "AppIndexFeature control lock poisoned during {}; recovering",
+                context
+            ));
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn lock_state_read<'a>(
+    inner: &'a AppIndexInner,
+    context: &str,
+) -> RwLockReadGuard<'a, AppIndexState> {
+    match inner.state.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            logging::error(&format!(
+                "AppIndexFeature state read lock poisoned during {}; recovering",
+                context
+            ));
+            poisoned.into_inner()
+        }
+    }
+}
+
+fn lock_state_write<'a>(
+    inner: &'a AppIndexInner,
+    context: &str,
+) -> RwLockWriteGuard<'a, AppIndexState> {
+    match inner.state.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            logging::error(&format!(
+                "AppIndexFeature state write lock poisoned during {}; recovering",
+                context
+            ));
+            poisoned.into_inner()
+        }
+    }
 }
 
 fn drain_command_fd(fd: &Fd) {
@@ -572,6 +617,7 @@ fn unix_time_ms() -> u64 {
 
 fn persisted_status(state: &AppIndexState) -> AppIndexStatusFile {
     AppIndexStatusFile {
+        schema_version: 1,
         ready: state.stats.ready,
         packages: state.stats.packages,
         built_ms: state.stats.built_ms,

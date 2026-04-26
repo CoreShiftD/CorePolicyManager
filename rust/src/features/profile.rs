@@ -2,10 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CATEGORIES_FILE: &str = "/data/local/tmp/coreshift/profiles_category.json";
+
+pub(crate) fn categories_file_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("COREPOLICY_TEST_CATEGORIES_FILE") {
+        return PathBuf::from(path);
+    }
+
+    PathBuf::from(CATEGORIES_FILE)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -57,7 +65,6 @@ impl fmt::Display for ProfileRecommendation {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ProfileFeature {
-    pub enabled: bool,
     pub foreground_switch_count: u64,
     pub top_apps: HashMap<String, u64>,
 }
@@ -122,7 +129,7 @@ pub struct CategoryDatabase {
 
 impl CategoryDatabase {
     pub fn load() -> Self {
-        if let Ok(content) = fs::read_to_string(CATEGORIES_FILE) {
+        if let Ok(content) = fs::read_to_string(categories_file_path()) {
             serde_json::from_str(&content).unwrap_or_else(|_| CategoryDatabase::default())
         } else {
             CategoryDatabase::default()
@@ -135,13 +142,14 @@ impl CategoryDatabase {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let path = Path::new(CATEGORIES_FILE);
+        let path_buf = categories_file_path();
+        let path = path_buf.as_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temp = format!("{}.tmp", CATEGORIES_FILE);
+        let temp = format!("{}.tmp", path.display());
         fs::write(&temp, serde_json::to_string_pretty(self)?)?;
-        fs::rename(&temp, CATEGORIES_FILE)
+        fs::rename(&temp, path)
     }
 
     pub fn is_supported_category(cat: &str) -> bool {

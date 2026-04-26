@@ -2,7 +2,7 @@ use crate::paths::{LOG_FILE, WORK_DIR};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime};
 
 static STDOUT_ENABLED: Mutex<Option<bool>> = Mutex::new(None);
@@ -14,6 +14,13 @@ pub enum Level {
     Info,
     Warn,
     Error,
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 impl Level {
@@ -33,12 +40,12 @@ pub fn init() {
         .map(|v| v == "1")
         .unwrap_or(false);
     {
-        let mut stdout = STDOUT_ENABLED.lock().unwrap();
+        let mut stdout = lock_or_recover(&STDOUT_ENABLED);
         *stdout = Some(stdout_enabled);
     }
 
     {
-        let mut debug = DEBUG_ENABLED.lock().unwrap();
+        let mut debug = lock_or_recover(&DEBUG_ENABLED);
         *debug = Some(
             std::env::var("COREPOLICY_DEBUG_LOG")
                 .map(|v| v == "1")
@@ -47,7 +54,7 @@ pub fn init() {
         );
     }
 
-    let mut last_logs = LAST_LOGS.lock().unwrap();
+    let mut last_logs = lock_or_recover(&LAST_LOGS);
     if last_logs.is_none() {
         *last_logs = Some(HashMap::new());
     }
@@ -86,7 +93,7 @@ fn dedup_log(level: Level, key: &str, msg: &str, min_interval: Duration) {
         return;
     }
 
-    let mut last_logs_guard = LAST_LOGS.lock().unwrap();
+    let mut last_logs_guard = lock_or_recover(&LAST_LOGS);
     if last_logs_guard.is_none() {
         *last_logs_guard = Some(HashMap::new());
     }
@@ -117,16 +124,16 @@ fn log_internal(level: Level, msg: &str) {
         let _ = file.write_all(line.as_bytes());
     }
 
-    let stdout_enabled = *STDOUT_ENABLED.lock().unwrap();
+    let stdout_enabled = *lock_or_recover(&STDOUT_ENABLED);
     if stdout_enabled.unwrap_or(false) {
         print!("{}", line);
     }
 }
 
 fn debug_enabled() -> bool {
-    let mut debug = DEBUG_ENABLED.lock().unwrap();
+    let mut debug = lock_or_recover(&DEBUG_ENABLED);
     if debug.is_none() {
-        let stdout_enabled = *STDOUT_ENABLED.lock().unwrap();
+        let stdout_enabled = *lock_or_recover(&STDOUT_ENABLED);
         *debug = Some(
             std::env::var("COREPOLICY_DEBUG_LOG")
                 .map(|v| v == "1")
@@ -135,4 +142,24 @@ fn debug_enabled() -> bool {
         );
     }
     debug.unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn lock_poison_recovery_does_not_panic() {
+        let mutex = Arc::new(Mutex::new(1u32));
+        let worker_mutex = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _guard = worker_mutex.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+
+        let guard = lock_or_recover(&mutex);
+        assert_eq!(*guard, 1);
+    }
 }
