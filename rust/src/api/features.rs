@@ -10,3 +10,7 @@ pub use crate::features::tweaks::{
     apply_tweak_preset, command_fingerprint, normalize_commands, parse_tweak_command_line,
     run_tweak_command_line,
 };
+pub use crate::runtime::status::{
+    AppIndexStatusFile, PreloadResult, PreloadStatusFile, PressureStatus, ProfileAppStat,
+    ProfileStatusFile, PublicAppIndex, PublicPreload, PublicPressure, PublicProfile,
+};

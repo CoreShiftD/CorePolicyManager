@@ -3,8 +3,11 @@ use crate::runtime::status::{ALL_FEATURES, Feature};
 use std::collections::BTreeSet;
 
 pub use crate::daemon::runtime::DaemonConfig as RuntimeConfig;
-pub use crate::runtime::status::{ALL_FEATURES as DEFAULT_FEATURES, Feature as RuntimeFeature};
+pub use crate::runtime::status::{
+    ALL_FEATURES as DEFAULT_FEATURES, Feature as RuntimeFeature, FeatureFlags,
+};
 
+/// Converts a set of features into a DaemonConfig.
 pub fn daemon_config_from_features(features: &BTreeSet<Feature>) -> DaemonConfig {
     DaemonConfig {
         preload: features.contains(&Feature::Preload),
@@ -15,6 +18,7 @@ pub fn daemon_config_from_features(features: &BTreeSet<Feature>) -> DaemonConfig
     }
 }
 
+/// Returns a set containing all available features.
 pub fn all_features() -> BTreeSet<Feature> {
     ALL_FEATURES.iter().copied().collect()
 }

@@ -1,8 +1,11 @@
 pub mod config;
+pub mod daemon;
 pub mod features;
-pub mod status;
+pub mod json;
+pub mod resolver;
 
-pub use crate::daemon::runtime::{Daemon, DaemonConfig};
+// Compatibility re-exports
 pub use config::{RuntimeConfig, RuntimeFeature, all_features, daemon_config_from_features};
+pub use daemon::{Daemon, DaemonConfig};
 pub use features::*;
-pub use status::*;
+pub use resolver::{ForegroundResolver, ForegroundSnapshot};
