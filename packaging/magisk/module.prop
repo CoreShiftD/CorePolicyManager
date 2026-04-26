@@ -1,6 +1,6 @@
 name=CoreShift Policy
 id=coreshift_policy
-version=v0.1.0-preview.1
+version=v0.1.0-preview.2
 versionCode=1
 author=CoreShiftD
 description=Event-driven CoreShift policy daemon preview

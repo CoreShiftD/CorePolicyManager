@@ -14,7 +14,6 @@ enum CliFeature {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StartConfig {
     preload_only: bool,
-    used_deprecated_p: bool,
     requested: BTreeSet<CliFeature>,
 }
 
@@ -34,8 +33,6 @@ Usage:
   corepolicy help
   corepolicy status
   corepolicy start [--all] [-f FEATURE...]
-  corepolicy stop
-  corepolicy restart
   corepolicy profile ...
 
 Features:
@@ -45,7 +42,6 @@ Features:
   app_index
 
 Compatibility:
-  -p FEATURE      Deprecated alias for -f FEATURE
   profile         Deprecated alias for usage"
 }
 
@@ -67,7 +63,6 @@ fn parse_start_args<I>(args: I) -> Result<StartConfig, ExitCode>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut used_deprecated_p = false;
     let mut requested = BTreeSet::new();
     let mut explicit = false;
     let mut args = args.into_iter();
@@ -87,17 +82,8 @@ where
                 explicit = true;
             }
             "-p" => {
-                let Some(value) = args.next() else {
-                    eprintln!("Usage: corepolicy start -p <feature>");
-                    return Err(ExitCode::from(2));
-                };
-                let Ok(feature) = parse_feature_name(&value) else {
-                    eprintln!("error: unknown feature '{}'", value);
-                    return Err(ExitCode::from(2));
-                };
-                requested.insert(feature);
-                explicit = true;
-                used_deprecated_p = true;
+                eprintln!("-p has been removed. Use -f or --feature.");
+                return Err(ExitCode::from(2));
             }
             "--all" => {
                 requested.insert(CliFeature::Preload);
@@ -125,15 +111,11 @@ where
 
     Ok(StartConfig {
         preload_only,
-        used_deprecated_p,
         requested,
     })
 }
 
 fn start_daemon(config: StartConfig) -> ExitCode {
-    if config.used_deprecated_p {
-        eprintln!("warning: '-p FEATURE' is deprecated; use '-f FEATURE' or '--feature FEATURE'");
-    }
     logging::init();
     signals::setup();
     let mut daemon = Daemon::new(config.preload_only);
@@ -154,13 +136,17 @@ where
             Ok(config) => Ok(Command::Start(config)),
             Err(code) => Err(code),
         },
-        Some("-f" | "--feature" | "-p" | "--all") => {
+        Some("-f" | "--feature" | "--all") => {
             let mut forwarded = vec![first_arg.unwrap_or_default()];
             forwarded.extend(args);
             match parse_start_args(forwarded) {
                 Ok(config) => Ok(Command::Start(config)),
                 Err(code) => Err(code),
             }
+        }
+        Some("-p") => {
+            eprintln!("-p has been removed. Use -f or --feature.");
+            Err(ExitCode::from(2))
         }
         Some("status") => Ok(Command::Status),
         Some("profile") => Ok(Command::Profile(args.collect())),
@@ -349,10 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_p_still_works() {
-        let config = parse_start_args(vec!["-p".to_string(), "preload".to_string()]).unwrap();
-        assert!(config.preload_only);
-        assert!(config.used_deprecated_p);
+    fn removed_p_flag_returns_nonzero() {
+        assert_eq!(
+            parse_start_args(vec!["-p".to_string(), "preload".to_string()]),
+            Err(ExitCode::from(2))
+        );
     }
 
     #[test]

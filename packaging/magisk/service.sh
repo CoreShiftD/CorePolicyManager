@@ -18,7 +18,7 @@ if [ -f "$DEBUG_FILE" ]; then
 fi
 
 # Run daemon
-${0%/*}/system/bin/corepolicy -p >> "$LOG_FILE" 2>&1
+${0%/*}/system/bin/corepolicy --all >> "$LOG_FILE" 2>&1
 
 # Log exit code
 echo "CoreShift Policy daemon exited with code $?" >> "$LOG_FILE"

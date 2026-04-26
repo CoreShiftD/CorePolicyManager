@@ -66,11 +66,11 @@ chmod 0644 "$DIST_DIR/foreground_blacklist.json"
 echo "Zipping module..."
 mkdir -p dist
 cd "$DIST_DIR"
-rm -f "../../CoreShiftPolicy-v0.1.0-preview.1.zip"
-zip -r "../../CoreShiftPolicy-v0.1.0-preview.1.zip" .
+rm -f "../../CoreShiftPolicy-v0.1.0-preview.2.zip"
+zip -r "../../CoreShiftPolicy-v0.1.0-preview.2.zip" .
 cd ../../..
 
-echo "Done: dist/CoreShiftPolicy-v0.1.0-preview.1.zip"
+echo "Done: dist/CoreShiftPolicy-v0.1.0-preview.2.zip"
 
 echo "Package contents:"
-unzip -l dist/CoreShiftPolicy-v0.1.0-preview.1.zip
+unzip -l dist/CoreShiftPolicy-v0.1.0-preview.2.zip
