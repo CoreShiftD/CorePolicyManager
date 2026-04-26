@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::process::ExitCode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum CliFeature {
+enum Feature {
     Preload,
     Usage,
     Pressure,
@@ -15,172 +15,171 @@ enum CliFeature {
     Profile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StartConfig {
-    requested: BTreeSet<CliFeature>,
-}
+const ALL_FEATURES: [Feature; 5] = [
+    Feature::Preload,
+    Feature::Usage,
+    Feature::Pressure,
+    Feature::AppIndex,
+    Feature::Profile,
+];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum Command {
     ShowHelp,
-    Start(StartConfig),
-    Status,
-    Unknown(String),
+    RunStatus,
+    StartDaemon(BTreeSet<Feature>),
 }
 
-fn render_help() -> &'static str {
-    "CoreShift Policy CLI
+#[derive(Debug, PartialEq, Eq)]
+struct CliError(String);
 
-Usage:
-  corepolicy help
-  corepolicy status
-  corepolicy start [--all] [-f FEATURE...]
-
-Features:
-  preload
-  usage
-  pressure
-  app_index
-  profile"
-}
-
-fn print_help() {
-    println!("{}", render_help());
-}
-
-fn parse_feature_name(value: &str) -> Result<CliFeature, String> {
+fn parse_feature_name(value: &str) -> Result<Feature, CliError> {
     match value {
-        "preload" => Ok(CliFeature::Preload),
-        "usage" => Ok(CliFeature::Usage),
-        "pressure" => Ok(CliFeature::Pressure),
-        "app_index" => Ok(CliFeature::AppIndex),
-        "profile" => Ok(CliFeature::Profile),
-        _ => Err(format!("error: unknown feature '{}'", value)),
+        "preload" => Ok(Feature::Preload),
+        "usage" => Ok(Feature::Usage),
+        "pressure" => Ok(Feature::Pressure),
+        "app_index" => Ok(Feature::AppIndex),
+        "profile" => Ok(Feature::Profile),
+        _ => Err(CliError(format!("unknown feature '{}'", value))),
     }
 }
 
-fn parse_start_args<I>(args: I) -> Result<StartConfig, ExitCode>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut requested = BTreeSet::new();
-    let mut explicit = false;
-    let mut args = args.into_iter();
+fn print_help() {
+    println!(
+        "CoreShift Policy Daemon CLI
 
-    while let Some(arg) = args.next() {
+Usage:
+  corepolicy [ -f <feature> | --feature <feature> ... | -f --all ]
+  corepolicy status
+  corepolicy help
+
+Arguments:
+  -f, --feature <feature>   Enable a specific feature. Can be repeated.
+  -f, --feature --all       Enable all available features. This overrides any
+                            other features specified.
+
+Commands:
+  status                    Print daemon status.
+  help, -h, --help          Print this help message.
+
+If invoked with feature flags, the daemon will start.
+If invoked with no arguments, this help message is printed.
+
+Available features:
+  preload, usage, pressure, app_index, profile"
+    );
+}
+
+fn parse_args(args: &[String]) -> Result<Command, CliError> {
+    if args.is_empty() {
+        return Ok(Command::ShowHelp);
+    }
+    if args.len() == 1 {
+        match args[0].as_str() {
+            "" | "help" | "-h" | "--help" => return Ok(Command::ShowHelp),
+            "status" => return Ok(Command::RunStatus),
+            _ => {}
+        }
+    }
+
+    let mut features = BTreeSet::new();
+    let mut all_requested = false;
+    let mut iter = args.iter().peekable();
+
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
             "-f" | "--feature" => {
-                let Some(value) = args.next() else {
-                    eprintln!("Usage: corepolicy start -f <feature> [--feature <feature> ...]");
-                    return Err(ExitCode::from(2));
+                let Some(value) = iter.next() else {
+                    return Err(CliError(format!("missing value for argument '{}'", arg)));
                 };
-                let Ok(feature) = parse_feature_name(&value) else {
-                    eprintln!("error: unknown feature '{}'", value);
-                    return Err(ExitCode::from(2));
-                };
-                requested.insert(feature);
-                explicit = true;
+                if value == "--all" {
+                    all_requested = true;
+                    continue;
+                }
+                let feature = parse_feature_name(value)?;
+                features.insert(feature);
             }
             "--all" => {
-                requested.insert(CliFeature::Preload);
-                requested.insert(CliFeature::Usage);
-                requested.insert(CliFeature::Pressure);
-                requested.insert(CliFeature::AppIndex);
-                requested.insert(CliFeature::Profile);
-                explicit = true;
+                return Err(CliError(
+                    "'--all' can only be used after '-f' or '--feature'".to_string(),
+                ));
             }
-            "-h" | "--help" => {
-                print_help();
-                return Err(ExitCode::SUCCESS);
+            "help" | "-h" | "--help" => {
+                return Err(CliError(format!(
+                    "unexpected help command '{}' in this position",
+                    arg
+                )));
             }
-            "-p" => {
-                eprintln!("-p has been removed. Use -f or --feature.");
-                return Err(ExitCode::from(2));
-            }
-            value => {
-                eprintln!("error: unknown start argument '{}'", value);
-                return Err(ExitCode::from(2));
+            other => {
+                return Err(CliError(format!("unknown argument '{}'", other)));
             }
         }
     }
 
-    if !explicit {
-        requested.insert(CliFeature::Preload);
-        requested.insert(CliFeature::Usage);
-        requested.insert(CliFeature::Pressure);
-        requested.insert(CliFeature::AppIndex);
-        requested.insert(CliFeature::Profile);
+    if all_requested {
+        return Ok(Command::StartDaemon(ALL_FEATURES.iter().copied().collect()));
     }
 
-    Ok(StartConfig { requested })
-}
-
-fn daemon_config_from_start(config: &StartConfig) -> DaemonConfig {
-    DaemonConfig {
-        preload: config.requested.contains(&CliFeature::Preload),
-        usage: config.requested.contains(&CliFeature::Usage),
-        pressure: config.requested.contains(&CliFeature::Pressure),
-        app_index: config.requested.contains(&CliFeature::AppIndex),
-        profile: config.requested.contains(&CliFeature::Profile),
+    if features.is_empty() {
+        // This case can be hit if only invalid flags were passed, which is an error.
+        // Or if no flags were passed but the arg count > 1 (e.g. "corepolicy foo bar")
+        // which the default case in the loop already handles.
+        // We can treat this as an implicit request for help.
+        // Let's refine this to be an error as `corepolicy -f` is an error, not help.
+        if !args.is_empty() {
+            return Err(CliError("no features specified".to_string()));
+        }
+        return Ok(Command::ShowHelp);
     }
+
+    Ok(Command::StartDaemon(features))
 }
 
-fn start_daemon(config: StartConfig) -> ExitCode {
+fn start_daemon(features: BTreeSet<Feature>) -> ExitCode {
+    if features.is_empty() {
+        eprintln!("error: at least one feature must be specified to start the daemon.");
+        print_help();
+        return ExitCode::from(2);
+    }
     logging::init();
     signals::setup();
-    let mut daemon = Daemon::new(daemon_config_from_start(&config));
+    let config = DaemonConfig {
+        preload: features.contains(&Feature::Preload),
+        usage: features.contains(&Feature::Usage),
+        pressure: features.contains(&Feature::Pressure),
+        app_index: features.contains(&Feature::AppIndex),
+        profile: features.contains(&Feature::Profile),
+    };
+    let mut daemon = Daemon::new(config);
     daemon.run();
     ExitCode::SUCCESS
 }
 
-fn parse_cli_args<I>(args: I) -> Result<Command, ExitCode>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut args = args.into_iter();
-    let first_arg = args.next();
-
-    match first_arg.as_deref() {
-        None => Ok(Command::ShowHelp),
-        Some("start") => parse_start_args(args).map(Command::Start),
-        Some("-f" | "--feature" | "--all") => {
-            let mut forwarded = vec![first_arg.unwrap_or_default()];
-            forwarded.extend(args);
-            parse_start_args(forwarded).map(Command::Start)
+fn run_status() -> ExitCode {
+    let db = CategoryDatabase::default();
+    match status::read_public_status(&db) {
+        Some(public) => {
+            println!("{}", serde_json::to_string_pretty(&public).unwrap());
+            ExitCode::SUCCESS
         }
-        Some("-p") => {
-            eprintln!("-p has been removed. Use -f or --feature.");
-            Err(ExitCode::from(2))
+        None => {
+            eprintln!("error: could not read status.json (daemon not running?)");
+            ExitCode::from(1)
         }
-        Some("status") => Ok(Command::Status),
-        Some("help" | "--help" | "-h") => Ok(Command::ShowHelp),
-        Some(cmd) => Ok(Command::Unknown(cmd.to_string())),
     }
 }
 
 fn main() -> ExitCode {
-    match parse_cli_args(std::env::args().skip(1)) {
-        Err(code) => code,
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match parse_args(&args) {
         Ok(Command::ShowHelp) => {
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Command::Start(config)) => start_daemon(config),
-        Ok(Command::Status) => {
-            let db = CategoryDatabase::default();
-            match status::read_public_status(&db) {
-                Some(public) => {
-                    println!("{}", serde_json::to_string_pretty(&public).unwrap());
-                    ExitCode::SUCCESS
-                }
-                None => {
-                    eprintln!("error: could not read status.json (daemon not running?)");
-                    ExitCode::from(1)
-                }
-            }
-        }
-        Ok(Command::Unknown(cmd)) => {
-            eprintln!("error: unknown argument '{}'", cmd);
+        Ok(Command::RunStatus) => run_status(),
+        Ok(Command::StartDaemon(features)) => start_daemon(features),
+        Err(CliError(msg)) => {
+            eprintln!("error: {}", msg);
             print_help();
             ExitCode::from(2)
         }
@@ -191,72 +190,100 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    #[test]
-    fn short_feature_flag_works() {
-        let config = parse_start_args(vec!["-f".to_string(), "preload".to_string()]).unwrap();
-        assert!(config.requested.contains(&CliFeature::Preload));
+    fn to_str_vec(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
     }
 
     #[test]
-    fn no_arg_invocation_shows_help() {
+    fn test_no_args_is_help() {
+        assert_eq!(parse_args(&to_str_vec(&[])), Ok(Command::ShowHelp));
+    }
+
+    #[test]
+    fn test_empty_arg_is_help() {
+        assert_eq!(parse_args(&to_str_vec(&[""])), Ok(Command::ShowHelp));
+    }
+
+    #[test]
+    fn test_help_variants() {
+        assert_eq!(parse_args(&to_str_vec(&["help"])), Ok(Command::ShowHelp));
+        assert_eq!(parse_args(&to_str_vec(&["-h"])), Ok(Command::ShowHelp));
+        assert_eq!(parse_args(&to_str_vec(&["--help"])), Ok(Command::ShowHelp));
+    }
+
+    #[test]
+    fn test_status_command() {
+        assert_eq!(parse_args(&to_str_vec(&["status"])), Ok(Command::RunStatus));
+    }
+
+    #[test]
+    fn test_parse_single_feature() {
+        let expected = Command::StartDaemon([Feature::Preload].iter().cloned().collect());
+        assert_eq!(parse_args(&to_str_vec(&["-f", "preload"])), Ok(expected));
+    }
+
+    #[test]
+    fn test_parse_multiple_features() {
+        let expected = Command::StartDaemon(
+            [Feature::Preload, Feature::Profile]
+                .iter()
+                .cloned()
+                .collect(),
+        );
         assert_eq!(
-            parse_cli_args(Vec::<String>::new()).unwrap(),
-            Command::ShowHelp
+            parse_args(&to_str_vec(&["-f", "preload", "--feature", "profile"])),
+            Ok(expected)
         );
     }
 
     #[test]
-    fn help_command_shows_same_help() {
+    fn test_all_overrides_other_features() {
+        let expected = Command::StartDaemon(ALL_FEATURES.iter().cloned().collect());
         assert_eq!(
-            parse_cli_args(vec!["help".to_string()]).unwrap(),
-            Command::ShowHelp
-        );
-        assert_eq!(render_help(), render_help());
-    }
-
-    #[test]
-    fn unknown_command_exits_nonzero() {
-        match parse_cli_args(vec!["bogus".to_string()]).unwrap() {
-            Command::Unknown(cmd) => assert_eq!(cmd, "bogus"),
-            other => panic!("unexpected command: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn no_arg_invocation_has_no_side_effects() {
-        assert_eq!(
-            parse_cli_args(Vec::<String>::new()).unwrap(),
-            Command::ShowHelp
+            parse_args(&to_str_vec(&["-f", "preload", "-f", "--all"])),
+            Ok(expected)
         );
     }
 
     #[test]
-    fn long_feature_flag_works() {
-        let config = parse_start_args(vec!["--feature".to_string(), "usage".to_string()]).unwrap();
-        assert!(config.requested.contains(&CliFeature::Usage));
-    }
-
-    #[test]
-    fn removed_p_flag_returns_nonzero() {
+    fn test_all_long_overrides() {
+        let expected = Command::StartDaemon(ALL_FEATURES.iter().cloned().collect());
         assert_eq!(
-            parse_start_args(vec!["-p".to_string(), "preload".to_string()]),
-            Err(ExitCode::from(2))
+            parse_args(&to_str_vec(&["--feature", "preload", "--feature", "--all"])),
+            Ok(expected)
         );
     }
 
     #[test]
-    fn profile_feature_is_supported() {
-        let config = parse_start_args(vec!["-f".to_string(), "profile".to_string()]).unwrap();
-        assert!(config.requested.contains(&CliFeature::Profile));
+    fn test_err_unknown_arg() {
+        assert!(parse_args(&to_str_vec(&["bogus"])).is_err());
+        assert!(parse_args(&to_str_vec(&["-f", "preload", "bogus"])).is_err());
     }
 
     #[test]
-    fn all_flag_works() {
-        let config = parse_start_args(vec!["--all".to_string()]).unwrap();
-        assert!(config.requested.contains(&CliFeature::Preload));
-        assert!(config.requested.contains(&CliFeature::Usage));
-        assert!(config.requested.contains(&CliFeature::Pressure));
-        assert!(config.requested.contains(&CliFeature::AppIndex));
-        assert!(config.requested.contains(&CliFeature::Profile));
+    fn test_err_start_is_not_a_command() {
+        let err = parse_args(&to_str_vec(&["start", "-f", "preload"])).unwrap_err();
+        assert_eq!(err, CliError("unknown argument 'start'".to_string()));
+    }
+
+    #[test]
+    fn test_err_missing_feature_value() {
+        assert!(parse_args(&to_str_vec(&["-f"])).is_err());
+    }
+
+    #[test]
+    fn test_err_unknown_feature_name() {
+        assert!(parse_args(&to_str_vec(&["--feature", "bogus"])).is_err());
+    }
+
+    #[test]
+    fn test_err_standalone_all() {
+        assert!(parse_args(&to_str_vec(&["--all"])).is_err());
+    }
+
+    #[test]
+    fn test_err_help_in_wrong_position() {
+        assert!(parse_args(&to_str_vec(&["-f", "preload", "help"])).is_err());
+        assert!(parse_args(&to_str_vec(&["-f", "preload", "--help"])).is_err());
     }
 }
