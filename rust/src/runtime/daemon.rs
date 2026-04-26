@@ -1,11 +1,15 @@
 use crate::features::preload::PreloadFeature;
+use crate::features::profile::ProfileFeature;
 use crate::paths::{BLACKLIST_FILE, CPUSET_TOP_APP};
 use crate::runtime::foreground::ForegroundResolver;
 use crate::runtime::indexer::AppIndexer;
 use crate::runtime::logging;
 use crate::runtime::pressure::refresh_pressure_metrics;
 use crate::runtime::signals::SHUTDOWN;
-use crate::runtime::status::DaemonStatus;
+use crate::runtime::status::{
+    DaemonStatus, FeatureFlags, PreloadStatusFile, PressureStatus, ProfileStatusFile,
+    read_device_uptime_secs,
+};
 use coreshift_lowlevel::inotify::{
     InotifyEvent, MODIFY_MASK, PACKAGE_FILE_MASK, add_watch, read_events,
 };
@@ -19,9 +23,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Daemon {
     reactor: Reactor,
     status: DaemonStatus,
-    last_written_status: DaemonStatus,
+    last_written_status: Option<DaemonStatus>,
+    profile: ProfileFeature,
+    last_written_profile_status: Option<ProfileStatusFile>,
     foreground: Option<ForegroundResolver>,
     preload: Option<PreloadFeature>,
+    preload_status: PreloadStatusFile,
+    last_written_preload_status: Option<PreloadStatusFile>,
     indexer: Arc<AppIndexer>,
     event_buffer: Vec<Event>,
     inotify_token: Option<Token>,
@@ -36,26 +44,29 @@ impl Daemon {
         let mut status = DaemonStatus {
             daemon: crate::runtime::status::DaemonInfo {
                 alive: true,
-                mode: if preload_only {
-                    "preload".to_string()
-                } else {
-                    "default".to_string()
-                },
                 started_ms: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
-                warnings: Vec::new(),
+                device_uptime_secs: read_device_uptime_secs(),
             },
             ..Default::default()
         };
-        status.features.profile.enabled = true;
 
-        refresh_pressure_metrics(&mut status.pressure);
+        let mut pressure_metrics = crate::runtime::pressure::PressureMetrics::default();
+        refresh_pressure_metrics(&mut pressure_metrics);
+        status.pressure = PressureStatus::from_metrics(&pressure_metrics);
 
         let indexer = Arc::new(AppIndexer::new());
-        indexer.rebuild(crate::features::preload::RuntimeAbi::current());
-        status.app_index = indexer.snapshot();
+        indexer.request_rebuild(crate::features::preload::RuntimeAbi::current());
+        let profile_enabled = !preload_only;
+        let preload_enabled = true;
+        status.features = FeatureFlags {
+            preload: preload_enabled,
+            profile: profile_enabled,
+            pressure: true,
+            app_index: true,
+        };
 
         // Startup Diagnostics
         if !Path::new(CPUSET_TOP_APP).exists() {
@@ -130,63 +141,61 @@ impl Daemon {
             None
         };
 
-        let mut d = Self {
+        let profile = ProfileFeature {
+            enabled: profile_enabled,
+            ..Default::default()
+        };
+        let preload_status = PreloadStatusFile {
+            enabled: preload_enabled && preload.is_some(),
+            ..Default::default()
+        };
+
+        Self {
             reactor,
-            last_written_status: status.clone(),
             status,
+            last_written_status: None,
+            profile,
+            last_written_profile_status: None,
             foreground,
             preload,
+            preload_status,
+            last_written_preload_status: None,
             indexer,
             event_buffer: Vec::with_capacity(16),
             inotify_token,
             inotify_fd,
             cpuset_watch,
             package_list_watch,
-        };
-
-        if !Path::new(CPUSET_TOP_APP).exists() {
-            d.status
-                .daemon
-                .warnings
-                .push(format!("{} unavailable", CPUSET_TOP_APP));
         }
-        if d.foreground.is_none() {
-            d.status
-                .daemon
-                .warnings
-                .push("Foreground tracking disabled (setup failure)".to_string());
-        }
-        if d.preload.is_none() {
-            d.status
-                .daemon
-                .warnings
-                .push("Preload feature disabled (setup failure)".to_string());
-        }
-
-        d
     }
 
-    fn write_status_if_needed(&mut self, force: bool) {
-        let changed = self.status != self.last_written_status;
-
-        if force || changed {
-            refresh_pressure_metrics(&mut self.status.pressure);
-            if let Err(e) = self.status.write() {
+    fn write_status_files_if_needed(&mut self, force: bool) {
+        if force || self.last_written_status.as_ref() != Some(&self.status) {
+            let mut pressure_metrics = crate::runtime::pressure::PressureMetrics::default();
+            refresh_pressure_metrics(&mut pressure_metrics);
+            self.status.pressure = PressureStatus::from_metrics(&pressure_metrics);
+            self.status.daemon.device_uptime_secs = read_device_uptime_secs();
+            if let Err(e) = self.status.write_if_changed(&mut self.last_written_status) {
                 logging::error(&format!("Status write failed: {}", e));
-            } else {
-                self.last_written_status = self.status.clone();
             }
         }
-    }
 
-    fn sync_status_app_index(&mut self) {
-        self.status.app_index = self.indexer.snapshot();
-    }
+        let db = crate::features::profile::CategoryDatabase::load();
+        let profile_status = ProfileStatusFile::from_feature(
+            &self.profile,
+            self.status.foreground.package.as_deref(),
+            &db,
+        );
+        if let Err(e) = profile_status.write_if_changed(&mut self.last_written_profile_status) {
+            logging::error(&format!("Profile status write failed: {}", e));
+        }
 
-    fn rebuild_index(&mut self) {
-        self.indexer
-            .rebuild(crate::features::preload::RuntimeAbi::current());
-        self.sync_status_app_index();
+        if let Err(e) = self
+            .preload_status
+            .write_if_changed(&mut self.last_written_preload_status)
+        {
+            logging::error(&format!("Preload status write failed: {}", e));
+        }
     }
 
     fn handle_inotify_ready(&mut self) {
@@ -212,7 +221,8 @@ impl Daemon {
         let foreground_changed = Self::is_foreground_change(&events, self.cpuset_watch);
 
         if package_list_changed {
-            self.rebuild_index();
+            self.indexer
+                .request_rebuild(crate::features::preload::RuntimeAbi::current());
         }
 
         if foreground_changed
@@ -225,19 +235,33 @@ impl Daemon {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
+            let prev_package = self.status.foreground.package.clone();
+            let prev_session_started_ms = self.status.foreground.session_started_ms;
 
-            self.status.features.profile.on_foreground_changed(
-                self.status.foreground.package.as_deref(),
-                snapshot.package.as_deref(),
-                now,
-            );
             self.status.apply_foreground_snapshot(&snapshot);
+            if prev_package.as_deref() != snapshot.package.as_deref() {
+                self.status.foreground.session_started_ms = snapshot.package.as_ref().map(|_| now);
+            }
+
+            if self.profile.enabled {
+                self.profile.on_foreground_changed(
+                    prev_package.as_deref(),
+                    snapshot.package.as_deref(),
+                    prev_session_started_ms,
+                    now,
+                );
+            }
 
             if let Some(pkg) = snapshot.package.as_deref()
                 && let Some(preload) = &mut self.preload
             {
                 let candidates = self.indexer.get_candidates(pkg);
-                preload.on_foreground_package(pkg, &candidates, &mut self.status);
+                self.preload_status.enabled = true;
+                preload.on_foreground_package(
+                    pkg,
+                    candidates.as_deref().unwrap_or(&[]),
+                    &mut self.preload_status,
+                );
             }
         }
     }
@@ -258,7 +282,7 @@ impl Daemon {
 
     pub fn run(&mut self) {
         logging::info("CoreShift Policy Daemon started.");
-        self.write_status_if_needed(true);
+        self.write_status_files_if_needed(true);
 
         while !SHUTDOWN.load(Ordering::SeqCst) {
             self.event_buffer.clear();
@@ -275,7 +299,7 @@ impl Daemon {
                         self.handle_inotify_ready();
                     }
 
-                    self.write_status_if_needed(false);
+                    self.write_status_files_if_needed(false);
                 }
                 Err(e) => {
                     if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
@@ -287,7 +311,7 @@ impl Daemon {
 
         logging::info("Shutdown requested. Cleaning up...");
         self.status.daemon.alive = false;
-        self.write_status_if_needed(true);
+        self.write_status_files_if_needed(true);
         logging::info("CoreShift Policy Daemon stopped.");
     }
 }

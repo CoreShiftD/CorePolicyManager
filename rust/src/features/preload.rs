@@ -1,5 +1,5 @@
 use crate::runtime::logging;
-use crate::runtime::status::{DaemonStatus, PreloadResult};
+use crate::runtime::status::{PreloadResult, PreloadStatusFile};
 use coreshift_lowlevel::sys::readahead;
 use std::collections::HashMap;
 use std::fs;
@@ -45,7 +45,7 @@ impl PreloadFeature {
         &mut self,
         pkg: &str,
         candidates: &[std::path::PathBuf],
-        status: &mut DaemonStatus,
+        status: &mut PreloadStatusFile,
     ) {
         // Opportunistic cleanup
         let now = Instant::now();
@@ -66,8 +66,8 @@ impl PreloadFeature {
                 ),
                 Duration::from_secs(30),
             );
-            status.features.preload.last_package = Some(pkg.to_string());
-            status.features.preload.result_code = Some(PreloadResult::Cooldown);
+            status.last_package = Some(pkg.to_string());
+            status.result = Some(PreloadResult::Cooldown);
             return;
         }
 
@@ -77,14 +77,14 @@ impl PreloadFeature {
         if candidates.is_empty() {
             // ... (keep existing no_candidates logic)
             let total_ms = start_total.elapsed().as_millis() as u64;
-            status.features.preload.last_package = Some(pkg.to_string());
-            status.features.preload.file_count = 0;
-            status.features.preload.files_failed = 0;
-            status.features.preload.bytes = 0;
-            status.features.preload.discovery_ms = discovery_ms;
-            status.features.preload.readahead_ms = 0;
-            status.features.preload.total_ms = total_ms;
-            status.features.preload.result_code = Some(PreloadResult::NoCandidates);
+            status.last_package = Some(pkg.to_string());
+            status.file_count = 0;
+            status.files_failed = 0;
+            status.bytes = 0;
+            status.discovery_ms = discovery_ms;
+            status.readahead_ms = 0;
+            status.total_ms = total_ms;
+            status.result = Some(PreloadResult::NoCandidates);
             self.cooldowns.insert(pkg.to_string(), Instant::now());
             return;
         }
@@ -120,14 +120,14 @@ impl PreloadFeature {
             PreloadResult::Ok
         };
 
-        status.features.preload.last_package = Some(pkg.to_string());
-        status.features.preload.file_count = files_done;
-        status.features.preload.files_failed = files_failed;
-        status.features.preload.bytes = bytes_done;
-        status.features.preload.discovery_ms = discovery_ms;
-        status.features.preload.readahead_ms = readahead_ms;
-        status.features.preload.total_ms = total_ms;
-        status.features.preload.result_code = Some(result);
+        status.last_package = Some(pkg.to_string());
+        status.file_count = files_done;
+        status.files_failed = files_failed;
+        status.bytes = bytes_done;
+        status.discovery_ms = discovery_ms;
+        status.readahead_ms = readahead_ms;
+        status.total_ms = total_ms;
+        status.result = Some(result);
         self.cooldowns.insert(pkg.to_string(), Instant::now());
     }
 }
@@ -140,41 +140,32 @@ mod tests {
     #[test]
     fn test_cooldown_skip_updates_status() {
         let mut preload = PreloadFeature::new();
-        let mut status = DaemonStatus::default();
+        let mut status = PreloadStatusFile::default();
         preload
             .cooldowns
             .insert("com.example.app".to_string(), Instant::now());
 
         preload.on_foreground_package("com.example.app", &[], &mut status);
 
-        assert_eq!(
-            status.features.preload.last_package.as_deref(),
-            Some("com.example.app")
-        );
-        assert_eq!(
-            status.features.preload.result_code,
-            Some(PreloadResult::Cooldown)
-        );
+        assert_eq!(status.last_package.as_deref(), Some("com.example.app"));
+        assert_eq!(status.result, Some(PreloadResult::Cooldown));
     }
 
     #[test]
     fn test_cached_candidates_no_scan_no_candidates() {
         let mut preload = PreloadFeature::new();
-        let mut status = DaemonStatus::default();
+        let mut status = PreloadStatusFile::default();
 
         preload.on_foreground_package("com.example.app", &[], &mut status);
 
-        assert_eq!(
-            status.features.preload.result_code,
-            Some(PreloadResult::NoCandidates)
-        );
-        assert_eq!(status.features.preload.discovery_ms, 0);
+        assert_eq!(status.result, Some(PreloadResult::NoCandidates));
+        assert_eq!(status.discovery_ms, 0);
     }
 
     #[test]
     fn test_cached_candidates_are_used() {
         let mut preload = PreloadFeature::new();
-        let mut status = DaemonStatus::default();
+        let mut status = PreloadStatusFile::default();
         let temp = std::env::temp_dir().join(format!(
             "coreshift_preload_cached_candidates_{}",
             std::process::id()
@@ -187,10 +178,10 @@ mod tests {
 
         preload.on_foreground_package("com.example.app", &[PathBuf::from(&cached)], &mut status);
 
-        assert_eq!(status.features.preload.result_code, Some(PreloadResult::Ok));
-        assert_eq!(status.features.preload.file_count, 1);
-        assert_eq!(status.features.preload.files_failed, 0);
-        assert_eq!(status.features.preload.discovery_ms, 0);
+        assert_eq!(status.result, Some(PreloadResult::Ok));
+        assert_eq!(status.file_count, 1);
+        assert_eq!(status.files_failed, 0);
+        assert_eq!(status.discovery_ms, 0);
 
         let _ = fs::remove_dir_all(&temp);
     }

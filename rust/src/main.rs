@@ -1,5 +1,5 @@
 use coreshift_policy::features::profile::CategoryDatabase;
-use coreshift_policy::runtime::{daemon::Daemon, logging, signals, status::DaemonStatus};
+use coreshift_policy::runtime::{daemon::Daemon, logging, signals, status};
 use std::process::ExitCode;
 
 fn print_help() {
@@ -98,22 +98,19 @@ fn main() -> ExitCode {
             daemon.run();
             ExitCode::SUCCESS
         }
-        Some("status") => match DaemonStatus::read() {
-            Some(status) => {
-                if cfg!(debug_assertions) {
-                    println!("{}", serde_json::to_string_pretty(&status).unwrap());
-                } else {
-                    let db = CategoryDatabase::load();
-                    let public = status.to_public_status(&db);
+        Some("status") => {
+            let db = CategoryDatabase::load();
+            match status::read_public_status(&db) {
+                Some(public) => {
                     println!("{}", serde_json::to_string_pretty(&public).unwrap());
+                    ExitCode::SUCCESS
                 }
-                ExitCode::SUCCESS
+                None => {
+                    eprintln!("error: could not read status.json (daemon not running?)");
+                    ExitCode::from(1)
+                }
             }
-            None => {
-                eprintln!("error: could not read status.json (daemon not running?)");
-                ExitCode::from(1)
-            }
-        },
+        }
         Some("profile") => handle_profile_cmd(args),
         Some("help" | "--help" | "-h") => {
             print_help();

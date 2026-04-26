@@ -1,9 +1,8 @@
-use crate::features::profile::CategoryDatabase;
-use crate::features::profile::ProfileFeature;
-use crate::paths::STATUS_FILE;
+use crate::features::profile::{CategoryDatabase, ProfileFeature};
+use crate::paths::{APP_INDEX_STATUS_FILE, PRELOAD_STATUS_FILE, PROFILE_STATUS_FILE, STATUS_FILE};
 use crate::runtime::foreground::ForegroundSnapshot;
-use crate::runtime::indexer::AppPathIndex;
 use crate::runtime::pressure::PressureMetrics;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -23,33 +22,61 @@ pub enum PreloadResult {
 pub struct DaemonStatus {
     pub daemon: DaemonInfo,
     pub foreground: ForegroundInfo,
-    pub pressure: PressureMetrics,
-    pub features: FeatureState,
-    pub app_index: AppPathIndex,
+    pub features: FeatureFlags,
+    pub pressure: PressureStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct DaemonInfo {
     pub alive: bool,
-    pub mode: String,
     pub started_ms: u64,
-    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_uptime_secs: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ForegroundInfo {
     pub package: Option<String>,
     pub pid: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_started_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-pub struct FeatureState {
-    pub preload: PreloadInfo,
-    pub profile: ProfileFeature,
+pub struct FeatureFlags {
+    pub preload: bool,
+    pub profile: bool,
+    pub pressure: bool,
+    pub app_index: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
-pub struct PreloadInfo {
+pub struct PressureStatus {
+    pub supported: bool,
+    pub cpu_avg10: Option<f32>,
+    pub memory_avg10: Option<f32>,
+    pub io_avg10: Option<f32>,
+    pub last_refresh_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct ProfileStatusFile {
+    pub enabled: bool,
+    pub foreground_switch_count: u64,
+    pub top_apps: Vec<ProfileAppStat>,
+    pub current_class: String,
+    pub recommendation: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct ProfileAppStat {
+    pub package: String,
+    pub total_secs: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct PreloadStatusFile {
+    pub enabled: bool,
     pub last_package: Option<String>,
     pub file_count: usize,
     pub files_failed: usize,
@@ -57,184 +84,477 @@ pub struct PreloadInfo {
     pub discovery_ms: u64,
     pub readahead_ms: u64,
     pub total_ms: u64,
-    pub result_code: Option<PreloadResult>,
+    pub result: Option<PreloadResult>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct AppIndexStatusFile {
+    pub enabled: bool,
+    pub ready: bool,
+    pub packages: usize,
+    pub built_ms: u64,
+    pub rebuild_ms: u64,
+    pub duration_ms: u64,
+    pub stale: bool,
+    pub rebuild_success_count: u64,
+    pub rebuild_fail_count: u64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct PublicStatus {
+    pub alive: bool,
+    pub uptime_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_uptime_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    pub session_secs: u64,
+    pub features: FeatureFlags,
+    pub pressure: PublicPressure,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<PublicProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preload: Option<PublicPreload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_index: Option<PublicAppIndex>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct PublicPressure {
-    pub supported: bool,
     pub cpu_avg10: Option<f32>,
     pub memory_avg10: Option<f32>,
     pub io_avg10: Option<f32>,
 }
 
-#[derive(Serialize)]
-pub struct PublicDaemon {
-    pub alive: bool,
-    pub mode: String,
-    pub uptime_secs: u64,
-}
-
-#[derive(Serialize)]
-pub struct PublicForeground {
-    pub package: Option<String>,
-    pub pid: Option<i32>,
-    pub session_secs: u64,
-}
-
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct PublicProfile {
     pub class: String,
     pub recommendation: String,
     pub switch_count: u64,
-    pub top_apps: Vec<PublicAppStat>,
+    pub top_apps: Vec<ProfileAppStat>,
 }
 
-#[derive(Serialize)]
-pub struct PublicAppStat {
-    pub package: String,
-    pub total_secs: u64,
-}
-
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct PublicPreload {
     pub result: Option<PreloadResult>,
-    pub bytes: u64,
-    pub duration_ms: u64,
+    pub total_ms: u64,
 }
 
-#[derive(Serialize)]
-pub struct PublicFeatures {
-    pub preload: PublicPreload,
-    pub profile: PublicProfile,
-}
-
-#[derive(Serialize)]
-pub struct PublicStatus {
-    pub daemon: PublicDaemon,
-    pub foreground: PublicForeground,
-    pub pressure: PublicPressure,
-    pub features: PublicFeatures,
-    pub app_index: PublicAppIndex,
-}
-
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct PublicAppIndex {
     pub ready: bool,
     pub packages: usize,
+    pub stale: bool,
 }
 
 impl DaemonStatus {
-    pub fn to_public_status(&self, db: &CategoryDatabase) -> PublicStatus {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        let uptime_secs = now.saturating_sub(self.daemon.started_ms) / 1000;
-        let session_secs = if self.foreground.package.is_some() {
-            now.saturating_sub(self.features.profile.session_started_ms) / 1000
-        } else {
-            0
-        };
-
-        let mut top_apps = self.features.profile.top_apps.clone();
-        if let Some(pkg) = &self.foreground.package {
-            let active_elapsed =
-                now.saturating_sub(self.features.profile.session_started_ms) / 1000;
-            *top_apps.entry(pkg.clone()).or_insert(0) += active_elapsed;
-        }
-
-        let mut sorted_apps: Vec<_> = top_apps.into_iter().collect();
-        sorted_apps.sort_by_key(|&(_, total)| std::cmp::Reverse(total));
-        sorted_apps.truncate(3);
-
-        let class = db.classify(self.foreground.package.as_deref().unwrap_or(""));
-        let rec = crate::features::profile::ProfileFeature::get_recommendation(&class);
-
-        PublicStatus {
-            daemon: PublicDaemon {
-                alive: self.daemon.alive,
-                mode: self.daemon.mode.clone(),
-                uptime_secs,
-            },
-            foreground: PublicForeground {
-                package: self.foreground.package.clone(),
-                pid: self.foreground.pid,
-                session_secs,
-            },
-            pressure: PublicPressure {
-                supported: self.pressure.supported,
-                cpu_avg10: self.pressure.cpu_some_avg10,
-                memory_avg10: self.pressure.memory_some_avg10,
-                io_avg10: self.pressure.io_some_avg10,
-            },
-            features: PublicFeatures {
-                preload: PublicPreload {
-                    result: self.features.preload.result_code,
-                    bytes: self.features.preload.bytes,
-                    duration_ms: self.features.preload.total_ms,
-                },
-                profile: PublicProfile {
-                    class: class.to_string(),
-                    recommendation: rec.to_string(),
-                    switch_count: self.features.profile.foreground_switch_count,
-                    top_apps: sorted_apps
-                        .into_iter()
-                        .map(|(p, t)| PublicAppStat {
-                            package: p,
-                            total_secs: t,
-                        })
-                        .collect(),
-                },
-            },
-            app_index: PublicAppIndex {
-                ready: !self.app_index.stale && self.app_index.built_ms > 0,
-                packages: self.app_index.entries.len(),
-            },
-        }
-    }
-
     pub fn apply_foreground_snapshot(&mut self, snapshot: &ForegroundSnapshot) {
         self.foreground.pid = snapshot.pid;
         self.foreground.package = snapshot.package.clone();
     }
 
-    pub fn write(&self) -> Result<(), std::io::Error> {
-        let path = Path::new(STATUS_FILE);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let temp_path = format!("{}.tmp", STATUS_FILE);
-        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        fs::write(&temp_path, json)?;
-        fs::rename(&temp_path, STATUS_FILE)?;
-        Ok(())
+    pub fn write_if_changed(
+        &self,
+        last_written: &mut Option<DaemonStatus>,
+    ) -> Result<bool, std::io::Error> {
+        write_json_file_if_changed(STATUS_FILE, self, last_written)
     }
 
     pub fn read() -> Option<Self> {
-        if let Ok(content) = fs::read_to_string(STATUS_FILE) {
-            serde_json::from_str(&content).ok()
-        } else {
-            None
+        read_json_file(STATUS_FILE)
+    }
+}
+
+impl PressureStatus {
+    pub fn from_metrics(metrics: &PressureMetrics) -> Self {
+        Self {
+            supported: metrics.supported,
+            cpu_avg10: metrics.cpu_some_avg10,
+            memory_avg10: metrics.memory_some_avg10,
+            io_avg10: metrics.io_some_avg10,
+            last_refresh_ms: metrics.last_refresh_ms,
         }
     }
+}
+
+impl ProfileStatusFile {
+    pub fn from_feature(
+        profile: &ProfileFeature,
+        current_pkg: Option<&str>,
+        db: &CategoryDatabase,
+    ) -> Self {
+        let class = db.classify(current_pkg.unwrap_or(""));
+        let recommendation = ProfileFeature::get_recommendation(&class);
+        let top_apps = profile
+            .snapshot_top_apps()
+            .into_iter()
+            .map(|(package, total_secs)| ProfileAppStat {
+                package,
+                total_secs,
+            })
+            .collect();
+
+        Self {
+            enabled: profile.enabled,
+            foreground_switch_count: profile.foreground_switch_count,
+            top_apps,
+            current_class: class.to_string(),
+            recommendation: recommendation.to_string(),
+        }
+    }
+
+    pub fn write_if_changed(
+        &self,
+        last_written: &mut Option<ProfileStatusFile>,
+    ) -> Result<bool, std::io::Error> {
+        write_json_file_if_changed(PROFILE_STATUS_FILE, self, last_written)
+    }
+}
+
+impl PreloadStatusFile {
+    pub fn write_if_changed(
+        &self,
+        last_written: &mut Option<PreloadStatusFile>,
+    ) -> Result<bool, std::io::Error> {
+        write_json_file_if_changed(PRELOAD_STATUS_FILE, self, last_written)
+    }
+}
+
+impl AppIndexStatusFile {
+    pub fn write_if_changed(
+        &self,
+        last_written: &mut Option<AppIndexStatusFile>,
+    ) -> Result<bool, std::io::Error> {
+        write_json_file_if_changed(APP_INDEX_STATUS_FILE, self, last_written)
+    }
+}
+
+pub fn write_json_file_if_changed<T>(
+    path: &str,
+    value: &T,
+    last_written: &mut Option<T>,
+) -> Result<bool, std::io::Error>
+where
+    T: Serialize + Clone + PartialEq,
+{
+    if last_written.as_ref() == Some(value) {
+        return Ok(false);
+    }
+
+    let path_obj = Path::new(path);
+    if let Some(parent) = path_obj.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let temp_path = format!("{}.tmp", path);
+    let json = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
+    fs::write(&temp_path, json)?;
+    fs::rename(&temp_path, path)?;
+    *last_written = Some(value.clone());
+    Ok(true)
+}
+
+pub fn read_public_status(db: &CategoryDatabase) -> Option<PublicStatus> {
+    read_public_status_from_paths(
+        STATUS_FILE,
+        PROFILE_STATUS_FILE,
+        PRELOAD_STATUS_FILE,
+        APP_INDEX_STATUS_FILE,
+        db,
+    )
+}
+
+pub fn read_public_status_from_paths(
+    core_path: &str,
+    profile_path: &str,
+    preload_path: &str,
+    app_index_path: &str,
+    _db: &CategoryDatabase,
+) -> Option<PublicStatus> {
+    let core: DaemonStatus = read_json_file(core_path)?;
+    let profile: Option<ProfileStatusFile> = read_json_file(profile_path);
+    let preload: Option<PreloadStatusFile> = read_json_file(preload_path);
+    let app_index: Option<AppIndexStatusFile> = read_json_file(app_index_path);
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let uptime_secs = now.saturating_sub(core.daemon.started_ms) / 1000;
+    let session_secs = if let Some(session_started_ms) = core.foreground.session_started_ms {
+        now.saturating_sub(session_started_ms) / 1000
+    } else {
+        0
+    };
+
+    Some(PublicStatus {
+        alive: core.daemon.alive,
+        uptime_secs,
+        device_uptime_secs: core.daemon.device_uptime_secs,
+        app: core.foreground.package,
+        pid: core.foreground.pid,
+        session_secs,
+        features: core.features.clone(),
+        pressure: PublicPressure {
+            cpu_avg10: core.pressure.cpu_avg10,
+            memory_avg10: core.pressure.memory_avg10,
+            io_avg10: core.pressure.io_avg10,
+        },
+        profile: if core.features.profile {
+            profile.map(|profile| PublicProfile {
+                class: profile.current_class,
+                recommendation: profile.recommendation,
+                switch_count: profile.foreground_switch_count,
+                top_apps: profile.top_apps,
+            })
+        } else {
+            None
+        },
+        preload: if core.features.preload {
+            preload.map(|preload| PublicPreload {
+                result: preload.result,
+                total_ms: preload.total_ms,
+            })
+        } else {
+            None
+        },
+        app_index: if core.features.app_index {
+            app_index.map(|app_index| PublicAppIndex {
+                ready: app_index.ready,
+                packages: app_index.packages,
+                stale: app_index.stale,
+            })
+        } else {
+            None
+        },
+    })
+}
+
+pub fn read_device_uptime_secs() -> Option<u64> {
+    let content = fs::read_to_string("/proc/uptime").ok()?;
+    let first = content.split_whitespace().next()?;
+    let secs = first.parse::<f64>().ok()?;
+    Some(secs.floor() as u64)
+}
+
+fn read_json_file<T: DeserializeOwned>(path: &str) -> Option<T> {
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn write_json<T: Serialize>(path: &Path, value: &T) {
+        fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+
+    fn test_paths(name: &str) -> (String, String, String, String) {
+        let root = std::env::temp_dir().join(format!(
+            "coreshift_status_test_{}_{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        (
+            root.join("status.json").to_string_lossy().into_owned(),
+            root.join("profile_status.json")
+                .to_string_lossy()
+                .into_owned(),
+            root.join("preload_status.json")
+                .to_string_lossy()
+                .into_owned(),
+            root.join("app_index_status.json")
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    fn core_status() -> DaemonStatus {
+        DaemonStatus {
+            daemon: DaemonInfo {
+                alive: true,
+                started_ms: 1,
+                device_uptime_secs: Some(42),
+            },
+            foreground: ForegroundInfo {
+                package: Some("com.example.game".to_string()),
+                pid: Some(1234),
+                session_started_ms: Some(11),
+            },
+            features: FeatureFlags {
+                preload: true,
+                profile: true,
+                pressure: true,
+                app_index: true,
+            },
+            pressure: PressureStatus {
+                supported: true,
+                cpu_avg10: Some(1.0),
+                memory_avg10: Some(0.0),
+                io_avg10: Some(0.0),
+                last_refresh_ms: 20,
+            },
+        }
+    }
+
     #[test]
-    fn public_status_uses_injected_db() {
-        let mut status = DaemonStatus::default();
-        status.daemon.started_ms = 1;
-        status.foreground.package = Some("com.example.game".to_string());
+    fn cli_computes_uptime_and_session() {
+        let (core, profile, preload, app_index) = test_paths("uptime");
+        write_json(Path::new(&core), &core_status());
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        assert!(public.uptime_secs > 0);
+        assert!(public.session_secs > 0);
+    }
+
+    #[test]
+    fn missing_profile_file_degrades_gracefully() {
+        let (core, profile, preload, app_index) = test_paths("missing_profile");
+        write_json(Path::new(&core), &core_status());
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        assert!(public.profile.is_none());
+    }
+
+    #[test]
+    fn missing_preload_file_degrades_gracefully() {
+        let (core, profile, preload, app_index) = test_paths("missing_preload");
+        write_json(Path::new(&core), &core_status());
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        assert!(public.preload.is_none());
+    }
+
+    #[test]
+    fn missing_index_file_degrades_gracefully() {
+        let (core, profile, preload, app_index) = test_paths("missing_index");
+        write_json(Path::new(&core), &core_status());
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        assert!(public.app_index.is_none());
+    }
+
+    #[test]
+    fn no_duplicated_fields_in_merged_output() {
+        let (core, profile, preload, app_index) = test_paths("dedupe");
+        write_json(Path::new(&core), &core_status());
 
         let mut db = CategoryDatabase::default();
         assert!(db.add("game", "com.example.game"));
+        write_json(
+            Path::new(&profile),
+            &ProfileStatusFile {
+                enabled: true,
+                foreground_switch_count: 7,
+                top_apps: vec![ProfileAppStat {
+                    package: "com.example.game".to_string(),
+                    total_secs: 99,
+                }],
+                current_class: "game".to_string(),
+                recommendation: "performance".to_string(),
+            },
+        );
+        write_json(
+            Path::new(&preload),
+            &PreloadStatusFile {
+                enabled: true,
+                total_ms: 3,
+                result: Some(PreloadResult::Ok),
+                ..Default::default()
+            },
+        );
+        write_json(
+            Path::new(&app_index),
+            &AppIndexStatusFile {
+                enabled: true,
+                ready: true,
+                packages: 10,
+                stale: false,
+                ..Default::default()
+            },
+        );
 
-        let public = status.to_public_status(&db);
-        assert_eq!(public.features.profile.class, "game");
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let json = serde_json::to_value(public).unwrap();
+        let object = json.as_object().unwrap();
+        assert!(!object.contains_key("started_ms"));
+        assert!(!object.contains_key("session_started_ms"));
+        assert!(!object.contains_key("enabled"));
+        assert!(object.contains_key("features"));
+    }
+
+    #[test]
+    fn feature_flags_only_sourced_from_status_json() {
+        let (core, profile, preload, app_index) = test_paths("flags");
+        let mut core_status = core_status();
+        core_status.features.profile = false;
+        core_status.features.preload = false;
+        core_status.features.app_index = false;
+        write_json(Path::new(&core), &core_status);
+        write_json(
+            Path::new(&profile),
+            &ProfileStatusFile {
+                enabled: true,
+                current_class: "social".to_string(),
+                recommendation: "balanced".to_string(),
+                ..Default::default()
+            },
+        );
+        write_json(
+            Path::new(&preload),
+            &PreloadStatusFile {
+                enabled: true,
+                result: Some(PreloadResult::Ok),
+                ..Default::default()
+            },
+        );
+        write_json(
+            Path::new(&app_index),
+            &AppIndexStatusFile {
+                enabled: true,
+                ready: true,
+                ..Default::default()
+            },
+        );
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        assert!(!public.features.profile);
+        assert!(!public.features.preload);
+        assert!(!public.features.app_index);
+        assert!(public.profile.is_none());
+        assert!(public.preload.is_none());
+        assert!(public.app_index.is_none());
+    }
+
+    #[test]
+    fn device_uptime_omitted_cleanly_when_unavailable() {
+        let (core, profile, preload, app_index) = test_paths("device_uptime");
+        let mut core_status = core_status();
+        core_status.daemon.device_uptime_secs = None;
+        write_json(Path::new(&core), &core_status);
+
+        let db = CategoryDatabase::default();
+        let public =
+            read_public_status_from_paths(&core, &profile, &preload, &app_index, &db).unwrap();
+        let json = serde_json::to_value(public).unwrap();
+        assert!(json.get("device_uptime_secs").is_none());
     }
 }

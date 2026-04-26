@@ -58,7 +58,6 @@ impl fmt::Display for ProfileRecommendation {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ProfileFeature {
     pub enabled: bool,
-    pub session_started_ms: u64,
     pub foreground_switch_count: u64,
     pub top_apps: HashMap<String, u64>,
 }
@@ -68,6 +67,7 @@ impl ProfileFeature {
         &mut self,
         prev_pkg: Option<&str>,
         new_pkg: Option<&str>,
+        prev_session_started_ms: Option<u64>,
         now_ms: u64,
     ) {
         if prev_pkg == new_pkg {
@@ -75,17 +75,13 @@ impl ProfileFeature {
         }
 
         // Close previous session
-        if let Some(pkg) = prev_pkg {
-            let elapsed = now_ms.saturating_sub(self.session_started_ms) / 1000;
+        if let (Some(pkg), Some(session_started_ms)) = (prev_pkg, prev_session_started_ms) {
+            let elapsed = now_ms.saturating_sub(session_started_ms) / 1000;
             *self.top_apps.entry(pkg.to_string()).or_insert(0) += elapsed;
         }
 
-        // Start new session
-        if new_pkg.is_some() {
-            self.session_started_ms = now_ms;
-            if prev_pkg.is_some() {
-                self.foreground_switch_count += 1;
-            }
+        if new_pkg.is_some() && prev_pkg.is_some() {
+            self.foreground_switch_count += 1;
         }
 
         // Enforce max 64 apps
@@ -98,6 +94,13 @@ impl ProfileFeature {
         {
             self.top_apps.remove(&min_key);
         }
+    }
+
+    pub fn snapshot_top_apps(&self) -> Vec<(String, u64)> {
+        let top_apps = self.top_apps.clone();
+        let mut sorted_apps: Vec<_> = top_apps.into_iter().collect();
+        sorted_apps.sort_by_key(|&(_, total)| std::cmp::Reverse(total));
+        sorted_apps
     }
 
     pub fn get_recommendation(class: &ProfileClass) -> ProfileRecommendation {
