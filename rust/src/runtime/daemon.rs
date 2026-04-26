@@ -145,10 +145,7 @@ impl Daemon {
             enabled: profile_enabled,
             ..Default::default()
         };
-        let preload_status = PreloadStatusFile {
-            enabled: preload_enabled && preload.is_some(),
-            ..Default::default()
-        };
+        let preload_status = PreloadStatusFile::default();
 
         Self {
             reactor,
@@ -256,7 +253,6 @@ impl Daemon {
                 && let Some(preload) = &mut self.preload
             {
                 let candidates = self.indexer.get_candidates(pkg);
-                self.preload_status.enabled = true;
                 preload.on_foreground_package(
                     pkg,
                     candidates.as_deref().unwrap_or(&[]),

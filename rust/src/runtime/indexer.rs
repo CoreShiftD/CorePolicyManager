@@ -457,7 +457,6 @@ fn unix_time_ms() -> u64 {
 
 fn persisted_status(state: &AppIndexState) -> AppIndexStatusFile {
     AppIndexStatusFile {
-        enabled: true,
         ready: state.stats.ready,
         packages: state.stats.packages,
         built_ms: state.stats.built_ms,

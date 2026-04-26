@@ -61,7 +61,6 @@ pub struct PressureStatus {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ProfileStatusFile {
-    pub enabled: bool,
     pub foreground_switch_count: u64,
     pub top_apps: Vec<ProfileAppStat>,
     pub current_class: String,
@@ -76,7 +75,6 @@ pub struct ProfileAppStat {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct PreloadStatusFile {
-    pub enabled: bool,
     pub last_package: Option<String>,
     pub file_count: usize,
     pub files_failed: usize,
@@ -89,7 +87,6 @@ pub struct PreloadStatusFile {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct AppIndexStatusFile {
-    pub enabled: bool,
     pub ready: bool,
     pub packages: usize,
     pub built_ms: u64,
@@ -198,7 +195,6 @@ impl ProfileStatusFile {
             .collect();
 
         Self {
-            enabled: profile.enabled,
             foreground_switch_count: profile.foreground_switch_count,
             top_apps,
             current_class: class.to_string(),
@@ -459,7 +455,6 @@ mod tests {
         write_json(
             Path::new(&profile),
             &ProfileStatusFile {
-                enabled: true,
                 foreground_switch_count: 7,
                 top_apps: vec![ProfileAppStat {
                     package: "com.example.game".to_string(),
@@ -472,7 +467,6 @@ mod tests {
         write_json(
             Path::new(&preload),
             &PreloadStatusFile {
-                enabled: true,
                 total_ms: 3,
                 result: Some(PreloadResult::Ok),
                 ..Default::default()
@@ -481,7 +475,6 @@ mod tests {
         write_json(
             Path::new(&app_index),
             &AppIndexStatusFile {
-                enabled: true,
                 ready: true,
                 packages: 10,
                 stale: false,
@@ -510,7 +503,6 @@ mod tests {
         write_json(
             Path::new(&profile),
             &ProfileStatusFile {
-                enabled: true,
                 current_class: "social".to_string(),
                 recommendation: "balanced".to_string(),
                 ..Default::default()
@@ -519,7 +511,6 @@ mod tests {
         write_json(
             Path::new(&preload),
             &PreloadStatusFile {
-                enabled: true,
                 result: Some(PreloadResult::Ok),
                 ..Default::default()
             },
@@ -527,7 +518,6 @@ mod tests {
         write_json(
             Path::new(&app_index),
             &AppIndexStatusFile {
-                enabled: true,
                 ready: true,
                 ..Default::default()
             },
