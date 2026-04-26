@@ -65,7 +65,7 @@ pub struct TweakApplySummary {
 
 impl TweakApplySummary {
     fn record_write_result(&mut self, result: WriteResult) {
-        self.attempted_writes += 1; // Increment for every attempted write
+        self.attempted_writes += 1;
         match result {
             WriteResult::Success => self.successful_writes += 1,
             WriteResult::Skipped => self.skipped_writes += 1,
@@ -117,7 +117,11 @@ pub struct TweakCache {
 
 impl TweakCache {
     pub fn load() -> Self {
-        fs::read_to_string(TWEAK_CACHE_FILE)
+        Self::load_from_path(Path::new(TWEAK_CACHE_FILE))
+    }
+
+    fn load_from_path(path: &Path) -> Self {
+        fs::read_to_string(path)
             .ok()
             .and_then(|content| serde_json::from_str(&content).ok())
             .filter(|cache: &Self| cache.schema_version == 1)
@@ -125,6 +129,10 @@ impl TweakCache {
     }
 
     pub fn save(&mut self) -> io::Result<()> {
+        self.save_to_path(Path::new(TWEAK_CACHE_FILE))
+    }
+
+    fn save_to_path(&mut self, path: &Path) -> io::Result<()> {
         self.schema_version = 1;
         self.updated_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -135,11 +143,10 @@ impl TweakCache {
             return Err(io::Error::other("Cache size exceeds limit"));
         }
 
-        let path = Path::new(TWEAK_CACHE_FILE);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temp_path = format!("{}.tmp", TWEAK_CACHE_FILE);
+        let temp_path = path.with_extension("json.tmp");
         fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
         fs::rename(&temp_path, path)?;
         self.dirty = false; // Clear dirty flag after successful save
@@ -147,7 +154,11 @@ impl TweakCache {
     }
 
     pub fn clear() -> io::Result<()> {
-        match fs::remove_file(TWEAK_CACHE_FILE) {
+        Self::clear_path(Path::new(TWEAK_CACHE_FILE))
+    }
+
+    fn clear_path(path: &Path) -> io::Result<()> {
+        match fs::remove_file(path) {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e),
@@ -261,7 +272,7 @@ static CONFIG_POWER: ProfileConfig = ProfileConfig {
 enum WriteResult {
     Success,
     Skipped,
-    PathMissing, // Path does not exist
+    PathMissing,         // Path does not exist
     GovernorUnsupported, // Governor not supported by available_governors
     Failed(String),
 }
@@ -272,7 +283,9 @@ fn write_value(path_str: &str, value: &str) -> WriteResult {
     if !path.exists() {
         return WriteResult::PathMissing;
     }
-    if let Ok(current) = fs::read_to_string(path) && current.trim() == value {
+    if let Ok(current) = fs::read_to_string(path)
+        && current.trim() == value
+    {
         return WriteResult::Skipped;
     }
     match fs::write(path, value) {
@@ -293,11 +306,15 @@ fn for_each_in_dir<F: FnMut(&str)>(dir: &str, mut f: F) {
 
 fn pick_best<'a>(available: &str, prio: &[&'a str]) -> Option<&'a str> {
     for p in prio {
-        if available.contains(p) {
+        if governor_is_available(available, p) {
             return Some(*p);
         }
     }
     None
+}
+
+fn governor_is_available(available: &str, target: &str) -> bool {
+    available.split_whitespace().any(|entry| entry == target)
 }
 
 /// Discovers CPU topology (little and all cores) and stores it in the cache.
@@ -305,7 +322,6 @@ fn discover_cpu_topology(cache: &mut TweakCache, _summary: &mut TweakApplySummar
     let current_cpuset_little = cache.entries.get("cpuset_little").cloned();
     let current_cpuset_all = cache.entries.get("cpuset_all").cloned();
 
-    // Only discover if not already cached
     if current_cpuset_little.is_none() || current_cpuset_all.is_none() {
         let mut little_cores = Vec::new();
         let mut all_cores = Vec::new();
@@ -343,8 +359,13 @@ fn format_cpu_list(cpus: &[u32]) -> String {
         .join(",")
 }
 
-fn apply_governors(profile: &TweakProfile, cache: &mut TweakCache, summary: &mut TweakApplySummary) {
-    const GOV_PRIO_BALANCE: &[&str] = &["schedutil", "simple_ondemand", "schedhorizon", "sugov_ext"];
+fn apply_governors(
+    profile: &TweakProfile,
+    cache: &mut TweakCache,
+    summary: &mut TweakApplySummary,
+) {
+    const GOV_PRIO_BALANCE: &[&str] =
+        &["schedutil", "simple_ondemand", "schedhorizon", "sugov_ext"];
 
     for_each_in_dir("/sys/devices/system/cpu/cpufreq", |name| {
         if !name.starts_with("policy") {
@@ -357,54 +378,53 @@ fn apply_governors(profile: &TweakProfile, cache: &mut TweakCache, summary: &mut
             name
         );
 
-        let mut target_gov_opt = None;
-        
-        // Always account for an attempted write for this governor path.
-        summary.attempted_writes += 1;
+        if !Path::new(&gov_path).exists() {
+            summary.record_write_result(WriteResult::PathMissing);
+            return;
+        }
 
-        if Path::new(&gov_path).exists() {
-            target_gov_opt = match profile {
-                TweakProfile::Balance => {
-                    if let Some(cached_gov) = cache.entries.get(&cache_key).cloned() {
-                        Some(cached_gov)
-                    } else if let Ok(avail) = fs::read_to_string(Path::new(&avail_path)) {
-                        if let Some(best) = pick_best(&avail, GOV_PRIO_BALANCE) {
-                            cache.insert(cache_key, best.to_string());
-                            Some(best.to_string())
+        let target_gov_opt = match profile {
+            TweakProfile::Balance => {
+                if let Some(cached_gov) = cache.entries.get(&cache_key).cloned() {
+                    Some(cached_gov)
+                } else if let Ok(avail) = fs::read_to_string(Path::new(&avail_path)) {
+                    if let Some(best) = pick_best(&avail, GOV_PRIO_BALANCE) {
+                        cache.insert(cache_key, best.to_string());
+                        Some(best.to_string())
+                    } else {
+                        summary.record_write_result(WriteResult::GovernorUnsupported);
+                        None
+                    }
+                } else {
+                    summary.record_write_result(WriteResult::GovernorUnsupported);
+                    None
+                }
+            }
+            TweakProfile::Performance | TweakProfile::Power => {
+                let target_gov_name = profile.to_string();
+                match fs::read_to_string(Path::new(&avail_path)) {
+                    Ok(avail) => {
+                        if governor_is_available(&avail, &target_gov_name) {
+                            Some(target_gov_name)
                         } else {
                             summary.record_write_result(WriteResult::GovernorUnsupported);
                             None
                         }
-                    } else {
-                        summary.record_write_result(WriteResult::GovernorUnsupported); // Could not determine best governor
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        summary.record_write_result(WriteResult::GovernorUnsupported);
+                        None
+                    }
+                    Err(e) => {
+                        summary.record_write_result(WriteResult::Failed(format!(
+                            "Failed to read available governors for {}: {}",
+                            name, e
+                        )));
                         None
                     }
                 }
-                TweakProfile::Performance | TweakProfile::Power => {
-                    let target_gov_name = profile.to_string(); // "performance" or "powersave"
-                    match fs::read_to_string(Path::new(&avail_path)) {
-                        Ok(avail) => {
-                            if avail.contains(&target_gov_name) {
-                                Some(target_gov_name)
-                            } else {
-                                summary.record_write_result(WriteResult::GovernorUnsupported);
-                                None
-                            }
-                        }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                            summary.record_write_result(WriteResult::PathMissing); // available_governors file is missing
-                            None
-                        }
-                        Err(e) => {
-                            summary.record_write_result(WriteResult::Failed(format!("Failed to read available governors for {}: {}", name, e)));
-                            None
-                        }
-                    }
-                }
-            };
-        } else {
-            summary.record_write_result(WriteResult::PathMissing); // Governor path itself does not exist
-        }
+            }
+        };
 
         if let Some(target_gov) = target_gov_opt {
             summary.record_write_result(write_value(&gov_path, &target_gov));
@@ -413,11 +433,10 @@ fn apply_governors(profile: &TweakProfile, cache: &mut TweakCache, summary: &mut
 
     for_each_in_dir("/sys/class/devfreq", |name| {
         let gov_path = format!("/sys/class/devfreq/{}/governor", name);
-        summary.attempted_writes += 1; // Account for attempted write to gov_path
         let target_gov = match profile {
             TweakProfile::Performance => "performance",
             TweakProfile::Power => "powersave",
-            TweakProfile::Balance => "powersave", // Defaulting to powersave for devfreq balance
+            TweakProfile::Balance => "powersave",
         };
         summary.record_write_result(write_value(&gov_path, target_gov));
     });
@@ -514,14 +533,13 @@ fn apply_block_dev_tweaks(
 
     for_each_in_dir("/sys/block", |name| {
         if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("zram") {
-            // These are considered and skipped (scheduler, ra_kb, nr_req = 3 writes)
-            summary.attempted_writes += 3;
-            summary.skipped_writes += 3;
+            summary.record_write_result(WriteResult::Skipped);
+            summary.record_write_result(WriteResult::Skipped);
+            summary.record_write_result(WriteResult::Skipped);
             return;
         }
 
         let cache_key = format!("block_scheduler_{}", name);
-        let mut needs_cache_save = false; // Separate flag for cache save within this loop
         let current_cached_sched = cache.entries.get(&cache_key).cloned();
 
         let target_sched_opt = if let Some(cached_sched) = current_cached_sched.clone() {
@@ -530,70 +548,68 @@ fn apply_block_dev_tweaks(
             && let Some(best) = pick_best(&avail, BLK_PRIO_BALANCE)
         {
             cache.insert(cache_key, best.to_string());
-            needs_cache_save = true;
             Some(best.to_string())
         } else {
             None
         };
 
-        summary.attempted_writes += 1; // Account for attempted write to scheduler path
         if let Some(target_sched) = target_sched_opt {
             summary.record_write_result(write_value(
                 &format!("/sys/block/{}/queue/scheduler", name),
                 &target_sched,
             ));
         } else {
-            summary.skipped_writes += 1; // Skipped due to unavailable scheduler
+            summary.record_write_result(WriteResult::Skipped);
         }
 
-        if needs_cache_save && let Err(e) = cache.save() {
-            summary.failed_writes += 1; // Cache save error
-            if summary.first_error.is_none() {
-                summary.first_error = Some(format!("Failed to save cache for block scheduler: {}", e));
-            }
-        }
-        
-        // Queue params
-        summary.record_write_result(write_value(&format!("/sys/block/{}/queue/read_ahead_kb", name), &cfg.read_ahead_kb.to_string()));
-        summary.record_write_result(write_value(&format!("/sys/block/{}/queue/nr_requests", name), &cfg.nr_requests.to_string()));
+        summary.record_write_result(write_value(
+            &format!("/sys/block/{}/queue/read_ahead_kb", name),
+            &cfg.read_ahead_kb.to_string(),
+        ));
+        summary.record_write_result(write_value(
+            &format!("/sys/block/{}/queue/nr_requests", name),
+            &cfg.nr_requests.to_string(),
+        ));
     });
 }
 
 fn apply_cpuset_tweaks(cache: &TweakCache, summary: &mut TweakApplySummary) {
-    // cpuset_little/all are discovered and cached. If not in cache, they are skipped.
-    // We already account for attempted writes in write_value.
     let num_little_paths = 4;
     let num_all_paths = 5;
 
     if let Some(little) = cache.entries.get("cpuset_little") {
-        summary.attempted_writes += num_little_paths;
         summary.record_write_result(write_value("/dev/cpuset/background/cpus", little));
         summary.record_write_result(write_value("/dev/cpuset/system-background/cpus", little));
-        summary.record_write_result(write_value("/dev/cpuset/background/sched_load_balance", "0"));
+        summary.record_write_result(write_value(
+            "/dev/cpuset/background/sched_load_balance",
+            "0",
+        ));
         summary.record_write_result(write_value(
             "/dev/cpuset/system-background/sched_load_balance",
             "0",
         ));
     } else {
-        // These paths are considered but skipped because the value was not in cache
-        summary.attempted_writes += num_little_paths;
-        summary.skipped_writes += num_little_paths;
+        for _ in 0..num_little_paths {
+            summary.record_write_result(WriteResult::Skipped);
+        }
     }
 
     if let Some(all) = cache.entries.get("cpuset_all") {
-        summary.attempted_writes += num_all_paths;
         summary.record_write_result(write_value("/dev/cpuset/foreground/cpus", all));
         summary.record_write_result(write_value("/dev/cpuset/top-app/cpus", all));
-        summary.record_write_result(write_value("/dev/cpuset/foreground/sched_load_balance", "1"));
+        summary.record_write_result(write_value(
+            "/dev/cpuset/foreground/sched_load_balance",
+            "1",
+        ));
         summary.record_write_result(write_value("/dev/cpuset/top-app/sched_load_balance", "1"));
         summary.record_write_result(write_value(
             "/dev/cpuset/top-app/sched_relax_domain_level",
             "1",
         ));
     } else {
-        // These paths are considered but skipped because the value was not in cache
-        summary.attempted_writes += num_all_paths;
-        summary.skipped_writes += num_all_paths;
+        for _ in 0..num_all_paths {
+            summary.record_write_result(WriteResult::Skipped);
+        }
     }
 }
 
@@ -607,7 +623,10 @@ fn apply_uclamp_tweaks(cfg: &ProfileConfig, summary: &mut TweakApplySummary) {
         "/dev/cpuctl/system-background/cpu.uclamp.min",
         "0",
     ));
-    summary.record_write_result(write_value("/dev/cpuctl/system-background/cpu.uclamp.max", "15"));
+    summary.record_write_result(write_value(
+        "/dev/cpuctl/system-background/cpu.uclamp.max",
+        "15",
+    ));
     summary.record_write_result(write_value("/dev/cpuctl/foreground/cpu.uclamp.min", "0"));
     summary.record_write_result(write_value("/dev/cpuctl/foreground/cpu.uclamp.max", "25"));
     summary.record_write_result(write_value(
@@ -639,10 +658,15 @@ pub fn apply_tweak_profile(profile: TweakProfile) -> TweakApplySummary {
     apply_cpuset_tweaks(&cache, &mut summary);
     apply_uclamp_tweaks(config, &mut summary);
 
-    if cache.dirty && let Err(e) = cache.save() {
+    if cache.dirty
+        && let Err(e) = cache.save()
+    {
         summary.failed_writes += 1; // This is a cache write error, not a sysfs write.
         if summary.first_error.is_none() {
-            summary.first_error = Some(format!("Failed to save cache after applying profile: {}", e));
+            summary.first_error = Some(format!(
+                "Failed to save cache after applying profile: {}",
+                e
+            ));
         }
     }
 
@@ -657,7 +681,9 @@ pub fn apply_tweak_profile(profile: TweakProfile) -> TweakApplySummary {
     };
 
     let mut last_written_status = None;
-    if let Err(e) = status.write_if_changed(&mut last_written_status) && summary.first_error.is_none() {
+    if let Err(e) = status.write_if_changed(&mut last_written_status)
+        && summary.first_error.is_none()
+    {
         summary.first_error = Some(format!("Failed to write tweak status: {}", e));
     }
 
@@ -668,177 +694,117 @@ pub fn apply_tweak_profile(profile: TweakProfile) -> TweakApplySummary {
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::ErrorKind;
-    use tempfile::tempdir;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    struct TestEnv {
-        pub dir: tempdir::TempDir,
-        pub sys_root: PathBuf,
-        pub proc_root: PathBuf,
-        pub dev_cpuset_root: PathBuf,
-        pub dev_cpuctl_root: PathBuf,
-        pub tweak_cache_file: PathBuf,
+    struct TempDir {
+        path: PathBuf,
     }
 
-    impl TestEnv {
+    impl TempDir {
         fn new() -> Self {
-            let dir = tempdir().unwrap();
-            let sys_root = dir.path().join("sys");
-            let proc_root = dir.path().join("proc");
-            let dev_cpuset_root = dir.path().join("dev/cpuset");
-            let dev_cpuctl_root = dir.path().join("dev/cpuctl");
-            let tweak_cache_file = dir.path().join("tweak_cache.json");
-
-            fs::create_dir_all(&sys_root).unwrap();
-            fs::create_dir_all(&proc_root).unwrap();
-            fs::create_dir_all(&dev_cpuset_root).unwrap();
-            fs::create_dir_all(&dev_cpuctl_root).unwrap();
-            
-            unsafe {
-                let ptr: *mut &str = &TWEAK_CACHE_FILE as *const _ as *mut &str;
-                *ptr = tweak_cache_file.to_str().unwrap();
-            }
-
-            TestEnv {
-                dir,
-                sys_root,
-                proc_root,
-                dev_cpuset_root,
-                dev_cpuctl_root,
-                tweak_cache_file,
-            }
+            let unique = format!(
+                "coreshift-policy-test-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
         }
 
-        fn create_sys_file(&self, relative_path: &str, content: &str) -> PathBuf {
-            let path = self.sys_root.join(relative_path);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, content).unwrap();
-            path
+        fn path(&self) -> &Path {
+            &self.path
         }
+    }
 
-        fn read_sys_file(&self, relative_path: &str) -> String {
-            fs::read_to_string(self.sys_root.join(relative_path)).unwrap()
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
         }
     }
 
     #[test]
     fn test_tweak_cache_clear_idempotent() {
-        let dir = tempdir().unwrap();
+        let dir = TempDir::new();
         let cache_path = dir.path().join("tweak_cache.json");
-        
+
         assert!(!cache_path.exists());
-        assert!(TweakCache::clear().is_ok());
+        assert!(TweakCache::clear_path(&cache_path).is_ok());
         assert!(!cache_path.exists());
 
         fs::write(&cache_path, "{}").unwrap();
         assert!(cache_path.exists());
-        assert!(TweakCache::clear().is_ok());
+        assert!(TweakCache::clear_path(&cache_path).is_ok());
         assert!(!cache_path.exists());
     }
 
     #[test]
-    fn test_cache_dirty_tracking_cpuset() {
-        let _env = TestEnv::new();
-        let mut cache = TweakCache::default();
-        let mut summary = TweakApplySummary::default();
-        
-        assert!(!cache.dirty);
-        assert!(cache.entries.is_empty());
+    fn test_cache_dirty_tracking_changed_entry() {
+        let mut cache = TweakCache {
+            schema_version: 1,
+            updated_ms: 1,
+            entries: HashMap::from([("cpuset_little".to_string(), "0-3".to_string())]),
+            dirty: false,
+        };
 
-        cache.insert("cpuset_little".to_string(), "0-3".to_string());
-        assert!(cache.dirty);
-
-        cache.save().unwrap();
         assert!(!cache.dirty);
 
         cache.insert("cpuset_little".to_string(), "0-2".to_string());
         assert!(cache.dirty);
-        cache.save().unwrap();
-        assert!(!cache.dirty);
-
-        cache.insert("cpuset_little".to_string(), "0-2".to_string());
-        assert!(!cache.dirty);
     }
 
     #[test]
-    fn test_discover_cpu_topology_updates_cache_and_summary() {
-        let env = TestEnv::new();
-        let mut cache = TweakCache::default();
-        let mut summary = TweakApplySummary::default();
+    fn test_cache_dirty_save_path_new_entry() {
+        let dir = TempDir::new();
+        let cache_path = dir.path().join("tweak_cache.json");
+        let mut cache = TweakCache {
+            schema_version: 1,
+            updated_ms: 1,
+            entries: HashMap::from([("cpuset_little".to_string(), "0-3".to_string())]),
+            dirty: false,
+        };
 
-        env.create_sys_file("devices/system/cpu/cpu0/cpu_capacity", "1024");
-        env.create_sys_file("devices/system/cpu/cpu1/cpu_capacity", "1024");
-        env.create_sys_file("devices/system/cpu/cpu2/cpu_capacity", "500");
-        env.create_sys_file("devices/system/cpu/cpu3/cpu_capacity", "500");
-        
-        fs::create_dir_all(env.sys_root.join("devices/system/cpu/cpufreq")).unwrap();
-        
-        discover_cpu_topology(&mut cache, &mut summary);
-
-        assert!(cache.dirty);
-        assert_eq!(cache.entries.get("cpuset_little").unwrap(), "2,3");
-        assert_eq!(cache.entries.get("cpuset_all").unwrap(), "0,1,2,3");
-        
-        cache.save().unwrap();
+        cache.save_to_path(&cache_path).unwrap();
         assert!(!cache.dirty);
 
-        let reloaded_cache = TweakCache::load();
-        assert_eq!(reloaded_cache.entries.get("cpuset_little").unwrap(), "2,3");
-        assert_eq!(reloaded_cache.entries.get("cpuset_all").unwrap(), "0,1,2,3");
-        
-        discover_cpu_topology(&mut cache, &mut summary);
-        assert!(!cache.dirty);
+        let mut reloaded = TweakCache::load_from_path(&cache_path);
+        reloaded.insert("cpuset_all".to_string(), "0-7".to_string());
+        assert!(reloaded.dirty);
     }
 
     #[test]
-    fn test_governor_validation_performance() {
-        let env = TestEnv::new();
-        let mut cache = TweakCache::default();
-        let mut summary = TweakApplySummary::default();
+    fn test_governor_validation_skips_unsupported_target() {
+        assert!(!governor_is_available("schedutil powersave", "performance"));
+    }
 
-        env.create_sys_file("devices/system/cpu/cpufreq/policy0/scaling_governor", "schedutil");
-        env.create_sys_file("sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors", "schedutil performance powersave");
-
-        apply_governors(&TweakProfile::Performance, &mut cache, &mut summary);
-        assert_eq!(summary.successful_writes, 1);
-        assert_eq!(env.read_sys_file("devices/system/cpu/cpufreq/policy0/scaling_governor").trim(), "performance");
-        assert_eq!(summary.attempted_writes, 1);
-        assert_eq!(summary.skipped_writes, 0);
-
-        summary = TweakApplySummary::default();
-        
-        env.create_sys_file("devices/system/cpu/cpufreq/policy1/scaling_governor", "schedutil");
-        env.create_sys_file("sys/devices/system/cpu/cpufreq/policy1/scaling_available_governors", "schedutil powersave");
-        
-        apply_governors(&TweakProfile::Performance, &mut cache, &mut summary);
-        assert_eq!(summary.successful_writes, 0);
-        assert_eq!(summary.skipped_writes, 1);
-        assert_eq!(summary.attempted_writes, 1);
-        assert_eq!(env.read_sys_file("devices/system/cpu/cpufreq/policy1/scaling_governor").trim(), "schedutil");
-        
-        summary = TweakApplySummary::default();
-
-        env.create_sys_file("devices/system/cpu/cpufreq/policy2/scaling_governor", "schedutil");
-        
-        apply_governors(&TweakProfile::Performance, &mut cache, &mut summary);
-        assert_eq!(summary.successful_writes, 0);
-        assert_eq!(summary.skipped_writes, 1);
-        assert_eq!(summary.attempted_writes, 1);
-        assert_eq!(env.read_sys_file("devices/system/cpu/cpufreq/policy2/scaling_governor").trim(), "schedutil");
+    #[test]
+    fn test_governor_validation_accepts_supported_target() {
+        assert!(governor_is_available(
+            "schedutil performance powersave",
+            "performance"
+        ));
     }
 
     #[test]
     fn test_summary_accounting_invariant() {
-        let env = TestEnv::new();
+        let dir = TempDir::new();
         let mut summary = TweakApplySummary::default();
-        
-        summary.record_write_result(write_value(&env.dir.path().join("non_existent").to_string_lossy(), "test"));
+
+        summary.record_write_result(write_value(
+            &dir.path().join("non_existent").to_string_lossy(),
+            "test",
+        ));
         assert_eq!(summary.attempted_writes, 1);
         assert_eq!(summary.skipped_writes, 1);
         assert_eq!(summary.successful_writes, 0);
         assert_eq!(summary.failed_writes, 0);
 
-        let existing_file = env.create_sys_file("test_file_initial", "initial");
+        let existing_file = dir.path().join("test_file_initial");
+        fs::write(&existing_file, "initial").unwrap();
         summary.record_write_result(write_value(&existing_file.to_string_lossy(), "initial"));
         assert_eq!(summary.attempted_writes, 2);
         assert_eq!(summary.skipped_writes, 2);
@@ -857,5 +823,9 @@ mod tests {
         assert_eq!(summary.skipped_writes, 2);
         assert_eq!(summary.failed_writes, 1);
         assert!(summary.first_error.is_some());
+        assert_eq!(
+            summary.attempted_writes,
+            summary.successful_writes + summary.skipped_writes + summary.failed_writes
+        );
     }
 }
