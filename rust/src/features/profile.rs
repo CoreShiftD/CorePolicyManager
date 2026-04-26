@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const CATEGORIES_FILE: &str = "/data/local/tmp/coreshift/profiles_category.json";
 pub const PROFILE_RULES_FILE: &str = "/data/local/tmp/coreshift/profile_rules.json";
 
-pub(crate) fn categories_file_path() -> PathBuf {
+pub fn categories_file_path() -> PathBuf {
     if let Some(path) = std::env::var_os("COREPOLICY_TEST_CATEGORIES_FILE") {
         return PathBuf::from(path);
     }
@@ -16,7 +16,7 @@ pub(crate) fn categories_file_path() -> PathBuf {
     PathBuf::from(CATEGORIES_FILE)
 }
 
-pub(crate) fn profile_rules_file_path() -> PathBuf {
+pub fn profile_rules_file_path() -> PathBuf {
     if let Some(path) = std::env::var_os("COREPOLICY_TEST_PROFILE_RULES_FILE") {
         return PathBuf::from(path);
     }
