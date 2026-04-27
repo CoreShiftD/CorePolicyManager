@@ -14,3 +14,9 @@ coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy", tag
 
 [patch."https://github.com/CoreShiftD/CoreShift-Policy"]
 coreshift-policy = { path = "../../CoreShift-Policy" }
+
+[patch."https://github.com/CoreShiftD/CoreShift-Engine"]
+coreshift-engine = { path = "../../CoreShift-Engine" }
+
+[patch."https://github.com/CoreShiftD/CoreShift-Core"]
+coreshift-core = { path = "../../CoreShift-Core" }
