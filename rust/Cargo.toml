@@ -1,6 +1,6 @@
 [package]
 name = "corepolicy-manager-wrapper"
-version = "0.1.2-beta1"
+version = "0.1.2-beta3"
 edition = "2024"
 license = "MPL-2.0"
 description = "Wrapper crate that packages the CoreShift Policy daemon for CorePolicyManager"
@@ -10,7 +10,7 @@ name = "corepolicy"
 path = "src/main.rs"
 
 [dependencies]
-coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy", tag = "v0.3.2-beta1" }
+coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy", tag = "v0.3.2-beta3" }
 
 [patch."https://github.com/CoreShiftD/CoreShift-Policy"]
 coreshift-policy = { path = "../../CoreShift-Policy" }

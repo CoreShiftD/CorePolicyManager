@@ -1,7 +1,7 @@
 name=CoreShift Policy
 id=coreshift_policy
-version=v0.3.2-beta1
-versionCode=3
+version=v0.3.2-beta3
+versionCode=5
 author=CoreShiftD
 description=Event-driven CoreShift policy daemon
 axeronPlugin=11000
