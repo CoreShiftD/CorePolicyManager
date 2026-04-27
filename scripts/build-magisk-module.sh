@@ -9,6 +9,7 @@ ASSET_DIR="$PROJECT_ROOT/app/src/main/assets/coreshift"
 PROFILES_ASSET="$ASSET_DIR/profiles_category.json"
 BLACKLIST_ASSET="$ASSET_DIR/foreground_blacklist.json"
 PROFILE_RULES_ASSET="$ASSET_DIR/profile_rules.json"
+MODULE_PROP="$PROJECT_ROOT/packaging/magisk/module.prop"
 
 if [ ! -f "$PROFILES_ASSET" ]; then
     echo "Missing required asset: $PROFILES_ASSET" >&2
@@ -24,6 +25,18 @@ if [ ! -f "$PROFILE_RULES_ASSET" ]; then
     echo "Missing required asset: $PROFILE_RULES_ASSET" >&2
     exit 1
 fi
+
+if [ ! -f "$MODULE_PROP" ]; then
+    echo "Missing required module metadata: $MODULE_PROP" >&2
+    exit 1
+fi
+
+MODULE_VERSION=$(sed -n 's/^version=//p' "$MODULE_PROP" | head -n 1)
+if [ -z "$MODULE_VERSION" ]; then
+    echo "Failed to read module version from $MODULE_PROP" >&2
+    exit 1
+fi
+ZIP_NAME="CoreShiftPolicy-${MODULE_VERSION}.zip"
 
 echo "Ensuring Rust targets are available..."
 rustup target add aarch64-linux-android armv7-linux-androideabi
@@ -46,7 +59,7 @@ mkdir -p "$DIST_DIR/bin/arm64-v8a"
 mkdir -p "$DIST_DIR/bin/armeabi-v7a"
 
 echo "Copying module files..."
-cp packaging/magisk/module.prop "$DIST_DIR/"
+cp "$MODULE_PROP" "$DIST_DIR/"
 cp packaging/magisk/service.sh "$DIST_DIR/"
 cp packaging/magisk/customize.sh "$DIST_DIR/"
 cp packaging/magisk/uninstall.sh "$DIST_DIR/"
@@ -74,11 +87,11 @@ chmod 0644 "$DIST_DIR/profile_rules.json"
 echo "Zipping module..."
 mkdir -p dist
 cd "$DIST_DIR"
-rm -f "../../CoreShiftPolicy-v0.1.0-preview.2.zip"
-zip -r "../../CoreShiftPolicy-v0.1.0-preview.2.zip" .
+rm -f "../../$ZIP_NAME"
+zip -r "../../$ZIP_NAME" .
 cd ../../..
 
-echo "Done: dist/CoreShiftPolicy-v0.1.0-preview.2.zip"
+echo "Done: dist/$ZIP_NAME"
 
 echo "Package contents:"
-unzip -l dist/CoreShiftPolicy-v0.1.0-preview.2.zip
+unzip -l "dist/$ZIP_NAME"
