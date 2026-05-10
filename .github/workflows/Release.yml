@@ -1,0 +1,237 @@
+name: Build & Release Magisk Module
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      ndk_channel:
+        description: "Android NDK selection"
+        type: choice
+        required: true
+        default: stable
+        options:
+          - stable
+          - latest
+          - latest-beta
+      artifact_name:
+        description: "Artifact name"
+        required: true
+        default: CorePolicyManager-latest
+
+permissions:
+  contents: write
+
+concurrency:
+  group: magisk-module-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_API: "28"
+  STABLE_NDK_VERSION: "29.0.13599879"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK_CHANNEL="${{ github.event_name == 'workflow_dispatch' && inputs.ndk_channel || 'stable' }}"
+
+          case "$NDK_CHANNEL" in
+            stable)
+              NDK_PACKAGE="ndk;$STABLE_NDK_VERSION"
+              ;;
+
+            latest)
+              NDK_PACKAGE="$(
+                sdkmanager --list |
+                  awk '{print $1}' |
+                  grep '^ndk;' |
+                  sort -V |
+                  tail -n 1
+              )"
+              ;;
+
+            latest-beta)
+              NDK_PACKAGE="$(
+                sdkmanager --list --channel=3 |
+                  awk '{print $1}' |
+                  grep '^ndk;' |
+                  grep -Ei 'beta|rc|canary|preview' |
+                  sort -V |
+                  tail -n 1 || true
+              )"
+
+              if [ -z "$NDK_PACKAGE" ]; then
+                NDK_PACKAGE="$(
+                  sdkmanager --list --channel=3 |
+                    awk '{print $1}' |
+                    grep '^ndk;' |
+                    sort -V |
+                    tail -n 1
+                )"
+              fi
+              ;;
+
+            *)
+              echo "Unknown ndk_channel: $NDK_CHANNEL"
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$NDK_PACKAGE" ]; then
+            echo "Failed to resolve Android NDK package for channel: $NDK_CHANNEL"
+            exit 1
+          fi
+
+          echo "NDK channel: $NDK_CHANNEL"
+          echo "Installing Android NDK package: $NDK_PACKAGE"
+
+          if [ "$NDK_CHANNEL" = "latest-beta" ]; then
+            sdkmanager --channel=3 "$NDK_PACKAGE"
+          else
+            sdkmanager "$NDK_PACKAGE"
+          fi
+
+          NDK_VER="${NDK_PACKAGE#ndk;}"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/$NDK_VER" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK_ROOT/ndk/$NDK_VER" >> "$GITHUB_ENV"
+          echo "SELECTED_NDK_CHANNEL=$NDK_CHANNEL" >> "$GITHUB_ENV"
+          echo "SELECTED_NDK_VERSION=$NDK_VER" >> "$GITHUB_ENV"
+          echo "LLVM_STRIP=$SDK_ROOT/ndk/$NDK_VER/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" >> "$GITHUB_ENV"
+
+      - name: Diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "SELECTED_NDK_CHANNEL=$SELECTED_NDK_CHANNEL"
+          echo "SELECTED_NDK_VERSION=$SELECTED_NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "LLVM_STRIP=$LLVM_STRIP"
+
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
+          "$LLVM_STRIP" --version
+
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          test -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${ANDROID_API}-clang"
+          test -x "$LLVM_STRIP"
+
+      - name: Sanity check stale references
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          stale_pattern='run --all\|v1.5.0-beta.1\|JSON profile\|CoreShift-.*[.]fresh'
+          ! grep -R "$stale_pattern" -n . \
+            --exclude-dir=.git \
+            --exclude-dir=.github \
+            --exclude-dir=target \
+            --exclude-dir=dist
+
+      - name: Build Magisk Module
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi${ANDROID_API}-clang"
+
+          chmod +x ./scripts/build-magisk-module.sh
+          ./scripts/build-magisk-module.sh
+
+      - name: Strip module binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+
+          zips=(dist/*.zip)
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo "No Magisk module zip found in dist"
+            exit 1
+          fi
+
+          for zip_path in "${zips[@]}"; do
+            echo "== Stripping ELF binaries inside $zip_path =="
+
+            work="$(mktemp -d)"
+            unzip -q "$zip_path" -d "$work"
+
+            stripped=0
+
+            while IFS= read -r file_path; do
+              if file "$file_path" | grep -q 'ELF'; then
+                echo "Before strip:"
+                ls -lh "$file_path"
+
+                "$LLVM_STRIP" --strip-unneeded "$file_path" || {
+                  echo "llvm-strip failed for $file_path"
+                  exit 1
+                }
+
+                echo "After strip:"
+                ls -lh "$file_path"
+
+                stripped=$((stripped + 1))
+              fi
+            done < <(find "$work" -type f -perm /111 -print)
+
+            if [ "$stripped" -eq 0 ]; then
+              echo "No executable ELF files found to strip in $zip_path"
+              exit 1
+            fi
+
+            rm -f "$zip_path"
+            (
+              cd "$work"
+              zip -qr "$GITHUB_WORKSPACE/$zip_path" .
+            )
+
+            rm -rf "$work"
+
+            echo "Stripped $stripped ELF file(s) in $zip_path"
+          done
+
+      - name: Verify dist
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ls -lah dist
+          test -n "$(find dist -maxdepth 1 -name '*.zip' -type f -print -quit)"
+          unzip -l dist/*.zip
+
+      - name: Upload latest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_name || 'CorePolicyManager-latest' }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Release stable tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

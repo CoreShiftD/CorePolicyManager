@@ -10,7 +10,7 @@ name = "corepolicy"
 path = "src/main.rs"
 
 [dependencies]
-coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy.git", tag = "v0.2.0" }
+coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy.git", tag = "v0.3.0" }
 
 [profile.release]
 opt-level = 3
