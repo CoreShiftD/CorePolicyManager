@@ -2,6 +2,7 @@
 
 WORK_DIR="/data/local/tmp/coreshift"
 CONFIG_FILE="$WORK_DIR/corepolicy.conf"
+GAMELIST_FILE="$WORK_DIR/gamelist.txt"
 
 ui_print "***********************************"
 ui_print "*        CoreShift Policy         *"
@@ -48,6 +49,15 @@ else
     chmod 0644 "$CONFIG_FILE"
 fi
 
+if [ -f "$GAMELIST_FILE" ]; then
+    ui_print "- Preserving existing gamelist.txt"
+else
+    ui_print "- Installing default gamelist.txt"
+    cp "$MODPATH/gamelist.txt" "$GAMELIST_FILE"
+    chmod 0644 "$GAMELIST_FILE"
+fi
+
 rm -f "$MODPATH/corepolicy.conf"
+rm -f "$MODPATH/gamelist.txt"
 
 ui_print "- Installation complete!"

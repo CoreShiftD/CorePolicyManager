@@ -12,7 +12,7 @@ dependencies = [
 [[package]]
 name = "coreshift-core"
 version = "0.2.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Core?tag=v0.2.0#79c618119a4730e4c3d6b95283899d121413a4a7"
+source = "git+https://github.com/CoreShiftD/CoreShift-Core?tag=v0.2.0#4557e331d81f8a4657a5b9380e0462f6aee78873"
 dependencies = [
  "libc",
 ]
@@ -20,15 +20,15 @@ dependencies = [
 [[package]]
 name = "coreshift-engine"
 version = "0.2.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Engine.git?tag=v0.2.0#7d6f15b0b821057d8dbb9e418867015835f7460f"
+source = "git+https://github.com/CoreShiftD/CoreShift-Engine.git?tag=v0.2.0#d7a4d5ccbb6ee9ce3bb984da60dec8ce672a4bd5"
 dependencies = [
  "coreshift-core",
 ]
 
 [[package]]
 name = "coreshift-policy"
-version = "0.3.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?tag=v0.3.0"
+version = "0.4.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?tag=v0.4.0#30f851fb70678747ae0406735eb1822d26ce926d"
 dependencies = [
  "coreshift-engine",
 ]

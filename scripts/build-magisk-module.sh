@@ -22,6 +22,7 @@ require_file packaging/magisk/service.sh
 require_file packaging/magisk/customize.sh
 require_file packaging/magisk/uninstall.sh
 require_file packaging/magisk/corepolicy.conf
+require_file packaging/magisk/gamelist.txt
 
 ./scripts/build-rust-android.sh
 
@@ -36,12 +37,14 @@ cp packaging/magisk/service.sh "$MODULE_DIR/"
 cp packaging/magisk/customize.sh "$MODULE_DIR/"
 cp packaging/magisk/uninstall.sh "$MODULE_DIR/"
 cp packaging/magisk/corepolicy.conf "$MODULE_DIR/"
+cp packaging/magisk/gamelist.txt "$MODULE_DIR/"
 
 cp "$RUST_TARGET_DIR/aarch64-linux-android/release/corepolicy" "$MODULE_DIR/bin/arm64-v8a/corepolicy"
 cp "$RUST_TARGET_DIR/armv7-linux-androideabi/release/corepolicy" "$MODULE_DIR/bin/armeabi-v7a/corepolicy"
 
 chmod 0644 "$MODULE_DIR/module.prop"
 chmod 0644 "$MODULE_DIR/corepolicy.conf"
+chmod 0644 "$MODULE_DIR/gamelist.txt"
 chmod 0755 "$MODULE_DIR/service.sh"
 chmod 0755 "$MODULE_DIR/customize.sh"
 chmod 0755 "$MODULE_DIR/uninstall.sh"
