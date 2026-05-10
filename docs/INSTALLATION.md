@@ -1,7 +1,7 @@
 # Installation and Updates
 
 Flash the generated `dist/CoreShiftPolicy-<version>.zip` through Magisk. For
-CorePolicyManager v0.3.0 this is `dist/CoreShiftPolicy-v0.3.0.zip`.
+CorePolicyManager v0.5.0 this is `dist/CoreShiftPolicy-v0.5.0.zip`.
 
 ## First Install
 
