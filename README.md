@@ -1,8 +1,8 @@
 # CorePolicyManager
 
-CorePolicyManager v0.2.0 is the Magisk/product wrapper for the current
-CoreShift-Policy release. It packages binaries, default config, and Magisk
-scripts. It does not reimplement `corepolicy` logic.
+CorePolicyManager is the Magisk/product wrapper for `corepolicy` v0.3.0 from
+CoreShift-Policy. It packages binaries, default config, and Magisk scripts. It
+does not reimplement `corepolicy` logic.
 
 ```text
 CorePolicyManager -> CoreShift-Policy -> CoreShift-Engine -> CoreShift-Core
@@ -27,5 +27,5 @@ CorePolicyManager -> CoreShift-Policy -> CoreShift-Engine -> CoreShift-Core
 Output:
 
 ```text
-dist/CoreShiftPolicy-v0.2.0.zip
+dist/CoreShiftPolicy-v0.3.0.zip
 ```

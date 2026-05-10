@@ -1,6 +1,6 @@
 [package]
 name = "corepolicy-manager-wrapper"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MPL-2.0"
 description = "Wrapper crate that packages the CoreShift Policy daemon for CorePolicyManager"

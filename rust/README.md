@@ -1,7 +1,7 @@
 # CorePolicyManager Rust Wrapper
 
-This crate builds the `corepolicy` binary from the configured CoreShift-Policy
-dependency tag for Android module packaging.
+This crate builds the `corepolicy` binary from the CoreShift-Policy `v0.3.0`
+tag for Android module packaging.
 
 The wrapper delegates command behavior to public Policy APIs and exposes:
 

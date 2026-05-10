@@ -37,6 +37,7 @@ corepolicy daemon
 
 Logs are appended to `/data/local/tmp/coreshift/service.log` and rotated to
 `service.log.1`. The service restarts the daemon with bounded backoff. It does
-not currently write a pidfile. Optional daemon informational logs are controlled
-by `log.*` keys in `/data/local/tmp/coreshift/corepolicy.conf`; there is no
-debug-file control path.
+not currently write a pidfile.
+
+If `/data/local/tmp/coreshift/debug` exists, the service also exports
+`COREPOLICY_STDOUT_LOG=1` and `COREPOLICY_DEBUG_LOG=1`.
