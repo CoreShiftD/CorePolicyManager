@@ -4,32 +4,33 @@ version = 4
 
 [[package]]
 name = "corepolicy-manager-wrapper"
-version = "0.7.0-dev"
+version = "0.7.0"
 dependencies = [
  "coreshift-policy",
 ]
 
 [[package]]
 name = "coreshift-core"
-version = "0.2.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Core?tag=v0.2.0#4557e331d81f8a4657a5b9380e0462f6aee78873"
+version = "0.3.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Core.git?tag=v0.3.0#9613da86d7a96082cf54b8d9f8f295f01250c4f7"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "coreshift-engine"
-version = "0.2.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Engine.git?tag=v0.2.0#d7a4d5ccbb6ee9ce3bb984da60dec8ce672a4bd5"
+version = "0.3.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Engine.git?tag=v0.3.0#196f65cf33307832b9a86d195a45a6ff26c60473"
 dependencies = [
  "coreshift-core",
 ]
 
 [[package]]
 name = "coreshift-policy"
-version = "0.6.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?branch=main#680a8bcfada7263131f5aa6fdcd0250bd8e7b1ba"
+version = "0.7.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?tag=v0.7.0#f8f1fe4a85465e80db65a4dcf3c65caee501f801"
 dependencies = [
+ "coreshift-core",
  "coreshift-engine",
 ]
 

@@ -1,6 +1,6 @@
 name=CoreShift Policy
 id=coreshift_policy
-version=v0.7.0-dev
+version=v0.7.0
 versionCode=700
 author=CoreShiftD
 description=CoreShift Policy daemon and preload services

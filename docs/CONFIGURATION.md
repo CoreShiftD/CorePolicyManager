@@ -48,6 +48,7 @@ corepolicy restart
 
 ```text
 socket=@coreshift
+socket.authorized_uids=0,2000
 preload.enabled=true
 preload.mode=auto
 preload.foreground=true
@@ -176,11 +177,15 @@ remove the configured stats file/temp file and request a running daemon to clear
 in-memory stats. Dirty stats flush after `stats.flush_every_changes` foreground
 changes or after `stats.flush_interval_s` seconds.
 
-CorePolicyManager v0.7.0-dev builds against the CoreShift-Policy main branch so
-packaged config and binary support match.
+CorePolicyManager v0.7.0 builds against the matching CoreShift-Policy v0.7.0
+tag so packaged config and binary support match.
 
 The service exports `COREPOLICY_CONFIG` to point at the runtime config path
 before starting `corepolicy daemon`.
+
+`socket.authorized_uids` controls local daemon socket access by Unix peer UID.
+The packaged default allows root and shell (`0,2000`). If a future manager app
+talks to the daemon directly, add that app UID to this comma-separated list.
 
 ## Update Behavior
 
