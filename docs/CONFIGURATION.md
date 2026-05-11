@@ -14,6 +14,30 @@ On first install, it is copied to:
 
 Existing user config is preserved on update.
 
+## Runtime Control
+
+The installed `corepolicy` command can query and control the running daemon:
+
+```bash
+corepolicy status
+corepolicy restart
+corepolicy watch
+```
+
+`corepolicy status` prints daemon key=value status lines. `corepolicy restart`
+asks the daemon to flush stats if possible and exit; `service.sh` respawns it.
+`corepolicy watch` streams foreground package changes.
+
+To update config on device, write a temporary file, atomically rename it, then
+restart the daemon:
+
+```bash
+cp /data/local/tmp/coreshift/corepolicy.conf /data/local/tmp/coreshift/corepolicy.conf.tmp
+# edit /data/local/tmp/coreshift/corepolicy.conf.tmp
+mv /data/local/tmp/coreshift/corepolicy.conf.tmp /data/local/tmp/coreshift/corepolicy.conf
+corepolicy restart
+```
+
 ## Default Config
 
 ```text
@@ -30,6 +54,9 @@ preload.adaptive.min_sessions=3
 preload.adaptive.min_foreground_ms=300000
 preload.adaptive.hot_sessions=10
 preload.adaptive.hot_foreground_ms=3600000
+preload.promote_art=false
+preload.promote_odex=false
+preload.promote_vdex=false
 stats.enabled=false
 stats.flush_every_changes=10
 stats.flush_interval_s=0
@@ -42,6 +69,9 @@ log.game=false
 game.enabled=false
 game.list_path=/data/local/tmp/coreshift/gamelist.txt
 game.preload_tier=hot
+game.preload.promote_art=true
+game.preload.promote_odex=true
+game.preload.promote_vdex=false
 game.intervention.enabled=false
 game.intervention.apply_on_start=true
 game.intervention.watch_list=false
@@ -56,8 +86,10 @@ game.intervention.dry_run=false
 
 Adaptive preload is disabled by default. When enabled, CoreShift-Policy uses
 local stats to keep unknown/cold apps on readahead and promote `.so` files to
-`MmapMadvise` for warm/hot apps. APK, split APK, DM, and OAT files stay on
-readahead in this release.
+`MmapMadvise` for warm/hot apps. `.so` is the safest mmap/madvise target.
+Experimental `.art`, `.odex`, and `.vdex` mmap/madvise promotion is available
+through `preload.promote_*`; the defaults keep those artifacts on readahead.
+APK, split APK, and DM files always stay on readahead.
 
 Stats are local foreground usage counters written by CoreShift-Policy when
 enabled. They collect package, uid, sessions, foreground_ms, and last_seen_ms in
@@ -76,6 +108,9 @@ Game-list mode is disabled by default. When `game.enabled=true`, Policy reads
 selection only. `game.preload_tier=warm` applies warm adaptive preload behavior;
 `game.preload_tier=hot` applies hot behavior. Non-game apps still use the normal
 adaptive stats/default policy.
+Game-list artifact promotion is controlled by `game.preload.promote_*`. Defaults
+promote `.art` and `.odex`; `.vdex` is disabled by default because it should be
+benchmarked first.
 
 Game interventions are also opt-in. They run only when both `game.enabled=true`
 and `game.intervention.enabled=true`, and only for packages loaded from
@@ -134,8 +169,8 @@ remove the configured stats file/temp file and request a running daemon to clear
 in-memory stats. Dirty stats flush after `stats.flush_every_changes` foreground
 changes or after `stats.flush_interval_s` seconds.
 
-CorePolicyManager v0.5.0 builds against CoreShift-Policy v0.5.0 so packaged
-config and binary support match.
+CorePolicyManager v0.6.0 builds against CoreShift-Policy v0.6.0 so
+packaged config and binary support match.
 
 The service exports `COREPOLICY_CONFIG` to point at the runtime config path
 before starting `corepolicy daemon`.

@@ -25,6 +25,18 @@ adb shell "printf 'GET\n' | socat - ABSTRACT-CONNECT:coreshift"
 
 Expected output is a package name or `unknown`.
 
+## Runtime Control
+
+```bash
+adb shell 'corepolicy status'
+adb shell 'corepolicy restart'
+adb shell 'corepolicy watch'
+```
+
+`status` prints daemon key=value lines. `restart` prints `restarting`; Magisk
+`service.sh` starts the daemon again. `watch` keeps running and prints foreground
+package changes until interrupted.
+
 ## Manual Preload
 
 ```bash

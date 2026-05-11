@@ -7,6 +7,52 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("status") if args.len() == 2 => {
+            let config = match coreshift_policy::load_daemon_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    eprintln!("corepolicy status: {err}");
+                    std::process::exit(1);
+                }
+            };
+            match coreshift_policy::daemon_request(&config.socket, "STATUS") {
+                Ok(status) => print!("{status}"),
+                Err(err) => {
+                    println!("daemon=offline");
+                    eprintln!("corepolicy status: daemon offline: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("restart") if args.len() == 2 => {
+            let config = match coreshift_policy::load_daemon_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    eprintln!("corepolicy restart: {err}");
+                    std::process::exit(1);
+                }
+            };
+            match coreshift_policy::daemon_request(&config.socket, "RESTART") {
+                Ok(reply) => print!("{reply}"),
+                Err(err) => {
+                    eprintln!("corepolicy restart: daemon offline: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("watch") if args.len() == 2 => {
+            let config = match coreshift_policy::load_daemon_config() {
+                Ok(config) => config,
+                Err(err) => {
+                    eprintln!("corepolicy watch: {err}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(err) = coreshift_policy::daemon_watch(&config.socket) {
+                eprintln!("corepolicy watch: daemon offline: {err}");
+                std::process::exit(1);
+            }
+        }
         Some("preload-package") if args.len() == 3 => {
             let config = match coreshift_policy::load_daemon_config() {
                 Ok(config) => config,
@@ -91,8 +137,15 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let targets = match installed_game_targets(&game_list) {
+                Ok(targets) => targets,
+                Err(err) => {
+                    eprintln!("corepolicy game-apply: {err}");
+                    std::process::exit(1);
+                }
+            };
             let report =
-                coreshift_policy::apply_game_interventions(&config.game, &game_list, &config.log);
+                coreshift_policy::apply_game_interventions(&config.game, &targets, &config.log);
             println!(
                 "game interventions attempted={} ok={} failed={} dry-run={}",
                 report.attempted, report.succeeded, report.failed, report.dry_run
@@ -139,9 +192,28 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: corepolicy daemon|preload-package <package>|stats|stats-reset|game-apply|game-list|game-revert <package>"
+                "usage: corepolicy daemon|status|restart|watch|preload-package <package>|stats|stats-reset|game-apply|game-list|game-revert <package>"
             );
             std::process::exit(2);
         }
     }
+}
+
+fn installed_game_targets(
+    game_list: &coreshift_policy::GameList,
+) -> std::io::Result<coreshift_policy::GameList> {
+    let foreground = coreshift_policy::AndroidForegroundConfig::default();
+    let argv = coreshift_policy::package_install_list_argv(&foreground.cmd_path, 0);
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other("cmd package list packages failed"));
+    }
+    let packages = coreshift_policy::parse_android_package_list_stdout(&output.stdout)
+        .into_iter()
+        .filter(|entry| game_list.contains(&entry.package))
+        .map(|entry| entry.package)
+        .collect();
+    Ok(coreshift_policy::GameList::from_packages(packages))
 }
