@@ -18,10 +18,11 @@ Verify config and daemon state:
 ```bash
 adb shell 'cat /data/local/tmp/coreshift/corepolicy.conf'
 adb shell 'tail -n 100 /data/local/tmp/coreshift/service.log'
+adb shell 'corepolicy status'
 ```
 
-The default socket is abstract `@coreshift`; test with
-`ABSTRACT-CONNECT:coreshift`.
+The default socket is abstract `@coreshift`; `corepolicy status` is the
+supported user-facing check.
 
 ## Stale Config
 
@@ -31,7 +32,7 @@ inspect `/data/local/tmp/coreshift/corepolicy.conf` and merge new keys manually.
 ## Permission Errors
 
 Android may deny optional install-directory scans. Policy reports those as skips
-where possible. Check service logs and manual `preload-package` output.
+where possible. Check service logs and `corepolicy status`.
 
 ## Module Update Behavior
 

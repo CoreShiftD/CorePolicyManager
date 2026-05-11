@@ -22,11 +22,17 @@ The installed `corepolicy` command can query and control the running daemon:
 corepolicy status
 corepolicy restart
 corepolicy watch
+corepolicy stats
+corepolicy stats reset
+corepolicy gamelist
 ```
 
 `corepolicy status` prints daemon key=value status lines. `corepolicy restart`
 asks the daemon to flush stats if possible and exit; `service.sh` respawns it.
-`corepolicy watch` streams foreground package changes.
+`corepolicy watch` streams foreground package changes. `corepolicy stats`
+prints foreground counters, `corepolicy stats reset` clears them, and
+`corepolicy gamelist` prints installed packages that also appear in the
+configured gamelist.
 
 To update config on device, write a temporary file, atomically rename it, then
 restart the daemon:
@@ -131,8 +137,9 @@ device_config delete game_overlay <package>
 cmd game mode standard <package>
 ```
 
-`corepolicy game-revert <package>` reverts only when the package exists in the
-managed state file.
+Manual reverts should use Android's `device_config` and `cmd game` commands
+shown above. CoreShift-managed automatic reverts only touch packages that exist
+in the managed state file.
 
 `game.intervention.watch_list=true` enables an inotify watch on the parent
 directory of `game.list_path`. Atomic updates are supported: write a temp file
@@ -164,12 +171,12 @@ APK manifest parsing, string scanning, auto-detection, wildcard matching, or
 network access at runtime. The external Encore list is only used as the packaged
 seed/reference.
 
-Use `corepolicy stats` to print the current TSV and `corepolicy stats-reset` to
+Use `corepolicy stats` to print the current TSV and `corepolicy stats reset` to
 remove the configured stats file/temp file and request a running daemon to clear
 in-memory stats. Dirty stats flush after `stats.flush_every_changes` foreground
 changes or after `stats.flush_interval_s` seconds.
 
-CorePolicyManager v0.6.0 builds against CoreShift-Policy v0.6.0 so
+CorePolicyManager v0.7.0-dev builds against the CoreShift-Policy main branch so
 packaged config and binary support match.
 
 The service exports `COREPOLICY_CONFIG` to point at the runtime config path

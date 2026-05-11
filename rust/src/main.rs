@@ -1,219 +1,262 @@
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
-    match args.as_slice().get(1).map(String::as_str) {
-        Some("daemon") if args.len() == 2 => {
-            if let Err(err) = coreshift_policy::run_corepolicy_daemon() {
-                eprintln!("corepolicy daemon: {err}");
-                std::process::exit(1);
-            }
+    let result = match args.as_slice().get(1).map(String::as_str) {
+        Some("daemon") if args.len() == 2 => run_daemon(),
+        Some("status") if args.len() == 2 => status(),
+        Some("restart") if args.len() == 2 => restart(),
+        Some("watch") if args.len() == 2 => watch(),
+        Some("stats") if args.len() == 2 => stats(),
+        Some("stats") if args.get(2).map(String::as_str) == Some("reset") && args.len() == 3 => {
+            stats_reset("corepolicy stats reset")
         }
-        Some("status") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy status: {err}");
-                    std::process::exit(1);
-                }
-            };
-            match coreshift_policy::daemon_request(&config.socket, "STATUS") {
-                Ok(status) => print!("{status}"),
-                Err(err) => {
-                    println!("daemon=offline");
-                    eprintln!("corepolicy status: daemon offline: {err}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Some("restart") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy restart: {err}");
-                    std::process::exit(1);
-                }
-            };
-            match coreshift_policy::daemon_request(&config.socket, "RESTART") {
-                Ok(reply) => print!("{reply}"),
-                Err(err) => {
-                    eprintln!("corepolicy restart: daemon offline: {err}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Some("watch") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy watch: {err}");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(err) = coreshift_policy::daemon_watch(&config.socket) {
-                eprintln!("corepolicy watch: daemon offline: {err}");
-                std::process::exit(1);
-            }
-        }
+        Some("stats-reset") if args.len() == 2 => stats_reset("corepolicy stats-reset"),
+        Some("gamelist") if args.len() == 2 => gamelist(),
+        Some("debug") => debug(&args),
         Some("preload-package") if args.len() == 3 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy preload-package: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let game_classifier = match coreshift_policy::load_game_classifier(&config.game) {
-                Ok(classifier) => classifier,
-                Err(err) => {
-                    eprintln!("corepolicy preload-package: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let foreground = coreshift_policy::AndroidForegroundConfig::default();
-            match coreshift_policy::preload_package_by_name_with_game(
-                &args[2],
-                &foreground,
-                &config.preload,
-                &game_classifier,
-            ) {
-                Ok(report) => {
-                    println!(
-                        "preloaded {} bytes from {} files ({} skipped, {} failed)",
-                        report.preloaded_bytes(),
-                        report.preloaded_files(),
-                        report.skipped_count(),
-                        report.failed_count()
-                    );
-                    for skipped in report.report.skipped {
-                        eprintln!("skip {}: {}", skipped.path.display(), skipped.error);
-                    }
-                }
-                Err(err) => {
-                    eprintln!("corepolicy preload-package: {err}");
-                    std::process::exit(1);
-                }
-            }
+            preload_package(&args[2], "corepolicy preload-package")
         }
-        Some("stats") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy stats: {err}");
-                    std::process::exit(1);
-                }
-            };
-            match coreshift_policy::read_stats(&config.stats.path) {
-                Ok(stats) => print!("{}", coreshift_policy::format_stats(&stats)),
-                Err(err) => {
-                    eprintln!("corepolicy stats: {err}");
-                    std::process::exit(1);
-                }
-            }
+        Some("game-apply") if args.len() == 2 => game_apply("corepolicy game-apply"),
+        Some("game-list") if args.len() == 2 => gamelist_raw("corepolicy game-list"),
+        Some("game-revert") if args.len() == 3 => game_revert(&args[2], "corepolicy game-revert"),
+        _ => usage(),
+    };
+
+    if let Err(code) = result {
+        std::process::exit(code);
+    }
+}
+
+fn debug(args: &[String]) -> Result<(), i32> {
+    match args.get(2).map(String::as_str) {
+        Some("preload-package") if args.len() == 4 => {
+            preload_package(&args[3], "corepolicy debug preload-package")
         }
-        Some("stats-reset") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy stats-reset: {err}");
-                    std::process::exit(1);
-                }
-            };
-            if let Err(err) = coreshift_policy::reset_stats_path(&config.stats.path) {
-                eprintln!("corepolicy stats-reset: {err}");
-                std::process::exit(1);
-            }
+        Some("game-apply") if args.len() == 3 => game_apply("corepolicy debug game-apply"),
+        Some("game-revert") if args.len() == 4 => {
+            game_revert(&args[3], "corepolicy debug game-revert")
         }
-        Some("game-apply") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy game-apply: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let game_list = match coreshift_policy::load_game_list(&config.game.list_path) {
-                Ok(list) => list,
-                Err(err) => {
-                    eprintln!("corepolicy game-apply: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let targets = match installed_game_targets(&game_list) {
-                Ok(targets) => targets,
-                Err(err) => {
-                    eprintln!("corepolicy game-apply: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let report =
-                coreshift_policy::apply_game_interventions(&config.game, &targets, &config.log);
+        Some("gamelist-raw") if args.len() == 3 => gamelist_raw("corepolicy debug gamelist-raw"),
+        _ => usage(),
+    }
+}
+
+fn run_daemon() -> Result<(), i32> {
+    if let Err(err) = coreshift_policy::run_corepolicy_daemon() {
+        eprintln!("corepolicy daemon: {err}");
+        return Err(1);
+    }
+    Ok(())
+}
+
+fn status() -> Result<(), i32> {
+    let config = load_config("corepolicy status")?;
+    match coreshift_policy::daemon_request(&config.socket, "STATUS") {
+        Ok(status) => print!("{status}"),
+        Err(err) => {
+            println!("daemon=offline");
+            eprintln!("corepolicy status: daemon offline: {err}");
+            return Err(1);
+        }
+    }
+    Ok(())
+}
+
+fn restart() -> Result<(), i32> {
+    let config = load_config("corepolicy restart")?;
+    match coreshift_policy::daemon_request(&config.socket, "RESTART") {
+        Ok(reply) => print!("{reply}"),
+        Err(err) => {
+            eprintln!("corepolicy restart: daemon offline: {err}");
+            return Err(1);
+        }
+    }
+    Ok(())
+}
+
+fn watch() -> Result<(), i32> {
+    let config = load_config("corepolicy watch")?;
+    if let Err(err) = coreshift_policy::daemon_watch(&config.socket) {
+        eprintln!("corepolicy watch: daemon offline: {err}");
+        return Err(1);
+    }
+    Ok(())
+}
+
+fn preload_package(package: &str, label: &str) -> Result<(), i32> {
+    let config = load_config(label)?;
+    let game_classifier = match coreshift_policy::load_game_classifier(&config.game) {
+        Ok(classifier) => classifier,
+        Err(err) => {
+            eprintln!("{label}: {err}");
+            return Err(1);
+        }
+    };
+    let foreground = coreshift_policy::AndroidForegroundConfig::default();
+    match coreshift_policy::preload_package_by_name_with_game(
+        package,
+        &foreground,
+        &config.preload,
+        &game_classifier,
+    ) {
+        Ok(report) => {
             println!(
-                "game interventions attempted={} ok={} failed={} dry-run={}",
-                report.attempted, report.succeeded, report.failed, report.dry_run
+                "preloaded {} bytes from {} files ({} skipped, {} failed)",
+                report.preloaded_bytes(),
+                report.preloaded_files(),
+                report.skipped_count(),
+                report.failed_count()
             );
-        }
-        Some("game-list") if args.len() == 2 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy game-list: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let game_list = match coreshift_policy::load_game_list(&config.game.list_path) {
-                Ok(list) => list,
-                Err(err) => {
-                    eprintln!("corepolicy game-list: {err}");
-                    std::process::exit(1);
-                }
-            };
-            for package in game_list.packages() {
-                println!(
-                    "{} tier={:?} intervention={}",
+            for skipped in report.report.skipped {
+                eprintln!("skip {}: {}", skipped.path.display(), skipped.error);
+            }
+            if config.log.preload_enabled() {
+                eprintln!(
+                    "preload-package package={} tier={} source={}",
                     package,
-                    config.game.preload_tier,
-                    config.game.intervention.mode.as_str()
+                    report.adaptive_tier.as_str(),
+                    report.tier_source.as_str()
                 );
+                for target in report.targets {
+                    eprintln!(
+                        "preload-target method={:?} len={} path={}",
+                        target.method,
+                        target.len,
+                        target.path.display()
+                    );
+                }
             }
         }
-        Some("game-revert") if args.len() == 3 => {
-            let config = match coreshift_policy::load_daemon_config() {
-                Ok(config) => config,
-                Err(err) => {
-                    eprintln!("corepolicy game-revert: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let report =
-                coreshift_policy::revert_game_intervention(&config.game, &args[2], &config.log);
-            println!(
-                "game revert attempted={} ok={} failed={} dry-run={}",
-                report.attempted, report.succeeded, report.failed, report.dry_run
-            );
+        Err(err) => {
+            eprintln!("{label}: {err}");
+            return Err(1);
         }
-        _ => {
-            eprintln!(
-                "usage: corepolicy daemon|status|restart|watch|preload-package <package>|stats|stats-reset|game-apply|game-list|game-revert <package>"
-            );
-            std::process::exit(2);
+    }
+    Ok(())
+}
+
+fn stats() -> Result<(), i32> {
+    let config = load_config("corepolicy stats")?;
+    match coreshift_policy::read_stats(&config.stats.path) {
+        Ok(stats) => print!("{}", coreshift_policy::format_stats(&stats)),
+        Err(err) => {
+            eprintln!("corepolicy stats: {err}");
+            return Err(1);
+        }
+    }
+    Ok(())
+}
+
+fn stats_reset(label: &str) -> Result<(), i32> {
+    let config = load_config(label)?;
+    if let Err(err) = coreshift_policy::reset_stats_path(&config.stats.path) {
+        eprintln!("{label}: {err}");
+        return Err(1);
+    }
+    Ok(())
+}
+
+fn gamelist() -> Result<(), i32> {
+    let config = load_config("corepolicy gamelist")?;
+    let game_list = load_game_list(&config.game.list_path, "corepolicy gamelist")?;
+    let foreground_config = android_foreground_config_from_env();
+    let foreground =
+        match coreshift_policy::AndroidForegroundPackageProvider::new(foreground_config) {
+            Ok(provider) => provider,
+            Err(err) => {
+                eprintln!("corepolicy gamelist: {err}");
+                return Err(1);
+            }
+        };
+    let targets = foreground.cached_installed_game_targets(&game_list);
+    for package in targets.packages() {
+        println!("{package}");
+    }
+    if targets.is_empty() {
+        eprintln!("corepolicy gamelist: no installed gamelist packages");
+    }
+    Ok(())
+}
+
+fn game_apply(label: &str) -> Result<(), i32> {
+    let config = load_config(label)?;
+    let game_list = load_game_list(&config.game.list_path, label)?;
+    let foreground_config = android_foreground_config_from_env();
+    let foreground =
+        match coreshift_policy::AndroidForegroundPackageProvider::new(foreground_config) {
+            Ok(provider) => provider,
+            Err(err) => {
+                eprintln!("{label}: {err}");
+                return Err(1);
+            }
+        };
+    let targets = foreground.cached_installed_game_targets(&game_list);
+    let report = coreshift_policy::apply_game_interventions(&config.game, &targets, &config.log);
+    println!(
+        "game interventions attempted={} ok={} failed={} dry-run={}",
+        report.attempted, report.succeeded, report.failed, report.dry_run
+    );
+    Ok(())
+}
+
+fn gamelist_raw(label: &str) -> Result<(), i32> {
+    let config = load_config(label)?;
+    let game_list = load_game_list(&config.game.list_path, label)?;
+    for package in game_list.packages() {
+        println!(
+            "{} tier={:?} intervention={}",
+            package,
+            config.game.preload_tier,
+            config.game.intervention.mode.as_str()
+        );
+    }
+    Ok(())
+}
+
+fn game_revert(package: &str, label: &str) -> Result<(), i32> {
+    let config = load_config(label)?;
+    let report = coreshift_policy::revert_game_intervention(&config.game, package, &config.log);
+    println!(
+        "game revert attempted={} ok={} failed={} dry-run={}",
+        report.attempted, report.succeeded, report.failed, report.dry_run
+    );
+    Ok(())
+}
+
+fn load_config(label: &str) -> Result<coreshift_policy::DaemonConfig, i32> {
+    match coreshift_policy::load_daemon_config() {
+        Ok(config) => Ok(config),
+        Err(err) => {
+            eprintln!("{label}: {err}");
+            Err(1)
         }
     }
 }
 
-fn installed_game_targets(
-    game_list: &coreshift_policy::GameList,
-) -> std::io::Result<coreshift_policy::GameList> {
-    let foreground = coreshift_policy::AndroidForegroundConfig::default();
-    let argv = coreshift_policy::package_install_list_argv(&foreground.cmd_path, 0);
-    let output = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .output()?;
-    if !output.status.success() {
-        return Err(std::io::Error::other("cmd package list packages failed"));
+fn load_game_list(path: &std::path::Path, label: &str) -> Result<coreshift_policy::GameList, i32> {
+    match coreshift_policy::load_game_list(path) {
+        Ok(list) => Ok(list),
+        Err(err) => {
+            eprintln!("{label}: {err}");
+            Err(1)
+        }
     }
-    let packages = coreshift_policy::parse_android_package_list_stdout(&output.stdout)
-        .into_iter()
-        .filter(|entry| game_list.contains(&entry.package))
-        .map(|entry| entry.package)
-        .collect();
-    Ok(coreshift_policy::GameList::from_packages(packages))
+}
+
+fn android_foreground_config_from_env() -> coreshift_policy::AndroidForegroundConfig {
+    let mut config = coreshift_policy::AndroidForegroundConfig::default();
+    if let Ok(path) = std::env::var("COREPOLICY_ANDROID_CMD_PATH") {
+        config.cmd_path = path.into();
+    }
+    if let Ok(path) = std::env::var("COREPOLICY_ANDROID_BLOCKLIST_PATH") {
+        config.blocklist_path = path.into();
+    }
+    if let Ok(path) = std::env::var("COREPOLICY_ANDROID_PACKAGES_XML_PATH") {
+        config.packages_xml_path = path.into();
+    }
+    config
+}
+
+fn usage() -> Result<(), i32> {
+    eprintln!("usage: corepolicy status|restart|watch|stats [reset]|gamelist|debug <command>");
+    Err(2)
 }

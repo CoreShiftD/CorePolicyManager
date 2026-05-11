@@ -17,33 +17,22 @@ adb shell 'tail -n 100 /data/local/tmp/coreshift/service.log'
 Expected logs include daemon start lines and foreground/preload messages when
 activity occurs.
 
-## Query Socket
-
-```bash
-adb shell "printf 'GET\n' | socat - ABSTRACT-CONNECT:coreshift"
-```
-
-Expected output is a package name or `unknown`.
-
 ## Runtime Control
 
 ```bash
 adb shell 'corepolicy status'
 adb shell 'corepolicy restart'
 adb shell 'corepolicy watch'
+adb shell 'corepolicy stats'
+adb shell 'corepolicy stats reset'
+adb shell 'corepolicy gamelist'
 ```
 
 `status` prints daemon key=value lines. `restart` prints `restarting`; Magisk
 `service.sh` starts the daemon again. `watch` keeps running and prints foreground
-package changes until interrupted.
-
-## Manual Preload
-
-```bash
-adb shell 'corepolicy preload-package com.example.app'
-```
-
-Expected output summarizes preloaded bytes, files, skipped entries, and failures.
+package changes until interrupted. `stats` prints foreground counters;
+`stats reset` clears them. `gamelist` prints installed packages that also appear
+in the configured gamelist.
 
 ## Check Binary
 
