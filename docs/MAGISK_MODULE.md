@@ -24,7 +24,8 @@ the user does not already have them. User edits are preserved on update.
 
 ## Service Flow
 
-`service.sh` waits for boot completion, creates the runtime directory, exports:
+`service.sh` waits for boot completion, creates the runtime directory, waits
+for SystemUI readiness, and exports:
 
 ```text
 COREPOLICY_CONFIG=/data/local/tmp/coreshift/corepolicy.conf
@@ -45,6 +46,13 @@ not currently write a pidfile. Optional daemon informational logs are controlled
 by `log.enabled` in `/data/local/tmp/coreshift/corepolicy.conf`; there is no
 debug-file control path.
 
+After `service.sh` starts the daemon, Policy may run a one-shot boot tuning
+worker when `boot.tuning=true`. That worker is best-effort, uses direct Android
+property APIs where available plus absolute `/system/bin/*` command paths,
+reuses or generates `/data/local/tmp/coreshift/wm.txt` for window logging tag
+cleanup, and exits without blocking the foreground watcher. Same-boot reruns are
+gated by the volatile property `debug.coreshift.boot_tuning=completed`.
+
 Game-list classification is controlled by `game.*` keys in `corepolicy.conf` and
 the user-editable `/data/local/tmp/coreshift/gamelist.txt`. It affects preload
 tier selection, an internal one-shot game trim on confirmed game foreground
@@ -55,4 +63,6 @@ only, and downscale changes require app restart. Optional inotify watching
 reconciles atomic gamelist replacements. Managed reverts only touch packages
 recorded in `/data/local/tmp/coreshift/game_interventions.tsv`, which keeps its
 legacy filename for compatibility while storing managed game downscale state.
-ROM/OEM/Android support varies.
+ROM/OEM/Android support varies. CoreShift intentionally does not apply package
+idle sweeps, backup disabling, statusbar disable flags, or memory-factor
+changes by default.

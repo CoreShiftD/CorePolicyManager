@@ -5,6 +5,9 @@ CONFIG_FILE="$WORK_DIR/corepolicy.conf"
 LOG_FILE="$WORK_DIR/service.log"
 LOG_ROTATED="$WORK_DIR/service.log.1"
 MAX_LOG_BYTES=262144
+GETPROP_BIN="/system/bin/getprop"
+PIDOF_BIN="/system/bin/pidof"
+SLEEP_BIN="/system/bin/sleep"
 
 RESTART_DELAY_SECS=5
 RESTART_DELAY_MAX_SECS=60
@@ -32,8 +35,8 @@ log_line() {
     echo "$(timestamp) $*" >> "$LOG_FILE"
 }
 
-until [ "$(getprop sys.boot_completed)" = "1" ]; do
-    sleep 5
+until [ "$("$GETPROP_BIN" sys.boot_completed 2>/dev/null)" = "1" ]; do
+    "$SLEEP_BIN" 5
 done
 
 mkdir -p "$WORK_DIR"
@@ -42,6 +45,14 @@ chmod 0755 "$WORK_DIR"
 export COREPOLICY_CONFIG="$CONFIG_FILE"
 
 rotate_logs
+
+log_line "Boot completed; waiting for SystemUI"
+
+until "$PIDOF_BIN" com.android.systemui >/dev/null 2>&1; do
+    "$SLEEP_BIN" 2
+done
+
+log_line "SystemUI ready; starting daemon"
 
 if [ ! -x "$DAEMON" ]; then
     log_line "CoreShift Policy daemon missing or not executable: $DAEMON"
@@ -74,7 +85,7 @@ while true; do
     rotate_logs
     log_line "CoreShift Policy daemon exited code=$exit_code runtime_secs=$runtime_secs restarting_in=$delay"
 
-    sleep "$delay"
+    "$SLEEP_BIN" "$delay"
 
     if [ "$runtime_secs" -ge "$RESTART_RESET_RUNTIME_SECS" ] 2>/dev/null; then
         delay="$RESTART_DELAY_SECS"

@@ -1,7 +1,7 @@
 # Installation and Updates
 
 Flash the generated `dist/CoreShiftPolicy-<version>.zip` through Magisk. For
-CorePolicyManager v1.0.0 this is `dist/CoreShiftPolicy-v1.0.0.zip`.
+CorePolicyManager v1.1.0 this is `dist/CoreShiftPolicy-v1.1.0.zip`.
 
 ## First Install
 
@@ -11,7 +11,8 @@ On first install:
 - `/data/local/tmp/coreshift` is created.
 - Default `corepolicy.conf` is installed if no runtime config exists.
 - Default `gamelist.txt` is installed if no runtime gamelist exists.
-- `service.sh` starts the internal `corepolicy daemon` after boot.
+- `service.sh` waits for boot completion and SystemUI readiness, then starts the
+  internal `corepolicy daemon`.
 
 ## Update
 

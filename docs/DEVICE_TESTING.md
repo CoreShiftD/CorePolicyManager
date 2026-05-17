@@ -15,8 +15,8 @@ Expected config includes only the compact public keys from
 adb shell 'tail -n 100 /data/local/tmp/coreshift/service.log'
 ```
 
-Expected logs include daemon start lines and foreground/preload messages when
-activity occurs.
+Expected logs include daemon start lines, one-shot `boot-tuning` summary lines,
+and foreground/preload messages when activity occurs.
 
 ## Runtime Control
 

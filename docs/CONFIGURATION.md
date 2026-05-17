@@ -18,6 +18,8 @@ game.preload_tier=hot
 game.preload.promote_artifacts=true
 game.downscale.enabled=true
 game.downscale.factor=0.9
+boot.tuning=true
+render.backend=auto
 ```
 
 Unknown keys are rejected.
@@ -35,6 +37,7 @@ These files are internal and are not configurable:
 <daemon-home>/gamelist.txt
 <daemon-home>/stats.tsv
 <daemon-home>/game_interventions.tsv
+<daemon-home>/wm.txt
 ```
 
 ## Socket
@@ -57,3 +60,10 @@ configurable UID allowlist.
   as `package`, `start_time_ms`, `last_time_ms`, `foreground_ms`, `sessions`.
 - `game_interventions.tsv` keeps its legacy filename for compatibility, but it
   stores managed game downscale state.
+- `boot.tuning=true` enables one-shot best-effort boot cleanup after the daemon
+  starts.
+- `render.backend=auto` preserves the current renderer family and completes the
+  matching RenderEngine props. `skiagl` and `skiavk` override it explicitly.
+- Boot tuning uses the volatile `debug.coreshift.boot_tuning=completed` gate,
+  which resets after reboot.
+- `wm.txt` caches window logging tags parsed from `/system/bin/dumpsys window`.
