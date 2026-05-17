@@ -24,8 +24,8 @@ the user does not already have them. User edits are preserved on update.
 
 ## Service Flow
 
-`service.sh` waits for boot completion, creates the runtime directory, waits
-for SystemUI readiness, and exports:
+`service.sh` creates the runtime directory, waits for SystemUI readiness, and
+exports:
 
 ```text
 COREPOLICY_CONFIG=/data/local/tmp/coreshift/corepolicy.conf
