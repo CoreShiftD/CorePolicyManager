@@ -9,14 +9,14 @@ The packaged example config exposes only the small user-facing surface:
 
 ```text
 preload.mode=auto
-preload.adaptive=false
-preload.promote_artifacts=false
-stats.enabled=false
-log.enabled=false
-game.enabled=false
+preload.adaptive=true
+preload.promote_artifacts=true
+stats.enabled=true
+log.enabled=true
+game.enabled=true
 game.preload_tier=hot
 game.preload.promote_artifacts=true
-game.downscale.enabled=false
+game.downscale.enabled=true
 game.downscale.factor=0.9
 ```
 
@@ -48,8 +48,12 @@ configurable UID allowlist.
 ## Notes
 
 - `game.enabled` uses exact package matches from `gamelist.txt`.
+- Confirmed game foreground sessions also trigger an internal one-shot
+  `/system/bin/cmd package kill-all` trim when `game.enabled=true`.
 - `game.downscale` applies performance mode only.
 - `log.enabled` controls all informational logging.
-- Adaptive preload thresholds and stats flush tuning stay internal defaults.
+- Adaptive preload thresholds stay internal defaults.
+- Stats are flushed on every confirmed foreground change when enabled and stored
+  as `package`, `start_time_ms`, `last_time_ms`, `foreground_ms`, `sessions`.
 - `game_interventions.tsv` keeps its legacy filename for compatibility, but it
   stores managed game downscale state.

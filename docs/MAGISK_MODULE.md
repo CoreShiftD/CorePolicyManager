@@ -47,7 +47,8 @@ debug-file control path.
 
 Game-list classification is controlled by `game.*` keys in `corepolicy.conf` and
 the user-editable `/data/local/tmp/coreshift/gamelist.txt`. It affects preload
-tier selection and, when explicitly enabled, Android Game Mode downscale.
+tier selection, an internal one-shot game trim on confirmed game foreground
+sessions, and, when explicitly enabled, Android Game Mode downscale.
 Policy does not parse APK manifests or fetch lists at runtime. Game downscale
 applies once at daemon start, only to gamelist packages, uses performance mode
 only, and downscale changes require app restart. Optional inotify watching

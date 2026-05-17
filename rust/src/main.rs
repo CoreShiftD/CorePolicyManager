@@ -146,63 +146,13 @@ fn stats(raw: bool) -> Result<(), i32> {
     let config = load_config("corepolicy stats")?;
     match coreshift_policy::read_stats(&config.stats.path) {
         Ok(stats) if raw => print!("{}", coreshift_policy::format_stats(&stats)),
-        Ok(stats) => print!("{}", format_pretty_stats(&stats)),
+        Ok(stats) => print!("{}", coreshift_policy::format_pretty_stats(&stats)),
         Err(err) => {
             eprintln!("corepolicy stats: {err}");
             return Err(1);
         }
     }
     Ok(())
-}
-
-fn format_pretty_stats(stats: &[coreshift_policy::UsageStat]) -> String {
-    if stats.is_empty() {
-        return String::from("No usage stats collected yet.\n");
-    }
-
-    let mut stats = stats.to_vec();
-    stats.sort_by(|a, b| {
-        b.foreground_ms
-            .cmp(&a.foreground_ms)
-            .then_with(|| a.package.cmp(&b.package))
-            .then_with(|| a.uid.cmp(&b.uid))
-    });
-
-    let mut out = String::from("CoreShift usage stats\n\n");
-    for (idx, stat) in stats.iter().enumerate() {
-        if idx > 0 {
-            out.push('\n');
-        }
-        out.push_str(&format!(
-            "{}. {}\n   uid: {}\n   sessions: {}\n   foreground: {}\n",
-            idx + 1,
-            stat.package,
-            stat.uid,
-            stat.sessions,
-            format_foreground_duration(stat.foreground_ms)
-        ));
-    }
-    out
-}
-
-fn format_foreground_duration(ms: u64) -> String {
-    let total_seconds = ms / 1_000;
-    let seconds = total_seconds % 60;
-    let total_minutes = total_seconds / 60;
-    let minutes = total_minutes % 60;
-    let total_hours = total_minutes / 60;
-    let hours = total_hours % 24;
-    let days = total_hours / 24;
-
-    if days > 0 {
-        format!("{days}d {hours:02}h")
-    } else if total_hours > 0 {
-        format!("{total_hours}h {minutes:02}m")
-    } else if total_minutes > 0 {
-        format!("{total_minutes}m {seconds:02}s")
-    } else {
-        format!("{seconds}s")
-    }
 }
 
 fn stats_reset(label: &str) -> Result<(), i32> {
@@ -329,38 +279,43 @@ mod tests {
         let stats = vec![
             coreshift_policy::UsageStat {
                 package: "com.seconds".to_string(),
-                uid: 10001,
+                start_time_ms: 222,
+                last_time_ms: 333_333_333,
                 sessions: 1,
                 foreground_ms: 26_000,
-                last_seen_ms: 111_111_111,
             },
             coreshift_policy::UsageStat {
                 package: "com.days".to_string(),
-                uid: 10004,
+                start_time_ms: 111,
+                last_time_ms: 444_444_444,
                 sessions: 4,
                 foreground_ms: 97_200_000,
-                last_seen_ms: 444_444_444,
             },
         ];
 
         assert_eq!(
-            format_pretty_stats(&stats),
+            coreshift_policy::format_pretty_stats(&stats),
             concat!(
                 "CoreShift usage stats\n\n",
                 "1. com.days\n",
-                "   uid: 10004\n",
-                "   sessions: 4\n",
-                "   foreground: 1d 03h\n\n",
+                "   first tracked ms: 111\n",
+                "   last seen ms: 444444444\n",
+                "   foreground: 1d 03h\n",
+                "   sessions: 4\n\n",
                 "2. com.seconds\n",
-                "   uid: 10001\n",
-                "   sessions: 1\n",
+                "   first tracked ms: 222\n",
+                "   last seen ms: 333333333\n",
                 "   foreground: 26s\n",
+                "   sessions: 1\n",
             )
         );
     }
 
     #[test]
     fn pretty_stats_empty_message_matches_policy_cli() {
-        assert_eq!(format_pretty_stats(&[]), "No usage stats collected yet.\n");
+        assert_eq!(
+            coreshift_policy::format_pretty_stats(&[]),
+            "No usage stats collected yet.\n"
+        );
     }
 }
