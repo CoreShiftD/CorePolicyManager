@@ -1,194 +1,52 @@
-# Configuration
+# Packaged Configuration
 
-The module packages a default key=value config at:
+The Magisk package installs `corepolicy.conf` into the module work directory and
+starts `corepolicy daemon` with `COREPOLICY_CONFIG` pointing at that file.
 
-```text
-packaging/magisk/corepolicy.conf
-```
+## Public Keys
 
-On first install, it is copied to:
-
-```text
-/data/local/tmp/coreshift/corepolicy.conf
-```
-
-Existing user config is preserved on update.
-
-## Runtime Control
-
-The installed `corepolicy` command can query and control the running daemon:
-
-```bash
-corepolicy status
-corepolicy restart
-corepolicy watch
-corepolicy stats
-corepolicy stats reset
-corepolicy gamelist
-```
-
-`corepolicy status` prints daemon key=value status lines. `corepolicy restart`
-asks the daemon to flush stats if possible and exit; `service.sh` respawns it.
-`corepolicy watch` streams foreground package changes. `corepolicy stats`
-prints foreground counters, `corepolicy stats reset` clears them, and
-`corepolicy gamelist` prints installed packages that also appear in the
-configured gamelist.
-
-To update config on device, write a temporary file, atomically rename it, then
-restart the daemon:
-
-```bash
-cp /data/local/tmp/coreshift/corepolicy.conf /data/local/tmp/coreshift/corepolicy.conf.tmp
-# edit /data/local/tmp/coreshift/corepolicy.conf.tmp
-mv /data/local/tmp/coreshift/corepolicy.conf.tmp /data/local/tmp/coreshift/corepolicy.conf
-corepolicy restart
-```
-
-## Default Config
+The packaged example config exposes only the small user-facing surface:
 
 ```text
-socket=@coreshift
-socket.authorized_uids=0,2000
 preload.enabled=true
 preload.mode=auto
 preload.foreground=true
-preload.mmap_madvise_max_mb=128
-preload.mmap_touch_max_mb=32
-preload.asset_max_mb=512
-preload.chunk_mb=16
-preload.adaptive.enabled=false
-preload.adaptive.min_sessions=3
-preload.adaptive.min_foreground_ms=300000
-preload.adaptive.hot_sessions=10
-preload.adaptive.hot_foreground_ms=3600000
-preload.promote_art=false
-preload.promote_odex=false
-preload.promote_vdex=false
+preload.adaptive=false
+preload.promote_artifacts=false
 stats.enabled=false
-stats.flush_every_changes=10
-stats.flush_interval_s=0
-stats.path=/data/local/tmp/coreshift/stats.tsv
 log.enabled=false
-log.foreground=false
-log.preload=false
-log.stats=false
-log.game=false
 game.enabled=false
-game.list_path=/data/local/tmp/coreshift/gamelist.txt
 game.preload_tier=hot
-game.preload.promote_art=true
-game.preload.promote_odex=true
-game.preload.promote_vdex=false
-game.intervention.enabled=false
-game.intervention.apply_on_start=true
-game.intervention.watch_list=false
-game.intervention.revert_on_remove=false
-game.intervention.state_path=/data/local/tmp/coreshift/game_interventions.tsv
-game.intervention.mode=performance
-game.intervention.performance_downscale=0.9
-game.intervention.battery_downscale=0.7
-game.intervention.standard_downscale=1.0
-game.intervention.dry_run=false
+game.preload.promote_artifacts=true
+game.downscale.enabled=false
+game.downscale.factor=0.9
 ```
 
-Adaptive preload is disabled by default. When enabled, CoreShift-Policy uses
-local stats to keep unknown/cold apps on readahead and promote `.so` files to
-`MmapMadvise` for warm/hot apps. `.so` is the safest mmap/madvise target.
-Experimental `.art`, `.odex`, and `.vdex` mmap/madvise promotion is available
-through `preload.promote_*`; the defaults keep those artifacts on readahead.
-APK, split APK, and DM files always stay on readahead.
+Unknown keys are rejected.
 
-Stats are local foreground usage counters written by CoreShift-Policy when
-enabled. They collect package, uid, sessions, foreground_ms, and last_seen_ms in
-TSV at `stats.path`. No network upload and no JSON are used.
-These keys require a `corepolicy` release with local stats and adaptive preload
-support.
+## Derived Files
 
-Informational daemon logs are config-controlled. `log.enabled=false` keeps
-foreground preload, stats, and game intervention info logs quiet by default. Set
-`log.enabled=true` and the needed category key (`log.foreground`, `log.preload`,
-`log.stats`, or `log.game`) to enable that category. Service lifecycle messages
-still go to `service.log`.
-
-Game-list mode is disabled by default. When `game.enabled=true`, Policy reads
-`game.list_path` and treats exact package matches as games for preload tier
-selection only. `game.preload_tier=warm` applies warm adaptive preload behavior;
-`game.preload_tier=hot` applies hot behavior. Non-game apps still use the normal
-adaptive stats/default policy.
-Game-list artifact promotion is controlled by `game.preload.promote_*`. Defaults
-promote `.art` and `.odex`; `.vdex` is disabled by default because it should be
-benchmarked first.
-
-Game interventions are also opt-in. They run only when both `game.enabled=true`
-and `game.intervention.enabled=true`, and only for packages loaded from
-`gamelist.txt`. Policy configures Android Game Mode overlays with
-`device_config put game_overlay <package> ...` and selects the configured mode
-with `cmd game mode standard|performance|battery <package>`. With
-`game.intervention.apply_on_start=true`, the daemon applies interventions once at
-startup after loading the gamelist; it does not reapply on foreground changes and
-does not force-stop or restart apps. `game.intervention.dry_run=true` reports the
-commands without executing them. Downscale values must be in the `0.5` through
-`1.0` range.
-
-Downscaling takes effect only after the target app restarts. Support depends on
-ROM, OEM, and Android version. To disable/revert one package:
-
-```sh
-device_config delete game_overlay <package>
-cmd game mode standard <package>
-```
-
-Manual reverts should use Android's `device_config` and `cmd game` commands
-shown above. CoreShift-managed automatic reverts only touch packages that exist
-in the managed state file.
-
-`game.intervention.watch_list=true` enables an inotify watch on the parent
-directory of `game.list_path`. Atomic updates are supported: write a temp file
-such as `gamelist.txt.tmp`, then rename it over `gamelist.txt`. The daemon
-reacts to `MOVED_TO`, `CLOSE_WRITE`, and `DELETE` for `gamelist.txt`; it does
-not poll and does not do gamelist work on foreground changes.
-
-`game.intervention.state_path` stores CoreShift-managed interventions as TSV:
+Policy derives its daemon home from the parent directory of `corepolicy.conf`.
+These files are internal and are not configurable:
 
 ```text
-package	mode	overlay_hash	applied_ms
+<daemon-home>/corepolicy.conf
+<daemon-home>/gamelist.txt
+<daemon-home>/stats.tsv
+<daemon-home>/game_interventions.tsv
 ```
 
-When `game.intervention.revert_on_remove=true`, removed packages are reverted
-only if they appear in this managed state file. CoreShift does not delete
-overlays for packages it did not manage. If `gamelist.txt` is missing, the list
-is treated as empty; managed packages are reverted only when
-`revert_on_remove=true`.
+## Socket
 
-The packaged default `gamelist.txt` is installed to:
+The daemon uses the internal abstract socket `@coreshift`.
 
-```text
-/data/local/tmp/coreshift/gamelist.txt
-```
+Local clients are authorized with Unix peer credentials and are accepted only
+when the peer UID matches the daemon process effective UID. There is no
+configurable UID allowlist.
 
-The list format is one full package name per line. Blank lines and lines
-starting with `#` are ignored. User edits are preserved on update. There is no
-APK manifest parsing, string scanning, auto-detection, wildcard matching, or
-network access at runtime. The external Encore list is only used as the packaged
-seed/reference.
+## Notes
 
-Use `corepolicy stats` to print the current TSV and `corepolicy stats reset` to
-remove the configured stats file/temp file and request a running daemon to clear
-in-memory stats. Dirty stats flush after `stats.flush_every_changes` foreground
-changes or after `stats.flush_interval_s` seconds.
-
-CorePolicyManager v0.7.0 builds against the matching CoreShift-Policy v0.7.0
-tag so packaged config and binary support match.
-
-The service exports `COREPOLICY_CONFIG` to point at the runtime config path
-before starting `corepolicy daemon`.
-
-`socket.authorized_uids` controls local daemon socket access by Unix peer UID.
-The packaged default allows root and shell (`0,2000`). If a future manager app
-talks to the daemon directly, add that app UID to this comma-separated list.
-
-## Update Behavior
-
-Module updates do not overwrite an existing runtime config or gamelist. If a new
-default is needed, compare the packaged `corepolicy.conf` or `gamelist.txt` with
-the preserved runtime file and merge intentionally.
+- `game.enabled` uses exact package matches from `gamelist.txt`.
+- `game.downscale` applies performance mode only.
+- `log.enabled` controls all informational logging.
+- Adaptive preload thresholds and stats flush tuning stay internal defaults.

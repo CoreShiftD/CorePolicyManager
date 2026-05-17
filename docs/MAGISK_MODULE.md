@@ -42,15 +42,15 @@ corepolicy daemon
 Logs are appended to `/data/local/tmp/coreshift/service.log` and rotated to
 `service.log.1`. The service restarts the daemon with bounded backoff. It does
 not currently write a pidfile. Optional daemon informational logs are controlled
-by `log.*` keys in `/data/local/tmp/coreshift/corepolicy.conf`; there is no
+by `log.enabled` in `/data/local/tmp/coreshift/corepolicy.conf`; there is no
 debug-file control path.
 
 Game-list classification is controlled by `game.*` keys in `corepolicy.conf` and
 the user-editable `/data/local/tmp/coreshift/gamelist.txt`. It affects preload
-tier selection and, when explicitly enabled, Android Game Mode interventions.
-Policy does not parse APK manifests or fetch lists at runtime. Game
-interventions apply once at daemon start, only to gamelist packages, and
-downscale changes require app restart. Optional inotify watching reconciles
-atomic gamelist replacements. Managed reverts only touch packages recorded in
-`/data/local/tmp/coreshift/game_interventions.tsv`. ROM/OEM/Android support
-varies.
+tier selection and, when explicitly enabled, Android Game Mode downscale.
+Policy does not parse APK manifests or fetch lists at runtime. Game downscale
+applies once at daemon start, only to gamelist packages, uses performance mode
+only, and downscale changes require app restart. Optional inotify watching
+reconciles atomic gamelist replacements. Managed reverts only touch packages
+recorded in `/data/local/tmp/coreshift/game_interventions.tsv`. ROM/OEM/Android
+support varies.

@@ -5,7 +5,10 @@ fn main() {
         Some("status") if args.len() == 2 => status(),
         Some("restart") if args.len() == 2 => restart(),
         Some("watch") if args.len() == 2 => watch(),
-        Some("stats") if args.len() == 2 => stats(),
+        Some("stats") if args.len() == 2 => stats(false),
+        Some("stats") if args.get(2).map(String::as_str) == Some("raw") && args.len() == 3 => {
+            stats(true)
+        }
         Some("stats") if args.get(2).map(String::as_str) == Some("reset") && args.len() == 3 => {
             stats_reset("corepolicy stats reset")
         }
@@ -49,8 +52,10 @@ fn run_daemon() -> Result<(), i32> {
 }
 
 fn status() -> Result<(), i32> {
-    let config = load_config("corepolicy status")?;
-    match coreshift_policy::daemon_request(&config.socket, "STATUS") {
+    match coreshift_policy::daemon_request(
+        coreshift_policy::COREPOLICY_DEFAULT_ABSTRACT_SOCKET,
+        "STATUS",
+    ) {
         Ok(status) => print!("{status}"),
         Err(err) => {
             println!("daemon=offline");
@@ -62,8 +67,10 @@ fn status() -> Result<(), i32> {
 }
 
 fn restart() -> Result<(), i32> {
-    let config = load_config("corepolicy restart")?;
-    match coreshift_policy::daemon_request(&config.socket, "RESTART") {
+    match coreshift_policy::daemon_request(
+        coreshift_policy::COREPOLICY_DEFAULT_ABSTRACT_SOCKET,
+        "RESTART",
+    ) {
         Ok(reply) => print!("{reply}"),
         Err(err) => {
             eprintln!("corepolicy restart: daemon offline: {err}");
@@ -74,8 +81,9 @@ fn restart() -> Result<(), i32> {
 }
 
 fn watch() -> Result<(), i32> {
-    let config = load_config("corepolicy watch")?;
-    if let Err(err) = coreshift_policy::daemon_watch(&config.socket) {
+    if let Err(err) =
+        coreshift_policy::daemon_watch(coreshift_policy::COREPOLICY_DEFAULT_ABSTRACT_SOCKET)
+    {
         eprintln!("corepolicy watch: daemon offline: {err}");
         return Err(1);
     }
@@ -134,16 +142,67 @@ fn preload_package(package: &str, label: &str) -> Result<(), i32> {
     Ok(())
 }
 
-fn stats() -> Result<(), i32> {
+fn stats(raw: bool) -> Result<(), i32> {
     let config = load_config("corepolicy stats")?;
     match coreshift_policy::read_stats(&config.stats.path) {
-        Ok(stats) => print!("{}", coreshift_policy::format_stats(&stats)),
+        Ok(stats) if raw => print!("{}", coreshift_policy::format_stats(&stats)),
+        Ok(stats) => print!("{}", format_pretty_stats(&stats)),
         Err(err) => {
             eprintln!("corepolicy stats: {err}");
             return Err(1);
         }
     }
     Ok(())
+}
+
+fn format_pretty_stats(stats: &[coreshift_policy::UsageStat]) -> String {
+    if stats.is_empty() {
+        return String::from("No usage stats collected yet.\n");
+    }
+
+    let mut stats = stats.to_vec();
+    stats.sort_by(|a, b| {
+        b.foreground_ms
+            .cmp(&a.foreground_ms)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| a.uid.cmp(&b.uid))
+    });
+
+    let mut out = String::from("CoreShift usage stats\n\n");
+    for (idx, stat) in stats.iter().enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "{}. {}\n   uid: {}\n   sessions: {}\n   foreground: {}\n",
+            idx + 1,
+            stat.package,
+            stat.uid,
+            stat.sessions,
+            format_foreground_duration(stat.foreground_ms)
+        ));
+    }
+    out
+}
+
+fn format_foreground_duration(ms: u64) -> String {
+    let total_seconds = ms / 1_000;
+    let seconds = total_seconds % 60;
+    let total_minutes = total_seconds / 60;
+    let minutes = total_minutes % 60;
+    let total_hours = total_minutes / 60;
+    let hours = total_hours % 24;
+    let days = total_hours / 24;
+
+    if days > 0 {
+        format!("{days}d {hours:02}h")
+    } else if total_hours > 0 {
+        format!("{total_hours}h {minutes:02}m")
+    } else if total_minutes > 0 {
+        format!("{total_minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn stats_reset(label: &str) -> Result<(), i32> {
@@ -192,7 +251,7 @@ fn game_apply(label: &str) -> Result<(), i32> {
     let targets = foreground.cached_installed_game_targets(&game_list);
     let report = coreshift_policy::apply_game_interventions(&config.game, &targets, &config.log);
     println!(
-        "game interventions attempted={} ok={} failed={} dry-run={}",
+        "game downscale attempted={} ok={} failed={} dry-run={}",
         report.attempted, report.succeeded, report.failed, report.dry_run
     );
     Ok(())
@@ -203,10 +262,10 @@ fn gamelist_raw(label: &str) -> Result<(), i32> {
     let game_list = load_game_list(&config.game.list_path, label)?;
     for package in game_list.packages() {
         println!(
-            "{} tier={:?} intervention={}",
+            "{} tier={:?} downscale=performance factor={}",
             package,
             config.game.preload_tier,
-            config.game.intervention.mode.as_str()
+            config.game.intervention.downscale_factor.as_str()
         );
     }
     Ok(())
@@ -216,7 +275,7 @@ fn game_revert(package: &str, label: &str) -> Result<(), i32> {
     let config = load_config(label)?;
     let report = coreshift_policy::revert_game_intervention(&config.game, package, &config.log);
     println!(
-        "game revert attempted={} ok={} failed={} dry-run={}",
+        "game downscale revert attempted={} ok={} failed={} dry-run={}",
         report.attempted, report.succeeded, report.failed, report.dry_run
     );
     Ok(())
@@ -257,6 +316,51 @@ fn android_foreground_config_from_env() -> coreshift_policy::AndroidForegroundCo
 }
 
 fn usage() -> Result<(), i32> {
-    eprintln!("usage: corepolicy status|restart|watch|stats [reset]|gamelist|debug <command>");
+    eprintln!("usage: corepolicy status|restart|watch|stats [raw|reset]|gamelist|debug <command>");
     Err(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pretty_stats_matches_policy_cli_shape() {
+        let stats = vec![
+            coreshift_policy::UsageStat {
+                package: "com.seconds".to_string(),
+                uid: 10001,
+                sessions: 1,
+                foreground_ms: 26_000,
+                last_seen_ms: 111_111_111,
+            },
+            coreshift_policy::UsageStat {
+                package: "com.days".to_string(),
+                uid: 10004,
+                sessions: 4,
+                foreground_ms: 97_200_000,
+                last_seen_ms: 444_444_444,
+            },
+        ];
+
+        assert_eq!(
+            format_pretty_stats(&stats),
+            concat!(
+                "CoreShift usage stats\n\n",
+                "1. com.days\n",
+                "   uid: 10004\n",
+                "   sessions: 4\n",
+                "   foreground: 1d 03h\n\n",
+                "2. com.seconds\n",
+                "   uid: 10001\n",
+                "   sessions: 1\n",
+                "   foreground: 26s\n",
+            )
+        );
+    }
+
+    #[test]
+    fn pretty_stats_empty_message_matches_policy_cli() {
+        assert_eq!(format_pretty_stats(&[]), "No usage stats collected yet.\n");
+    }
 }

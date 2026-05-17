@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "corepolicy-manager-wrapper"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "coreshift-policy",
 ]
@@ -27,8 +27,8 @@ dependencies = [
 
 [[package]]
 name = "coreshift-policy"
-version = "0.7.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?tag=v0.7.0#f8f1fe4a85465e80db65a4dcf3c65caee501f801"
+version = "0.8.0"
+source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?tag=v0.8.0#ca251a88d072cb372fc94b0d8b67105cc954891f"
 dependencies = [
  "coreshift-core",
  "coreshift-engine",

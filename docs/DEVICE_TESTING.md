@@ -6,7 +6,8 @@
 adb shell 'cat /data/local/tmp/coreshift/corepolicy.conf'
 ```
 
-Expected config includes `socket=@coreshift` and preload keys.
+Expected config includes only the compact public keys from
+`docs/CONFIGURATION.md`.
 
 ## Check Logs
 
