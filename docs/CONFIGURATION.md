@@ -50,3 +50,5 @@ configurable UID allowlist.
 - `game.downscale` applies performance mode only.
 - `log.enabled` controls all informational logging.
 - Adaptive preload thresholds and stats flush tuning stay internal defaults.
+- `game_interventions.tsv` keeps its legacy filename for compatibility, but it
+  stores managed game downscale state.

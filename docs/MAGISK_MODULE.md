@@ -52,5 +52,6 @@ Policy does not parse APK manifests or fetch lists at runtime. Game downscale
 applies once at daemon start, only to gamelist packages, uses performance mode
 only, and downscale changes require app restart. Optional inotify watching
 reconciles atomic gamelist replacements. Managed reverts only touch packages
-recorded in `/data/local/tmp/coreshift/game_interventions.tsv`. ROM/OEM/Android
-support varies.
+recorded in `/data/local/tmp/coreshift/game_interventions.tsv`, which keeps its
+legacy filename for compatibility while storing managed game downscale state.
+ROM/OEM/Android support varies.

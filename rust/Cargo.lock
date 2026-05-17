@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "corepolicy-manager-wrapper"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "coreshift-policy",
 ]
@@ -12,23 +12,20 @@ dependencies = [
 [[package]]
 name = "coreshift-core"
 version = "0.3.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Core.git?tag=v0.3.0#9613da86d7a96082cf54b8d9f8f295f01250c4f7"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "coreshift-engine"
-version = "0.3.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Engine.git?tag=v0.3.0#196f65cf33307832b9a86d195a45a6ff26c60473"
+version = "0.4.0"
 dependencies = [
  "coreshift-core",
 ]
 
 [[package]]
 name = "coreshift-policy"
-version = "0.8.0"
-source = "git+https://github.com/CoreShiftD/CoreShift-Policy.git?tag=v0.8.0#ca251a88d072cb372fc94b0d8b67105cc954891f"
+version = "0.9.0"
 dependencies = [
  "coreshift-core",
  "coreshift-engine",

@@ -249,7 +249,7 @@ fn game_apply(label: &str) -> Result<(), i32> {
             }
         };
     let targets = foreground.cached_installed_game_targets(&game_list);
-    let report = coreshift_policy::apply_game_interventions(&config.game, &targets, &config.log);
+    let report = coreshift_policy::apply_game_downscales(&config.game, &targets, &config.log);
     println!(
         "game downscale attempted={} ok={} failed={} dry-run={}",
         report.attempted, report.succeeded, report.failed, report.dry_run
@@ -265,7 +265,7 @@ fn gamelist_raw(label: &str) -> Result<(), i32> {
             "{} tier={:?} downscale=performance factor={}",
             package,
             config.game.preload_tier,
-            config.game.intervention.downscale_factor.as_str()
+            config.game.downscale.downscale_factor.as_str()
         );
     }
     Ok(())
@@ -273,7 +273,7 @@ fn gamelist_raw(label: &str) -> Result<(), i32> {
 
 fn game_revert(package: &str, label: &str) -> Result<(), i32> {
     let config = load_config(label)?;
-    let report = coreshift_policy::revert_game_intervention(&config.game, package, &config.log);
+    let report = coreshift_policy::revert_game_downscale(&config.game, package, &config.log);
     println!(
         "game downscale revert attempted={} ok={} failed={} dry-run={}",
         report.attempted, report.succeeded, report.failed, report.dry_run
