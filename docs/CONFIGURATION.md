@@ -8,9 +8,7 @@ starts `corepolicy daemon` with `COREPOLICY_CONFIG` pointing at that file.
 The packaged example config exposes only the small user-facing surface:
 
 ```text
-preload.enabled=true
 preload.mode=auto
-preload.foreground=true
 preload.adaptive=false
 preload.promote_artifacts=false
 stats.enabled=false
@@ -23,6 +21,9 @@ game.downscale.factor=0.9
 ```
 
 Unknown keys are rejected.
+
+`preload.mode=off` disables automatic foreground preload. Other modes keep
+foreground preload active as the daemon's main behavior.
 
 ## Derived Files
 
