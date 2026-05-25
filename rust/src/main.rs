@@ -272,8 +272,6 @@ fn usage() -> Result<(), i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn pretty_stats_matches_policy_cli_shape() {
         let stats = vec![
