@@ -24,8 +24,8 @@ path = "src/bin/utensil_webui.rs"
 
 [dependencies]
 libc = "0.2"
-coreshift-core = { git = "https://github.com/CoreShiftD/CoreShift-Core.git", branch = "main", version = "1.0.0" }
-coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy.git", branch = "main", version = "1.0.0" }
+coreshift-core = { git = "https://github.com/CoreShiftD/CoreShift-Core.git", rev = "98a8734ea4f134cdcf26d0eccf18507fd1a79733", version = "1.0.0" }
+coreshift-policy = { git = "https://github.com/CoreShiftD/CoreShift-Policy.git", rev = "98a8734ea4f134cdcf26d0eccf18507fd1a79733", version = "1.0.0" }
 
 [profile.release]
 opt-level = 3
