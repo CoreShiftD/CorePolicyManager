@@ -1,0 +1,35 @@
+on post-fs-data
+    mkdir /data/local/tmp/coreshift 0755 root root
+    mkdir /data/local/tmp/utensil 0755 root root
+
+service corepolicy /system/bin/corepolicy daemon
+    class late_start
+    user shell
+    group shell readproc
+    seclabel u:r:shell:s0
+    disabled
+    setenv COREPOLICY_CONFIG /data/local/tmp/coreshift/corepolicy.conf
+
+service utensil_poker /system/bin/utensil-poker daemon
+    class late_start
+    user shell
+    group shell readproc input inet sdcard_rw
+    seclabel u:r:shell:s0
+    disabled
+    setenv UTENSIL_CONFIG /data/local/tmp/utensil/utensil.conf
+
+service utensil_webui /system/bin/utensil-webui --listen 127.0.0.1:8787 --webroot /system/etc/utensil/webroot
+    class late_start
+    user shell
+    group shell readproc inet sdcard_rw
+    seclabel u:r:shell:s0
+    disabled
+
+on property:sys.boot_completed=1 && property:persist.corepolicy.enabled=1
+    start corepolicy
+
+on property:sys.boot_completed=1 && property:persist.utensil.enabled=1
+    start utensil_poker
+
+on property:sys.boot_completed=1 && property:persist.utensil.webui.enabled=1
+    start utensil_webui

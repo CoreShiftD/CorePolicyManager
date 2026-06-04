@@ -1,0 +1,7 @@
+name=CoreShift Policy
+id=coreshift_policy
+version=v1.0.0
+versionCode=1000
+author=CoreShiftD
+description=CoreShift Policy daemon and preload services
+axeronPlugin=11000

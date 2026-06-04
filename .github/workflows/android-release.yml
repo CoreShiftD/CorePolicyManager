@@ -1,0 +1,72 @@
+name: Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag/version, for example v1.1.4
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_API_LEVEL: "28"
+      ANDROID_NDK_VERSION: "28.2.13676358"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip unzip coreutils
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build module and binaries
+        run: |
+          ./scripts/build-magisk-module.sh
+          cp packaging/init/inoi_refresh_idle.rc dist/inoi_refresh_idle.rc
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-artifacts
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/binaries/*
+            dist/inoi_refresh_idle.rc
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          name: ${{ github.event.inputs.version || github.ref_name }}
+          files: |
+            dist/*.zip
+            dist/*.sha256
+            dist/binaries/*
+            dist/inoi_refresh_idle.rc

@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+app/build/
+target/
+rust/target/
+dist/
+
+# Gradle
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Local configuration
+local.properties
+keystore.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS files
+.DS_Store
+
+# Android signing / secrets (just in case)
+*.jks
+*.keystore
+app/keystore/

@@ -1,0 +1,14 @@
+on property:sys.boot_completed=1
+    start inoi_refresh_idle
+
+service inoi_refresh_idle /system/bin/inoi_refresh_idle
+    class late_start
+    user root
+    group root shell system input
+    seclabel u:r:shell:s0
+    disabled
+    setenv INOI_INPUT_DEVICES /dev/input/event2
+
+on property:persist.service.adb.tcp.port=*
+    setprop service.adb.tcp.port ${persist.service.adb.tcp.port}
+    restart adbd
